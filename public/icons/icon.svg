@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="64" fill="#0a0e17"/>
+  <polygon points="256,80 380,200 340,200 340,360 172,360 172,200 132,200" fill="#3b82f6" opacity="0.9"/>
+  <circle cx="256" cy="280" r="50" fill="#0a0e17"/>
+  <circle cx="256" cy="280" r="25" fill="#3b82f6"/>
+  <text x="256" y="440" text-anchor="middle" fill="#f1f5f9" font-family="system-ui" font-weight="700" font-size="72">PRISM</text>
+</svg>
