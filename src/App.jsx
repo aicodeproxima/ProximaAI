@@ -253,8 +253,9 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
   .cockpit { grid-template-columns: 1fr; gap: 16px; height: auto; }
   .cockpit-left { padding-right: 0; gap: 14px; }
 
-  .type-tabs { gap: 2px; padding: 4px; border-radius: 12px; }
-  .type-tab { padding: 10px 8px; font-size: 13px; border-radius: 10px; }
+  .type-tabs { gap: 4px; padding: 4px; border-radius: 12px; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .type-tabs::-webkit-scrollbar { display: none; }
+  .type-tab { padding: 10px 12px; font-size: 13px; border-radius: 10px; flex: 0 0 auto; }
 
   .card { padding: 18px; border-radius: 14px; }
   .card-title { font-size: 12px; margin-bottom: 12px; }
