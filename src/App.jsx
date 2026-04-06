@@ -240,10 +240,69 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .pulse { animation: pulse 1.5s ease-in-out infinite; }
 
 @media (max-width: 768px) {
-  .cockpit { grid-template-columns: 1fr; }
-  .sidebar { width: 48px; }
-  .log-row { grid-template-columns: 100px 1fr 60px 50px; }
+  .prism-app { flex-direction: column; }
+  .sidebar { width: 100%; flex-direction: row; padding: 0 8px; gap: 2px; border-right: none; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; height: 52px; justify-content: center; }
+  .sidebar-logo { margin-bottom: 0; margin-right: 8px; font-size: 18px; }
+  .sidebar-btn { width: 44px; height: 44px; font-size: 20px; }
+
+  .topbar { height: 44px; padding: 0 16px; }
+  .topbar-title { font-size: 11px; }
+
+  .content { padding: 16px; }
+
+  .cockpit { grid-template-columns: 1fr; gap: 16px; height: auto; }
+  .cockpit-left { padding-right: 0; gap: 14px; }
+
+  .type-tabs { gap: 2px; padding: 4px; border-radius: 12px; }
+  .type-tab { padding: 10px 8px; font-size: 13px; border-radius: 10px; }
+
+  .card { padding: 18px; border-radius: 14px; }
+  .card-title { font-size: 12px; margin-bottom: 12px; }
+
+  .prompt-area { min-height: 100px; padding: 14px; font-size: 16px; border-radius: 12px; }
+
+  .model-grid { max-height: 280px; gap: 6px; }
+  .model-item { padding: 12px 14px; border-radius: 10px; gap: 12px; }
+  .model-check { width: 22px; height: 22px; border-radius: 6px; font-size: 13px; }
+  .model-name { font-size: 15px; }
+  .model-provider { font-size: 11px; padding: 3px 8px; border-radius: 5px; }
+  .hot-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
+  .model-price { font-size: 13px; }
+
+  .settings-row { gap: 10px; }
+  .settings-row label { font-size: 13px; }
+  .settings-select, .settings-input { padding: 10px 12px; font-size: 14px; border-radius: 8px; min-width: 80px; }
+
+  .gen-btn { padding: 16px; font-size: 16px; border-radius: 14px; }
+
+  .cost-bar { padding: 12px 16px; font-size: 14px; border-radius: 10px; }
+
+  .task-card { padding: 16px; border-radius: 14px; margin-bottom: 14px; }
+  .task-model { font-size: 15px; }
+  .task-status { font-size: 12px; padding: 4px 10px; }
+  .task-timer { font-size: 13px; }
+
+  .result-img { border-radius: 10px; max-height: 400px; }
+  .result-video { border-radius: 10px; max-height: 400px; }
+  .result-actions { gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .result-action-btn { padding: 10px 14px; font-size: 13px; border-radius: 8px; }
+
+  .results-grid { grid-template-columns: 1fr; gap: 14px; }
+
+  .log-row { grid-template-columns: 1fr 60px 50px; gap: 6px; padding: 12px 14px; font-size: 13px; }
+  .log-row > :nth-child(1) { display: none; }
   .log-row > :nth-child(5), .log-row > :nth-child(6) { display: none; }
+  .log-header > :nth-child(1) { display: none; }
+
+  .setting-group { margin-bottom: 28px; }
+  .setting-label { font-size: 14px; margin-bottom: 8px; }
+  .setting-input { padding: 14px 16px; font-size: 15px; border-radius: 10px; }
+  .setting-hint { font-size: 13px; margin-top: 6px; }
+  .api-test-btn { padding: 12px 20px; font-size: 14px; border-radius: 8px; }
+
+  .empty-state { height: 200px; }
+  .empty-state .emoji { font-size: 40px; }
+  .empty-state .msg { font-size: 15px; }
 }
 `;
 
