@@ -858,7 +858,23 @@ export default function PrismApp() {
 
                           {task.status === "completed" && (
                             <div className="result-actions">
-                              <a className="result-action-btn" href={task.outputs?.[0]} download target="_blank" rel="noopener">↓ Save</a>
+                              <button className="result-action-btn" onClick={async () => {
+                                try {
+                                  const url = task.outputs?.[0];
+                                  if (!url) return;
+                                  const resp = await fetch(url);
+                                  const blob = await resp.blob();
+                                  const ext = (genType === "t2v" || genType === "i2v" || genType === "avatar") ? "mp4" : "png";
+                                  const fname = `${task.modelName.replace(/\s+/g, "_")}_${Date.now()}.${ext}`;
+                                  const a = document.createElement("a");
+                                  a.href = URL.createObjectURL(blob);
+                                  a.download = fname;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  a.remove();
+                                  URL.revokeObjectURL(a.href);
+                                } catch (e) { window.open(task.outputs?.[0], "_blank"); }
+                              }}>↓ Save</button>
                               <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(task.outputs?.[0] || ""); }}>📋 URL</button>
                               <button className="result-action-btn" onClick={() => { setSeed(Math.floor(Math.random()*999999).toString()); }}>🔄 New seed</button>
                               {(genType === "image" || genType === "i2i") && (
