@@ -159,6 +159,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .model-provider { font-size: 10px; font-family: ${font}; padding: 2px 6px; border-radius: 4px; font-weight: 500; }
 .hot-badge { font-size: 9px; background: var(--error); color: white; padding: 1px 5px; border-radius: 3px; font-weight: 700; font-family: ${font}; }
 .model-price { font-size: 11px; font-family: ${font}; color: var(--text-muted); }
+.model-meta { display: contents; }
 
 .settings-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .settings-row label { font-size: 11px; color: var(--text-muted); font-weight: 500; }
@@ -263,12 +264,13 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
   .prompt-area { min-height: 100px; padding: 14px; font-size: 16px; border-radius: 12px; }
 
   .model-grid { max-height: 280px; gap: 6px; }
-  .model-item { padding: 12px 14px; border-radius: 10px; gap: 12px; }
-  .model-check { width: 22px; height: 22px; border-radius: 6px; font-size: 13px; }
-  .model-name { font-size: 15px; }
+  .model-item { padding: 14px; border-radius: 12px; gap: 0; flex-wrap: wrap; align-items: flex-start; }
+  .model-check { width: 22px; height: 22px; border-radius: 6px; font-size: 13px; margin-right: 12px; margin-top: 1px; }
+  .model-name { font-size: 15px; white-space: normal; overflow: visible; text-overflow: unset; flex: 1; min-width: calc(100% - 36px); }
+  .model-meta { display: flex; align-items: center; gap: 8px; width: 100%; padding-left: 34px; margin-top: 6px; }
   .model-provider { font-size: 11px; padding: 3px 8px; border-radius: 5px; }
   .hot-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
-  .model-price { font-size: 13px; }
+  .model-price { font-size: 13px; margin-left: auto; }
 
   .settings-row { gap: 10px; }
   .settings-row label { font-size: 13px; }
@@ -809,10 +811,12 @@ export default function PrismApp() {
                         <div key={m.id} className={`model-item ${selectedModels.includes(m.id)?"selected":""}`} onClick={() => toggleModel(m.id)}>
                           <div className="model-check">{selectedModels.includes(m.id) ? "✓" : ""}</div>
                           <span className="model-name">{m.name}</span>
-                          {m.hot && <span className="hot-badge">HOT</span>}
-                          {m.flagship && <span className="hot-badge" style={{ background: "var(--accent)" }}>★</span>}
-                          <span className="model-provider" style={{ background: (PROVIDER_COLORS[m.provider]||"#666")+"22", color: PROVIDER_COLORS[m.provider]||"#aaa" }}>{m.provider}</span>
-                          <span className="model-price">{formatCost(m.price)}</span>
+                          <div className="model-meta">
+                            {m.hot && <span className="hot-badge">HOT</span>}
+                            {m.flagship && <span className="hot-badge" style={{ background: "var(--accent)" }}>★</span>}
+                            <span className="model-provider" style={{ background: (PROVIDER_COLORS[m.provider]||"#666")+"22", color: PROVIDER_COLORS[m.provider]||"#aaa" }}>{m.provider}</span>
+                            <span className="model-price">{formatCost(m.price)}</span>
+                          </div>
                         </div>
                       ))}
                     </div>
