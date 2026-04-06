@@ -503,11 +503,11 @@ export default function PrismApp() {
 
           // Polling loop
           const pollInterval = genType === "image" ? 3000 : 15000;
-          const maxTimeout = genType === "image" ? 300000 : 600000;
+          const maxTimeout = genType === "image" ? 300000 : Infinity;
           const startPoll = Date.now();
 
           const poll = async () => {
-            if (Date.now() - startPoll > maxTimeout) {
+            if (maxTimeout !== Infinity && Date.now() - startPoll > maxTimeout) {
               setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "failed", error: "Timeout", endTime: Date.now() } : t));
               return;
             }
