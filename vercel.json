@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/wavespeed/:path*",
+      "destination": "https://api.wavespeed.ai/:path*"
+    }
+  ]
+}
