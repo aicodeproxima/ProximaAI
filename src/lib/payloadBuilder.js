@@ -30,9 +30,9 @@ export function buildPayload(model, userSettings, genType) {
     }
   }
 
-  // Duration — only for models that support it
-  if (p.duration && userSettings.duration) {
-    const dur = parseInt(userSettings.duration);
+  // Duration — always send for models that define it, falling back to model default
+  if (p.duration) {
+    const dur = parseInt(userSettings.duration) || p.duration.default;
     const validDurs = p.duration.options;
     payload.duration = validDurs.includes(dur) ? dur : p.duration.default;
   }
@@ -47,9 +47,14 @@ export function buildPayload(model, userSettings, genType) {
     payload.seed = parseInt(userSettings.seed);
   }
 
-  // Source image for i2i
+  // Source image for i2i — some models use `images: [url]` (array), others use `image: url` (string)
   if (genType === "i2i" && userSettings.sourceImageUrl) {
-    payload.images = [userSettings.sourceImageUrl];
+    const imageParam = p.imageParam || "images"; // default to "images" (array) for backward compat
+    if (imageParam === "image") {
+      payload.image = userSettings.sourceImageUrl;
+    } else {
+      payload.images = [userSettings.sourceImageUrl];
+    }
   }
 
   // Source image for i2v
@@ -57,8 +62,13 @@ export function buildPayload(model, userSettings, genType) {
     payload.image = userSettings.sourceImageUrl;
   }
 
-  // Output format for images
-  if (genType === "image" || genType === "i2i") {
+  // Source image/audio for avatar
+  if (genType === "avatar" && userSettings.sourceImageUrl) {
+    payload.image = userSettings.sourceImageUrl;
+  }
+
+  // Output format — only for WaveSpeed-hosted models that support it
+  if ((genType === "image" || genType === "i2i") && p.outputFormat !== false) {
     payload.output_format = "png";
   }
 

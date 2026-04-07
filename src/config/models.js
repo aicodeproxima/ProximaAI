@@ -187,7 +187,7 @@ export const MODELS = {
     { id: "google/nano-banana-pro/text-to-image", name: "Nano Banana Pro", provider: "Google", price: 0.14, hot: true,
       params: { resolution: RES_NANO, negativePrompt: true, seed: true, optional: { webSearch: { paramName: "web_search", type: "boolean", default: false }, imgSearch: { paramName: "img_search", type: "boolean", default: false } } } },
     { id: "google/google-imagen4", name: "Imagen 4", provider: "Google", price: 0.08, hot: true,
-      params: { resolution: RES_NANO_12, negativePrompt: true, seed: true } },
+      params: { resolution: RES_NANO, negativePrompt: true, seed: true } },
 
     // Flux
     { id: "wavespeed-ai/flux-dev", name: "Flux Dev", provider: "WaveSpeed", price: 0.03,
@@ -215,17 +215,17 @@ export const MODELS = {
     { id: "wavespeed-ai/qwen-image-2.0-pro/text-to-image", name: "Qwen Image 2.0 Pro", provider: "Alibaba", price: 0.07, hot: true,
       params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/qwen-image-text-to-image", name: "Qwen Image", provider: "Alibaba", price: 0.02,
-      params: { resolution: RES_NANO_12, negativePrompt: false, seed: true } },
+      params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/phota/text-to-image", name: "Phota", provider: "WaveSpeed", price: 0.03,
       params: { resolution: RES_FLUX, negativePrompt: true, seed: true } },
 
     // OpenAI
     { id: "openai/openai-dall-e-3", name: "DALL-E 3", provider: "OpenAI", price: 0.08,
-      params: { resolution: { paramName: "size", options: [{ label: "1024x1024", value: "1024*1024" }, { label: "1024x1792", value: "1024*1792" }, { label: "1792x1024", value: "1792*1024" }], default: "1024*1024" }, negativePrompt: false, seed: false } },
+      params: { resolution: { paramName: "size", options: [{ label: "1024x1024", value: "1024x1024" }, { label: "1024x1792", value: "1024x1792" }, { label: "1792x1024", value: "1792x1024" }], default: "1024x1024" }, negativePrompt: false, seed: false, outputFormat: false } },
 
     // Luma
     { id: "luma/luma-photon", name: "Luma Photon", provider: "Luma", price: 0.03,
-      params: { resolution: null, aspectRatio: AR_STANDARD, negativePrompt: false, seed: true } },
+      params: { resolution: null, aspectRatio: AR_STANDARD, negativePrompt: false, seed: true, outputFormat: false } },
   ],
 
   i2i: [
@@ -235,7 +235,7 @@ export const MODELS = {
     { id: "google/nano-banana-pro/edit", name: "Nano Banana Pro Edit", provider: "Google", price: 0.14, hot: true,
       params: { resolution: RES_NANO, negativePrompt: true, seed: true } },
     { id: "google/google-gemini-2.5-flash-image-edit", name: "Gemini 2.5 Flash Edit", provider: "Google", price: 0.05,
-      params: { resolution: null, negativePrompt: false, seed: false } },
+      params: { resolution: null, negativePrompt: false, seed: false, imageParam: "image", outputFormat: false } },
 
     // ByteDance
     { id: "bytedance/seedream-v5.0-lite/edit", name: "Seedream 5.0 Lite Edit", provider: "ByteDance", price: 0.035, hot: true,
@@ -245,7 +245,7 @@ export const MODELS = {
     { id: "bytedance/seedream-v4.5/edit", name: "Seedream 4.5 Edit", provider: "ByteDance", price: 0.04,
       params: { resolution: RES_SEEDREAM, negativePrompt: true, seed: true } },
     { id: "bytedance/seededit-v3", name: "SeedEdit V3", provider: "ByteDance", price: 0.03,
-      params: { resolution: RES_NANO_12, negativePrompt: false, seed: true } },
+      params: { resolution: RES_SEEDREAM, negativePrompt: false, seed: true } },
 
     // Alibaba WAN Edit
     { id: "alibaba/wan-2.7/image-edit", name: "WAN 2.7 Edit", provider: "Alibaba", price: 0.03, hot: true,
@@ -257,19 +257,19 @@ export const MODELS = {
     { id: "wavespeed-ai/flux-2-pro-edit", name: "FLUX 2 Pro Edit", provider: "BFL", price: 0.04,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/flux-kontext-pro", name: "FLUX Kontext Pro", provider: "BFL", price: 0.04, hot: true,
-      params: { resolution: null, negativePrompt: false, seed: true } },
+      params: { resolution: null, aspectRatio: AR_STANDARD, negativePrompt: false, seed: true, imageParam: "image" } },
 
     // WaveSpeed
     { id: "wavespeed-ai/qwen-image-2.0-pro/edit", name: "Qwen Image 2.0 Pro Edit", provider: "Alibaba", price: 0.07, hot: true,
       params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/qwen-image-edit", name: "Qwen Image Edit", provider: "Alibaba", price: 0.03,
-      params: { resolution: null, negativePrompt: false, seed: true } },
+      params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
     { id: "wavespeed-ai/phota/edit", name: "Phota Edit", provider: "WaveSpeed", price: 0.03,
       params: { resolution: RES_FLUX, negativePrompt: true, seed: true } },
     { id: "wavespeed-ai/firered-image-v1.1-edit", name: "FireRed Edit", provider: "WaveSpeed", price: 0.02,
-      params: { resolution: null, negativePrompt: false, seed: true } },
+      params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
     { id: "wavespeed-ai/step1x-edit", name: "Step1X Edit", provider: "WaveSpeed", price: 0.02,
-      params: { resolution: null, negativePrompt: false, seed: true } },
+      params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
   ],
 
   t2v: [
@@ -365,7 +365,7 @@ export const MODELS = {
 
     // WaveSpeed — Kandinsky I2V
     { id: "wavespeed-ai/kandinsky5-pro/image-to-video", name: "Kandinsky 5 Pro I2V", provider: "WaveSpeed", price: 0.20,
-      params: { resolution: RES_KANDINSKY, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
+      params: { resolution: RES_KANDINSKY, aspectRatio: AR_KANDINSKY, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
   ],
 
   avatar: [
