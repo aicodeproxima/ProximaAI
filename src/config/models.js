@@ -186,7 +186,7 @@ export const MODELS = {
       params: { resolution: RES_NANO, negativePrompt: true, seed: true, optional: { webSearch: { paramName: "web_search", type: "boolean", default: false }, imgSearch: { paramName: "img_search", type: "boolean", default: false } } } },
     { id: "google/nano-banana-pro/text-to-image", name: "Nano Banana Pro", provider: "Google", price: 0.14, hot: true,
       params: { resolution: RES_NANO, negativePrompt: true, seed: true, optional: { webSearch: { paramName: "web_search", type: "boolean", default: false }, imgSearch: { paramName: "img_search", type: "boolean", default: false } } } },
-    { id: "google/google-imagen4", name: "Imagen 4", provider: "Google", price: 0.08, hot: true,
+    { id: "google/imagen4", name: "Imagen 4", provider: "Google", price: 0.08, hot: true,
       params: { resolution: RES_NANO, negativePrompt: true, seed: true } },
 
     // Flux
