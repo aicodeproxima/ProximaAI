@@ -173,8 +173,18 @@ export async function getCompletedTasks(limit = 200) {
   try {
     const store = await tx("tasks");
     const all = await wrapRequest(store.getAll());
-    all.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
-    return limit ? all.slice(0, limit) : all;
+    // Only return terminal states — reject stale pending/processing from interrupted sessions
+    const terminal = all.filter(t => t.status === "completed" || t.status === "failed");
+    terminal.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+    // Prune old tasks beyond limit from IndexedDB to prevent unbounded growth
+    if (limit && terminal.length > limit) {
+      try {
+        const delStore = await tx("tasks", "readwrite");
+        const toDelete = terminal.slice(limit);
+        for (const t of toDelete) { try { delStore.delete(t.id); } catch {} }
+      } catch {}
+    }
+    return limit ? terminal.slice(0, limit) : terminal;
   } catch { return []; }
 }
 

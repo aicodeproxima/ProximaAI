@@ -343,7 +343,10 @@ export default function PrismApp() {
       const logData = await getHistory(500);
       if (logData?.length && !cancelled) setLogs(logData);
       const savedTasks = await getCompletedTasks(200);
-      if (savedTasks?.length && !cancelled) setTasks(savedTasks);
+      if (savedTasks?.length && !cancelled) {
+        for (const t of savedTasks) savedTaskIds.current.add(t.id);
+        setTasks(savedTasks);
+      }
       const savedImgRes = await getSetting("defaultImageRes");
       if (savedImgRes && !cancelled) setDefaultImageRes(savedImgRes);
       const savedVidDur = await getSetting("defaultVideoDur");
