@@ -951,14 +951,14 @@ export default function PrismApp() {
                     </div>
                   </div>
 
-                  {/* Dynamic Settings — adapts to selected models */}
+                  {/* Dynamic Settings — adapts to selected models (UNION-based) */}
                   <div className="card">
                     <div className="card-title">Settings {selectedModels.length > 0 ? `(${selectedModels.length} model${selectedModels.length > 1 ? "s" : ""})` : ""}</div>
                     {selectedModels.length === 0 ? (
                       <div style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>Select models to see parameters</div>
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                        {/* Per-model resolution dropdowns */}
+                        {/* Resolution — UNION of all selected models' options */}
                         {(() => {
                           const selectedWithRes = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.params?.resolution);
                           if (selectedWithRes.length === 0) return null;
@@ -970,26 +970,45 @@ export default function PrismApp() {
                             schemes[key].push(m);
                           });
                           const schemeKeys = Object.keys(schemes);
-                          // If all share same scheme, show one dropdown with INTERSECTION of options
+                          // If all share same scheme, show one dropdown with UNION of options
                           if (schemeKeys.length === 1) {
                             const modelsInScheme = schemes[schemeKeys[0]];
-                            let allOptions = modelsInScheme[0].params.resolution.options;
-                            modelsInScheme.slice(1).forEach(m => {
-                              const vals = m.params.resolution.options.map(o => o.value);
-                              allOptions = allOptions.filter(o => vals.includes(o.value));
+                            // Build UNION: deduplicate by value, track which models support each
+                            const optMap = new Map();
+                            modelsInScheme.forEach(m => {
+                              m.params.resolution.options.forEach(o => {
+                                if (!optMap.has(o.value)) optMap.set(o.value, { label: o.label, value: o.value, models: [] });
+                                optMap.get(o.value).models.push(m.name);
+                              });
                             });
-                            if (allOptions.length === 0) allOptions = modelsInScheme[0].params.resolution.options;
-                            // Auto-set resolution if current value doesn't match any option
-                            const validVals = allOptions.map(o => o.value);
+                            const unionOptions = [...optMap.values()];
+                            const totalModels = modelsInScheme.length;
+                            // Auto-set resolution if current value is not in union
+                            const validVals = unionOptions.map(o => o.value);
                             if (!validVals.includes(resolution)) {
                               setTimeout(() => setResolution(modelsInScheme[0].params.resolution.default), 0);
                             }
                             return (
-                              <div className="settings-row">
-                                <label>Resolution</label>
-                                <select className="settings-select" value={resolution} onChange={e => setResolution(e.target.value)}>
-                                  {allOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                                </select>
+                              <div className="settings-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <label>Resolution</label>
+                                  <select className="settings-select" value={resolution} onChange={e => setResolution(e.target.value)}>
+                                    {unionOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                  </select>
+                                </div>
+                                {totalModels > 1 && (() => {
+                                  const current = optMap.get(resolution);
+                                  if (current && current.models.length < totalModels) {
+                                    const unsupported = modelsInScheme.filter(m => !current.models.includes(m.name));
+                                    return (
+                                      <div style={{ fontSize: 9, color: "var(--text-muted)", lineHeight: 1.3 }}>
+                                        {current.models.length === totalModels ? "All models" : current.models.join(", ")}
+                                        {unsupported.length > 0 && <span style={{ color: "var(--amber)" }}> — {unsupported.map(m => m.name).join(", ")} will use nearest valid</span>}
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                })()}
                               </div>
                             );
                           }
@@ -1005,48 +1024,96 @@ export default function PrismApp() {
                           ));
                         })()}
 
-                        {/* Aspect ratio — if any selected model supports it */}
+                        {/* Aspect ratio — UNION with support indicators */}
                         {(() => {
                           const withAR = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.params?.aspectRatio);
                           if (withAR.length === 0) return null;
-                          // Use intersection of valid options
-                          let arOpts = withAR[0].params.aspectRatio.options;
-                          withAR.slice(1).forEach(m => {
-                            const vals = m.params.aspectRatio.options.map(o => o.value);
-                            arOpts = arOpts.filter(o => vals.includes(o.value));
+                          // Build UNION of all aspect ratio options, track supporters
+                          const arMap = new Map();
+                          withAR.forEach(m => {
+                            m.params.aspectRatio.options.forEach(o => {
+                              if (!arMap.has(o.value)) arMap.set(o.value, { label: o.label, value: o.value, models: [] });
+                              arMap.get(o.value).models.push(m.name);
+                            });
                           });
-                          if (arOpts.length === 0) arOpts = withAR[0].params.aspectRatio.options;
+                          const unionAR = [...arMap.values()];
+                          const totalAR = withAR.length;
                           return (
-                            <div className="settings-row">
-                              <label>Aspect</label>
-                              <select className="settings-select" value={aspectRatio} onChange={e => setAspectRatio(e.target.value)}>
-                                <option value="auto">Auto</option>
-                                {arOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                              </select>
+                            <div className="settings-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <label>Aspect</label>
+                                <select className="settings-select" value={aspectRatio} onChange={e => setAspectRatio(e.target.value)}>
+                                  <option value="auto">Auto</option>
+                                  {unionAR.map(o => <option key={o.value} value={o.value}>{o.label}{totalAR > 1 && o.models.length < totalAR ? ` (${o.models.length}/${totalAR})` : ""}</option>)}
+                                </select>
+                              </div>
+                              {totalAR > 1 && aspectRatio !== "auto" && (() => {
+                                const current = arMap.get(aspectRatio);
+                                if (current && current.models.length < totalAR) {
+                                  const unsupported = withAR.filter(m => !current.models.includes(m.name));
+                                  return (
+                                    <div style={{ fontSize: 9, color: "var(--text-muted)", lineHeight: 1.3 }}>
+                                      {current.models.join(", ")}
+                                      {unsupported.length > 0 && <span style={{ color: "var(--amber)" }}> — {unsupported.map(m => m.name).join(", ")} will use their default</span>}
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </div>
                           );
                         })()}
 
-                        {/* Duration — for video models */}
+                        {/* Duration — UNION for video models with per-model fallback */}
                         {(genType === "t2v" || genType === "i2v") && (() => {
                           const withDur = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.params?.duration);
                           if (withDur.length === 0) return null;
-                          // Intersection of valid durations
-                          let durOpts = withDur[0].params.duration.options;
-                          withDur.slice(1).forEach(m => {
-                            durOpts = durOpts.filter(d => m.params.duration.options.includes(d));
+                          // Build UNION of all duration options, track which models support each
+                          const durMap = new Map();
+                          withDur.forEach(m => {
+                            m.params.duration.options.forEach(d => {
+                              if (!durMap.has(d)) durMap.set(d, []);
+                              durMap.get(d).push(m.name);
+                            });
                           });
-                          if (durOpts.length === 0) durOpts = withDur[0].params.duration.options; // fallback
-                          // Auto-correct if current duration is invalid for selection
-                          if (!durOpts.includes(Number(duration))) {
-                            setTimeout(() => setDuration(durOpts[0]), 0);
+                          const unionDurs = [...durMap.keys()].sort((a, b) => a - b);
+                          const totalDur = withDur.length;
+                          // Auto-correct if current duration is not in union at all
+                          if (!unionDurs.includes(Number(duration))) {
+                            setTimeout(() => setDuration(unionDurs[0]), 0);
                           }
                           return (
-                            <div className="settings-row">
-                              <label>Duration</label>
-                              <select className="settings-select" value={duration} onChange={e => setDuration(Number(e.target.value))}>
-                                {durOpts.map(d => <option key={d} value={d}>{d}s</option>)}
-                              </select>
+                            <div className="settings-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <label>Duration</label>
+                                <select className="settings-select" value={duration} onChange={e => setDuration(Number(e.target.value))}>
+                                  {unionDurs.map(d => {
+                                    const supporters = durMap.get(d);
+                                    const suffix = totalDur > 1 && supporters.length < totalDur ? ` (${supporters.length}/${totalDur})` : "";
+                                    return <option key={d} value={d}>{d}s{suffix}</option>;
+                                  })}
+                                </select>
+                              </div>
+                              {totalDur > 1 && (() => {
+                                const currentDur = Number(duration);
+                                const supporters = durMap.get(currentDur) || [];
+                                if (supporters.length < totalDur) {
+                                  const unsupported = withDur.filter(m => !m.params.duration.options.includes(currentDur));
+                                  // Show what fallback each unsupported model gets
+                                  const fallbackInfo = unsupported.map(m => {
+                                    const opts = m.params.duration.options;
+                                    const closest = opts.reduce((prev, curr) => Math.abs(curr - currentDur) < Math.abs(prev - currentDur) ? curr : prev);
+                                    return `${m.name} -> ${closest}s`;
+                                  });
+                                  return (
+                                    <div style={{ fontSize: 9, color: "var(--text-muted)", lineHeight: 1.3 }}>
+                                      <span>{supporters.length === totalDur ? "All models" : supporters.join(", ")}</span>
+                                      {fallbackInfo.length > 0 && <span style={{ color: "var(--amber)" }}> — {fallbackInfo.join(", ")}</span>}
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </div>
                           );
                         })()}

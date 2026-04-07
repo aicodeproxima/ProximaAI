@@ -204,11 +204,11 @@ export const MODELS = {
       params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false } },
     { id: "bytedance/seedream-v5.0-lite/sequential", name: "Seedream 5.0 Sequential", provider: "ByteDance", price: 0.035,
       params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false, optional: { maxImages: { paramName: "max_images", type: "number", default: 1, min: 1, max: 15 } } } },
-    { id: "bytedance/bytedance-seedream-v4.5", name: "Seedream 4.5", provider: "ByteDance", price: 0.04,
+    { id: "bytedance/seedream-v4.5", name: "Seedream 4.5", provider: "ByteDance", price: 0.04,
       params: { resolution: RES_SEEDREAM, negativePrompt: true, seed: true } },
 
     // Alibaba
-    { id: "alibaba/alibaba-wan-2.6-text-to-image", name: "WAN 2.6", provider: "Alibaba", price: 0.02,
+    { id: "alibaba/wan-2.6/text-to-image", name: "WAN 2.6", provider: "Alibaba", price: 0.02,
       params: { resolution: RES_WAN_T2I, negativePrompt: false, seed: true, optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
 
     // WaveSpeed / Alibaba
@@ -220,11 +220,11 @@ export const MODELS = {
       params: { resolution: RES_FLUX, negativePrompt: true, seed: true } },
 
     // OpenAI
-    { id: "openai/openai-dall-e-3", name: "DALL-E 3", provider: "OpenAI", price: 0.08,
+    { id: "openai/dall-e-3", name: "DALL-E 3", provider: "OpenAI", price: 0.08,
       params: { resolution: { paramName: "size", options: [{ label: "1024x1024", value: "1024x1024" }, { label: "1024x1792", value: "1024x1792" }, { label: "1792x1024", value: "1792x1024" }], default: "1024x1024" }, negativePrompt: false, seed: false, outputFormat: false } },
 
     // Luma
-    { id: "luma/luma-photon", name: "Luma Photon", provider: "Luma", price: 0.03,
+    { id: "luma/photon", name: "Luma Photon", provider: "Luma", price: 0.03,
       params: { resolution: null, aspectRatio: AR_STANDARD, negativePrompt: false, seed: true, outputFormat: false } },
   ],
 
@@ -276,7 +276,7 @@ export const MODELS = {
     // Alibaba WAN
     { id: "alibaba/wan-2.7/text-to-video", name: "WAN 2.7", provider: "Alibaba", price: 0.50, hot: true,
       params: { resolution: RES_VIDEO_WAN, duration: { options: [2,3,4,5,6,7,8,9,10,15], default: 5 }, negativePrompt: true, seed: true, optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
-    { id: "alibaba/alibaba-wan-2.5-text-to-video", name: "WAN 2.5", provider: "Alibaba", price: 0.30,
+    { id: "alibaba/wan-2.5/text-to-video", name: "WAN 2.5", provider: "Alibaba", price: 0.30,
       params: { resolution: RES_VIDEO_WAN, duration: { options: [5,10], default: 5 }, negativePrompt: true, seed: true } },
 
     // Google Veo
@@ -292,7 +292,7 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, duration: { options: [5,8], default: 5 }, negativePrompt: false, seed: true } },
 
     // Kling
-    { id: "kwaivgi/kwaivgi-kling-v3.0-pro-text-to-video", name: "Kling 3.0 Pro", provider: "Kwaivgi", price: 0.80, hot: true,
+    { id: "kwaivgi/kling-v3.0-pro/text-to-video", name: "Kling 3.0 Pro", provider: "Kwaivgi", price: 0.80, hot: true,
       params: { resolution: null, aspectRatio: AR_KLING, duration: { options: [5,10], default: 5 }, negativePrompt: true, seed: false, optional: { cfgScale: { paramName: "cfg_scale", type: "number", default: 0.5, min: 0, max: 1 }, sound: { paramName: "sound", type: "boolean", default: false } } } },
 
     // PixVerse
@@ -304,11 +304,11 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_720_1080, duration: { options: [5,10], default: 5 }, negativePrompt: false, seed: true } },
 
     // ByteDance
-    { id: "bytedance/bytedance-waver-1.0", name: "Waver 1.0", provider: "ByteDance", price: 0.30,
+    { id: "bytedance/waver-1.0", name: "Waver 1.0", provider: "ByteDance", price: 0.30,
       params: { resolution: RES_VIDEO_720_1080, duration: { options: [5], default: 5 }, negativePrompt: false, seed: true } },
 
     // Vidu
-    { id: "vidu/vidu-q3-text-to-video", name: "Vidu Q3", provider: "Vidu", price: 0.30,
+    { id: "vidu/q3/text-to-video", name: "Vidu Q3", provider: "Vidu", price: 0.30,
       params: { resolution: RES_VIDEO_720, duration: { options: [4,8], default: 4 }, negativePrompt: false, seed: true } },
 
     // Minimax
@@ -346,15 +346,15 @@ export const MODELS = {
       params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: false, seed: true } },
 
     // Kling
-    { id: "kwaivgi/kwaivgi-kling-v3.0-pro-image-to-video", name: "Kling 3.0 I2V", provider: "Kwaivgi", price: 0.80, hot: true,
+    { id: "kwaivgi/kling-v3.0-pro/image-to-video", name: "Kling 3.0 I2V", provider: "Kwaivgi", price: 0.80, hot: true,
       params: { resolution: null, aspectRatio: AR_KLING, duration: { options: [5,10], default: 5 }, negativePrompt: true, seed: false } },
 
     // Runway
-    { id: "runwayml/runwayml-gen4-turbo", name: "Runway Gen4 Turbo", provider: "Runway", price: 0.50, hot: true,
+    { id: "runwayml/gen4-turbo", name: "Runway Gen4 Turbo", provider: "Runway", price: 0.50, hot: true,
       params: { resolution: null, aspectRatio: AR_STANDARD, duration: { options: [5,10], default: 5 }, negativePrompt: false, seed: false } },
 
     // Luma
-    { id: "luma/luma-ray-2-i2v", name: "Luma Ray 2", provider: "Luma", price: 0.40,
+    { id: "luma/ray-2-i2v", name: "Luma Ray 2", provider: "Luma", price: 0.40,
       params: { resolution: null, aspectRatio: AR_STANDARD, duration: { options: [5,9], default: 5 }, negativePrompt: false, seed: true } },
 
     // PixVerse
@@ -366,7 +366,7 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_720_1080, duration: { options: [5,10], default: 5 }, negativePrompt: false, seed: true } },
 
     // Vidu
-    { id: "vidu/vidu-q3-image-to-video", name: "Vidu Q3 I2V", provider: "Vidu", price: 0.30,
+    { id: "vidu/q3/image-to-video", name: "Vidu Q3 I2V", provider: "Vidu", price: 0.30,
       params: { resolution: RES_VIDEO_720, duration: { options: [4,8], default: 4 }, negativePrompt: false, seed: true } },
 
     // ByteDance Seedance I2V
@@ -387,7 +387,7 @@ export const MODELS = {
   avatar: [
     { id: "wavespeed-ai/infinitetalk", name: "InfiniteTalk", provider: "WaveSpeed", price: 0.15, requiresAudio: true,
       params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }], default: "480p" }, negativePrompt: false, seed: true } },
-    { id: "kwaivgi/kwaivgi-kling-v2-ai-avatar-pro", name: "Kling Avatar Pro", provider: "Kwaivgi", price: 0.34, hot: true, requiresAudio: true,
+    { id: "kwaivgi/kling-v2-ai-avatar-pro", name: "Kling Avatar Pro", provider: "Kwaivgi", price: 0.34, hot: true, requiresAudio: true,
       params: { resolution: null, negativePrompt: false, seed: false } },
     { id: "wavespeed-ai/wan-2.2/animate", name: "WAN 2.2 Animate", provider: "WaveSpeed", price: 0.20, requiresVideo: true,
       params: { resolution: null, negativePrompt: false, seed: true } },

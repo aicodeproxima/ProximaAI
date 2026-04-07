@@ -1,11 +1,79 @@
 // Builds a per-model API payload using the model's params config.
 // Each model gets its OWN payload — no universal assumptions.
 
-// Find the closest value in an array of numbers to the target
-function closestValue(arr, target) {
-  return arr.reduce((prev, curr) =>
-    Math.abs(curr - target) < Math.abs(prev - target) ? curr : prev
-  );
+/**
+ * Find the nearest valid option for a given value.
+ *
+ * For numbers: picks the numerically closest option.
+ * For strings: tries an exact match first, then a case-insensitive match,
+ *   then attempts to parse a leading number from both value and options
+ *   (e.g. "1080p" → 1080) and picks the numerically closest.
+ * Always falls back to defaultVal when no reasonable match exists.
+ *
+ * @param {*}        value      - The user-chosen value
+ * @param {Array}    options    - Array of valid values for this model
+ * @param {*}        defaultVal - The model's declared default
+ * @returns {*} The best valid value to send
+ */
+export function nearestValid(value, options, defaultVal) {
+  // Nothing to match against — return the default
+  if (!options || options.length === 0) return defaultVal;
+
+  // Exact match — fast path
+  if (options.includes(value)) return value;
+
+  // --- Numeric path ---
+  const numVal = typeof value === "number" ? value : parseFloat(value);
+  const allNumeric = options.every(o => typeof o === "number" || (typeof o === "string" && !isNaN(parseFloat(o)) && String(parseFloat(o)) === o.trim()));
+
+  if (!isNaN(numVal) && allNumeric) {
+    // All options are numeric (or numeric strings) — pick closest
+    let best = options[0];
+    let bestDist = Math.abs(parseFloat(best) - numVal);
+    for (let i = 1; i < options.length; i++) {
+      const dist = Math.abs(parseFloat(options[i]) - numVal);
+      if (dist < bestDist) {
+        best = options[i];
+        bestDist = dist;
+      }
+    }
+    return best;
+  }
+
+  // --- String path ---
+  if (typeof value === "string") {
+    const lower = value.toLowerCase().trim();
+
+    // Case-insensitive exact match
+    const ciMatch = options.find(o => typeof o === "string" && o.toLowerCase().trim() === lower);
+    if (ciMatch) return ciMatch;
+
+    // Try to extract leading numbers from resolution-style strings (e.g. "1080p", "720p", "1280x720")
+    const extractNum = (s) => {
+      const m = String(s).match(/^(\d+)/);
+      return m ? parseInt(m[1], 10) : NaN;
+    };
+
+    const valNum = extractNum(value);
+    if (!isNaN(valNum)) {
+      let best = null;
+      let bestDist = Infinity;
+      for (const opt of options) {
+        const optNum = extractNum(opt);
+        if (!isNaN(optNum)) {
+          const dist = Math.abs(optNum - valNum);
+          if (dist < bestDist) {
+            best = opt;
+            bestDist = dist;
+          }
+        }
+      }
+      if (best !== null) return best;
+    }
+  }
+
+  // No reasonable match — use default
+  return defaultVal;
 }
 
 export function buildPayload(model, userSettings, genType) {
@@ -22,12 +90,10 @@ export function buildPayload(model, userSettings, genType) {
 
   // Resolution/size — use model's own param name and value format
   if (p.resolution) {
-    // Check if user has a per-model override for this model's resolution
     const perModel = userSettings.perModelResolution?.[model.id];
     const val = perModel || userSettings.resolution || p.resolution.default;
-    // Only send if the value is valid for this model
     const validValues = p.resolution.options.map(o => o.value);
-    payload[p.resolution.paramName] = validValues.includes(val) ? val : p.resolution.default;
+    payload[p.resolution.paramName] = nearestValid(val, validValues, p.resolution.default);
   }
 
   // Aspect ratio — only if model supports it
@@ -35,7 +101,9 @@ export function buildPayload(model, userSettings, genType) {
     const ar = userSettings.aspectRatio;
     if (ar && ar !== "auto") {
       const validAR = p.aspectRatio.options.map(o => o.value);
-      payload[p.aspectRatio.paramName] = validAR.includes(ar) ? ar : p.aspectRatio.default;
+      // Aspect ratios are categorical — no numeric proximity makes sense,
+      // so nearestValid will either exact-match or fall back to default.
+      payload[p.aspectRatio.paramName] = nearestValid(ar, validAR, p.aspectRatio.default);
     } else {
       payload[p.aspectRatio.paramName] = p.aspectRatio.default;
     }
@@ -47,7 +115,7 @@ export function buildPayload(model, userSettings, genType) {
   if (p.duration) {
     const dur = parseInt(userSettings.duration) || p.duration.default;
     const validDurs = p.duration.options;
-    payload.duration = validDurs.includes(dur) ? dur : closestValue(validDurs, dur);
+    payload.duration = nearestValid(dur, validDurs, p.duration.default);
   }
 
   // Negative prompt — only if model supports it AND user provided one
@@ -62,14 +130,13 @@ export function buildPayload(model, userSettings, genType) {
 
   // Source image(s) for i2i — supports multi-image for models with maxImages > 1
   if (genType === "i2i") {
-    const imageParam = p.imageParam || "images"; // default to "images" (array) for backward compat
-    // Collect all image URLs — sourceImageUrls (array) takes priority, fall back to single sourceImageUrl
+    const imageParam = p.imageParam || "images";
     const allImages = userSettings.sourceImageUrls?.length > 0
       ? userSettings.sourceImageUrls.filter(u => u?.trim())
       : userSettings.sourceImageUrl ? [userSettings.sourceImageUrl] : [];
     if (allImages.length > 0) {
       if (imageParam === "image") {
-        payload.image = allImages[0]; // singular models only get first image
+        payload.image = allImages[0];
       } else {
         payload.images = allImages;
       }
