@@ -300,7 +300,7 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_STANDARD, duration: { options: [5,8], default: 5 }, negativePrompt: true, seed: true } },
 
     // Pika
-    { id: "pika/pika-v2.2-t2v", name: "Pika V2.2", provider: "Pika", price: 0.40,
+    { id: "pika/v2.2-t2v", name: "Pika V2.2", provider: "Pika", price: 0.40,
       params: { resolution: RES_VIDEO_720_1080, duration: { options: [5,10], default: 5 }, negativePrompt: false, seed: true } },
 
     // ByteDance
@@ -362,7 +362,7 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_STANDARD, duration: { options: [5,8], default: 5 }, negativePrompt: false, seed: true } },
 
     // Pika
-    { id: "pika/pika-v2.2-i2v", name: "Pika V2.2 I2V", provider: "Pika", price: 0.40,
+    { id: "pika/v2.2-i2v", name: "Pika V2.2 I2V", provider: "Pika", price: 0.40,
       params: { resolution: RES_VIDEO_720_1080, duration: { options: [5,10], default: 5 }, negativePrompt: false, seed: true } },
 
     // Vidu
