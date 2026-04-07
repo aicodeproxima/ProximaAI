@@ -284,11 +284,11 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 `;
 
 // ─── HELPERS ───
-function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function genId() { return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
 function formatTime(ms) {
   if (ms < 1000) return `${ms}ms`;
-  const s = (ms / 1000).toFixed(1);
-  return s >= 60 ? `${(s / 60).toFixed(1)}m` : `${s}s`;
+  const s = ms / 1000;
+  return s >= 60 ? `${(s / 60).toFixed(1)}m` : `${s.toFixed(1)}s`;
 }
 function formatCost(c) { return `$${c.toFixed(4)}`; }
 function timeAgo(ts) {
@@ -325,18 +325,23 @@ export default function PrismApp() {
   const [lightbox, setLightbox] = useState(null);
   const [activeCount, setActiveCount] = useState(0);
   const pollRefs = useRef({});
+  const savedLogIds = useRef(new Set());
+  const isGeneratingRef = useRef(false);
   const timerRefs = useRef({});
 
   // Load state from IndexedDB (with localStorage migration)
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       await migrateFromLocalStorage();
       await initSupabase();
+      if (cancelled) return;
       const key = await getSetting("apiKey");
-      if (key) setApiKey(key);
+      if (key && !cancelled) setApiKey(key);
       const logData = await getHistory(500);
-      if (logData?.length) setLogs(logData);
+      if (logData?.length && !cancelled) setLogs(logData);
     })();
+    return () => { cancelled = true; };
   }, []);
 
   // Save API key
@@ -347,11 +352,12 @@ export default function PrismApp() {
     }
   }, [apiKey]);
 
-  // Save logs to IndexedDB (and sync to Supabase)
+  // Save NEW logs to IndexedDB (and sync to Supabase) — skip already-saved entries
   useEffect(() => {
     if (logs.length > 0) {
       const latest = logs[0];
-      if (latest?.id) {
+      if (latest?.id && !savedLogIds.current.has(latest.id)) {
+        savedLogIds.current.add(latest.id);
         addHistoryEntry(latest);
         syncHistoryEntry(latest).catch(() => {});
       }
@@ -363,6 +369,11 @@ export default function PrismApp() {
     const active = tasks.filter(t => t.status === "pending" || t.status === "processing").length;
     setActiveCount(active);
   }, [tasks]);
+
+  // Cleanup polling timeouts on unmount
+  useEffect(() => {
+    return () => { Object.values(pollRefs.current).forEach(id => clearTimeout(id)); };
+  }, []);
 
   const models = MODELS[genType] || [];
   const estCost = selectedModels.reduce((sum, id) => {
@@ -425,11 +436,13 @@ export default function PrismApp() {
 
   // ─── GENERATION ENGINE ───
   async function handleGenerate() {
+    if (isGeneratingRef.current) return;
     if (!apiKey || !prompt.trim() || selectedModels.length === 0) return;
     if ((genType === "i2i" || genType === "i2v") && !sourceImageUrl.trim()) {
       alert("Please provide a source image URL for " + (genType === "i2i" ? "image editing" : "image-to-video"));
       return;
     }
+    isGeneratingRef.current = true;
     setIsGenerating(true);
     setPage("cockpit");
 
@@ -539,9 +552,10 @@ export default function PrismApp() {
     // Update timers
     const timerId = setInterval(() => {
       setTasks(prev => {
-        const anyActive = prev.some(t => t.status === "pending" || t.status === "processing");
+        const anyActive = prev.some(t => t.batchId === batchId && (t.status === "pending" || t.status === "processing"));
         if (!anyActive) {
           clearInterval(timerId);
+          isGeneratingRef.current = false;
           setIsGenerating(false);
           // Log the batch
           const batch = prev.filter(t => t.batchId === batchId);

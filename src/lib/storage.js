@@ -31,6 +31,9 @@ function openDB() {
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+  }).catch(err => {
+    dbPromise = null; // Clear so next call retries
+    throw err;
   });
   return dbPromise;
 }
@@ -55,7 +58,9 @@ export async function getSetting(key) {
     const result = await wrapRequest(store.get(key));
     return result?.value ?? null;
   } catch {
-    return localStorage.getItem(`prism-${key}`) || null;
+    const raw = localStorage.getItem(`prism-${key}`);
+    if (raw === null) return null;
+    try { return JSON.parse(raw); } catch { return raw; }
   }
 }
 
@@ -155,10 +160,17 @@ export async function migrateFromLocalStorage() {
     // Migrate logs
     const oldLogs = localStorage.getItem("prism-logs");
     if (oldLogs) {
-      const logs = JSON.parse(oldLogs);
-      const store = await tx("history", "readwrite");
-      for (const log of logs) {
-        try { await wrapRequest(store.put(log)); } catch {}
+      let logs;
+      try { logs = JSON.parse(oldLogs); } catch { logs = []; }
+      if (logs.length > 0) {
+        // Use synchronous puts within a single transaction to avoid auto-close
+        const db = await openDB();
+        const txn = db.transaction("history", "readwrite");
+        const store = txn.objectStore("history");
+        for (const log of logs) {
+          try { store.put(log); } catch {} // sync — no await
+        }
+        await new Promise((res, rej) => { txn.oncomplete = res; txn.onerror = () => rej(txn.error); });
       }
       localStorage.removeItem("prism-logs");
     }
