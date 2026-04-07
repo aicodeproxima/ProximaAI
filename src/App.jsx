@@ -320,6 +320,7 @@ export default function PrismApp() {
   const [uploadStatus, setUploadStatus] = useState(""); // "" | "uploading" | "done" | "error"
   const [testStatus, setTestStatus] = useState(null); // null | "testing" | {ok, msg}
   const fileInputRef = useRef(null);
+  const multiImageInputRef = useRef(null);
   const [tasks, setTasks] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -459,16 +460,20 @@ export default function PrismApp() {
     setUploadStatus("");
   }
 
-  // Compute max images allowed for currently selected i2i models
-  const maxImagesAllowed = genType === "i2i" ? Math.max(1, ...selectedModels.map(id => {
-    const m = models.find(x => x.id === id);
-    return m?.params?.maxImages || 1;
-  })) : 1;
+  // Compute max images allowed — use min across selected models (most restrictive)
+  const maxImagesAllowed = (() => {
+    if (genType !== "i2i" || selectedModels.length === 0) return 1;
+    const caps = selectedModels.map(id => {
+      const m = models.find(x => x.id === id);
+      return m?.params?.maxImages || 1;
+    }).filter(v => v > 1);
+    return caps.length > 0 ? Math.min(...caps) : 1;
+  })();
 
   // ─── GENERATION ENGINE ───
   async function handleGenerate() {
     if (isGeneratingRef.current) return;
-    if (!apiKey || !prompt.trim() || selectedModels.length === 0) return;
+    if (!apiKey || (!prompt.trim() && genType !== "avatar") || selectedModels.length === 0) return;
     if ((genType === "i2i" || genType === "i2v") && !sourceImageUrl.trim()) {
       alert("Please provide a source image URL for " + (genType === "i2i" ? "image editing" : "image-to-video"));
       return;
@@ -595,7 +600,7 @@ export default function PrismApp() {
           if (batch.length > 0) {
             const logEntry = {
               id: batchId, timestamp: Date.now(), prompt, negPrompt, genType,
-              models: batch.map(t => t.modelName), resolution, duration, seed,
+              models: batch.map(t => t.modelName), resolution, duration, seed, aspectRatio, sourceImageUrl,
               tasks: batch.map(t => ({ model: t.modelName, status: t.status, wallClockMs: t.wallClockMs, cost: t.price, outputs: t.outputs, error: t.error })),
               totalCost: batch.reduce((s, t) => s + (t.status === "completed" ? t.price : 0), 0)
             };
@@ -656,6 +661,7 @@ export default function PrismApp() {
           resolution: newTask.resolution, duration: newTask.duration,
           seed: newTask.seed, aspectRatio: newTask.aspectRatio,
           sourceImageUrl: newTask.sourceImageUrl,
+          sourceImageUrls: newTask.sourceImageUrls || [],
           perModelResolution: newTask.perModelResolution || {},
         };
         const payload = modelConfig?.params
@@ -734,9 +740,12 @@ export default function PrismApp() {
     setResolution(log.resolution);
     setDuration(log.duration);
     setSeed(log.seed);
+    setAspectRatio(log.aspectRatio || "auto");
+    if (log.sourceImageUrl) { setSourceImageUrl(log.sourceImageUrl); setSourcePreview(log.sourceImageUrl); setUploadStatus("done"); }
     // Try to reselect models
     const modelIds = (MODELS[log.genType] || []).filter(m => log.models.includes(m.name)).map(m => m.id);
     setSelectedModels(modelIds);
+    setPerModelRes({});
     setPage("cockpit");
   }
 
@@ -781,7 +790,7 @@ export default function PrismApp() {
                   <div className="type-tabs">
                     {Object.entries(TYPE_LABELS).map(([key, label]) => (
                       <button key={key} className={`type-tab ${genType===key?"active":""}`}
-                        onClick={() => { setGenType(key); setSelectedModels([]); setPerModelRes({}); setResolution(""); setDuration(5); setAspectRatio("auto"); if (key !== "i2i" && key !== "i2v") { clearSourceImage(); } }}>
+                        onClick={() => { setGenType(key); setSelectedModels([]); setPerModelRes({}); setResolution(""); setDuration(5); setAspectRatio("auto"); setSourceImageUrls([]); if (key !== "i2i" && key !== "i2v" && key !== "avatar") { clearSourceImage(); } }}>
                         {TYPE_ICONS[key]} {label}
                       </button>
                     ))}
@@ -796,7 +805,7 @@ export default function PrismApp() {
                       "Describe what you want to generate..."}
                       value={prompt} onChange={e => setPrompt(e.target.value)}
                       onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleGenerate(); }} />
-                    {(genType === "image" || genType === "i2i" || genType === "t2v") && (
+                    {(genType === "image" || genType === "i2i" || genType === "t2v" || genType === "i2v") && (
                       <input type="text" className="prompt-area" style={{ minHeight: "auto", marginTop: 8, fontSize: 12, padding: 8 }}
                         placeholder="Negative prompt (optional)..." value={negPrompt} onChange={e => setNegPrompt(e.target.value)} />
                     )}
@@ -892,16 +901,17 @@ export default function PrismApp() {
                           )}
                           {sourceImageUrls.length < maxImagesAllowed - 1 && (
                             <div style={{ display: "flex", gap: 6 }}>
-                              <input type="text" className="prompt-area" style={{ minHeight: "auto", fontSize: 11, padding: 8, flex: 1 }}
+                              <input ref={multiImageInputRef} type="text" className="prompt-area" style={{ minHeight: "auto", fontSize: 11, padding: 8, flex: 1 }}
                                 placeholder="Paste additional image URL..."
                                 onKeyDown={e => {
                                   if (e.key === "Enter" && e.target.value.trim()) {
+                                    e.preventDefault();
                                     setSourceImageUrls(prev => [...prev, e.target.value.trim()]);
                                     e.target.value = "";
                                   }
                                 }} />
                               <button onClick={() => {
-                                const input = document.querySelector('[placeholder="Paste additional image URL..."]');
+                                const input = multiImageInputRef.current;
                                 if (input?.value?.trim()) { setSourceImageUrls(prev => [...prev, input.value.trim()]); input.value = ""; }
                               }} style={{ padding: "8px 12px", background: "var(--accent)", color: "white", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 11, fontFamily: font, whiteSpace: "nowrap" }}>+ Add</button>
                             </div>
