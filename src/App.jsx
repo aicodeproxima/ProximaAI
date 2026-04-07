@@ -725,7 +725,7 @@ export default function PrismApp() {
                   <div className="type-tabs">
                     {Object.entries(TYPE_LABELS).map(([key, label]) => (
                       <button key={key} className={`type-tab ${genType===key?"active":""}`}
-                        onClick={() => { setGenType(key); setSelectedModels([]); setResolution(key==="image"||key==="i2i"?"1k":"720p"); if (key !== "i2i" && key !== "i2v") { clearSourceImage(); } }}>
+                        onClick={() => { setGenType(key); setSelectedModels([]); setPerModelRes({}); setResolution(""); setDuration(5); setAspectRatio("auto"); if (key !== "i2i" && key !== "i2v") { clearSourceImage(); } }}>
                         {TYPE_ICONS[key]} {label}
                       </button>
                     ))}
@@ -856,9 +856,20 @@ export default function PrismApp() {
                             schemes[key].push(m);
                           });
                           const schemeKeys = Object.keys(schemes);
-                          // If all share same scheme, show one dropdown
+                          // If all share same scheme, show one dropdown with INTERSECTION of options
                           if (schemeKeys.length === 1) {
-                            const allOptions = schemes[schemeKeys[0]][0].params.resolution.options;
+                            const modelsInScheme = schemes[schemeKeys[0]];
+                            let allOptions = modelsInScheme[0].params.resolution.options;
+                            modelsInScheme.slice(1).forEach(m => {
+                              const vals = m.params.resolution.options.map(o => o.value);
+                              allOptions = allOptions.filter(o => vals.includes(o.value));
+                            });
+                            if (allOptions.length === 0) allOptions = modelsInScheme[0].params.resolution.options;
+                            // Auto-set resolution if current value doesn't match any option
+                            const validVals = allOptions.map(o => o.value);
+                            if (!validVals.includes(resolution)) {
+                              setTimeout(() => setResolution(modelsInScheme[0].params.resolution.default), 0);
+                            }
                             return (
                               <div className="settings-row">
                                 <label>Resolution</label>
@@ -890,6 +901,7 @@ export default function PrismApp() {
                             const vals = m.params.aspectRatio.options.map(o => o.value);
                             arOpts = arOpts.filter(o => vals.includes(o.value));
                           });
+                          if (arOpts.length === 0) arOpts = withAR[0].params.aspectRatio.options;
                           return (
                             <div className="settings-row">
                               <label>Aspect</label>
@@ -911,10 +923,14 @@ export default function PrismApp() {
                             durOpts = durOpts.filter(d => m.params.duration.options.includes(d));
                           });
                           if (durOpts.length === 0) durOpts = withDur[0].params.duration.options; // fallback
+                          // Auto-correct if current duration is invalid for selection
+                          if (!durOpts.includes(Number(duration))) {
+                            setTimeout(() => setDuration(durOpts[0]), 0);
+                          }
                           return (
                             <div className="settings-row">
                               <label>Duration</label>
-                              <select className="settings-select" value={duration} onChange={e => setDuration(e.target.value)}>
+                              <select className="settings-select" value={duration} onChange={e => setDuration(Number(e.target.value))}>
                                 {durOpts.map(d => <option key={d} value={d}>{d}s</option>)}
                               </select>
                             </div>
