@@ -323,6 +323,8 @@ export default function PrismApp() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [logs, setLogs] = useState([]);
   const [lightbox, setLightbox] = useState(null);
+  const [defaultImageRes, setDefaultImageRes] = useState("1k");
+  const [defaultVideoDur, setDefaultVideoDur] = useState(5);
   const [activeCount, setActiveCount] = useState(0);
   const pollRefs = useRef({});
   const savedLogIds = useRef(new Set());
@@ -340,6 +342,10 @@ export default function PrismApp() {
       if (key && !cancelled) setApiKey(key);
       const logData = await getHistory(500);
       if (logData?.length && !cancelled) setLogs(logData);
+      const savedImgRes = await getSetting("defaultImageRes");
+      if (savedImgRes && !cancelled) setDefaultImageRes(savedImgRes);
+      const savedVidDur = await getSetting("defaultVideoDur");
+      if (savedVidDur && !cancelled) setDefaultVideoDur(Number(savedVidDur));
     })();
     return () => { cancelled = true; };
   }, []);
@@ -603,6 +609,15 @@ export default function PrismApp() {
     };
     setTasks(prev => [newTask, ...prev]);
 
+    // Timer for live wallClock display on regenerated task
+    const regenTimer = setInterval(() => {
+      setTasks(prev => {
+        const t = prev.find(x => x.id === newTask.id);
+        if (!t || t.status === "completed" || t.status === "failed") { clearInterval(regenTimer); return prev; }
+        return prev.map(x => x.id === newTask.id ? { ...x, wallClockMs: Date.now() - x.startTime } : x);
+      });
+    }, 500);
+
     // Fire the regenerated task — use task's own genType, not current UI tab
     (async () => {
       try {
@@ -702,7 +717,7 @@ export default function PrismApp() {
   const completedTasks = tasks.filter(t => t.status === "completed");
   const activeTasks = tasks.filter(t => t.status === "pending" || t.status === "processing");
   // resOptions and arOptions are now computed dynamically in the settings panel based on selected models
-  const needsImage = genType === "i2i" || genType === "i2v";
+  const needsImage = genType === "i2i" || genType === "i2v" || genType === "avatar";
 
   return (
     <>
@@ -809,7 +824,7 @@ export default function PrismApp() {
                         <div style={{ marginTop: 10, position: "relative" }}>
                           <img src={sourcePreview || sourceImageUrl} alt="Source"
                             style={{ width: "100%", maxHeight: 180, objectFit: "contain", borderRadius: 8, border: "1px solid var(--border)", background: "#000" }}
-                            onError={e => { e.target.style.display = "none"; }} />
+                            onError={e => { e.target.style.display = "none"; setUploadStatus("error"); }} />
                           <button onClick={clearSourceImage}
                             style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,0.8)", color: "white", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, width: 26, height: 26, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
                           {uploadStatus === "uploading" && (
@@ -969,7 +984,7 @@ export default function PrismApp() {
                   )}
 
                   <button className={`gen-btn ${isGenerating ? "running" : "ready"}`}
-                    disabled={!apiKey || !prompt.trim() || selectedModels.length === 0 || isGenerating || (needsImage && !sourceImageUrl.trim())}
+                    disabled={!apiKey || (!prompt.trim() && genType !== "avatar") || selectedModels.length === 0 || isGenerating || (needsImage && !sourceImageUrl.trim())}
                     onClick={handleGenerate}>
                     {isGenerating ? `⏳ GENERATING (${activeCount} active)...` :
                      !apiKey ? "⚠ SET API KEY IN SETTINGS" :
@@ -1050,7 +1065,7 @@ export default function PrismApp() {
                                     a.click();
                                     a.remove();
                                     URL.revokeObjectURL(a.href);
-                                  } catch (e) { window.open(task.outputs?.[0], "_blank"); }
+                                  } catch (e) { console.log("Direct download blocked, opening in new tab"); window.open(task.outputs?.[0], "_blank"); }
                                 }}>↓ Save</button>
                                 <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(task.outputs?.[0] || ""); }}>📋 URL</button>
                                 {(genType === "image" || genType === "i2i") && (
@@ -1182,14 +1197,16 @@ export default function PrismApp() {
                   <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
                     <div>
                       <label style={{ fontSize: 11, color: "var(--text-muted)" }}>Image Resolution</label>
-                      <select className="settings-select" style={{ display: "block", marginTop: 4 }}>
-                        <option>1K</option><option>2K</option><option>4K</option>
+                      <select className="settings-select" style={{ display: "block", marginTop: 4 }}
+                        value={defaultImageRes} onChange={e => { setDefaultImageRes(e.target.value); setSetting("defaultImageRes", e.target.value); }}>
+                        <option value="1k">1K</option><option value="2k">2K</option><option value="4k">4K</option>
                       </select>
                     </div>
                     <div>
                       <label style={{ fontSize: 11, color: "var(--text-muted)" }}>Video Duration</label>
-                      <select className="settings-select" style={{ display: "block", marginTop: 4 }}>
-                        <option>5s</option><option>10s</option><option>15s</option>
+                      <select className="settings-select" style={{ display: "block", marginTop: 4 }}
+                        value={defaultVideoDur} onChange={e => { setDefaultVideoDur(Number(e.target.value)); setSetting("defaultVideoDur", e.target.value); }}>
+                        <option value={5}>5s</option><option value={10}>10s</option><option value={15}>15s</option>
                       </select>
                     </div>
                   </div>

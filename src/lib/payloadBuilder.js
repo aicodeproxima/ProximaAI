@@ -6,8 +6,12 @@ export function buildPayload(model, userSettings, genType) {
   const p = model.params;
   if (!p) return { prompt: userSettings.prompt };
 
-  // Prompt is always required
-  payload.prompt = userSettings.prompt;
+  // Prompt — required for most types, optional for avatar
+  if (userSettings.prompt?.trim()) {
+    payload.prompt = userSettings.prompt;
+  } else if (genType !== "avatar") {
+    payload.prompt = userSettings.prompt || "";
+  }
 
   // Resolution/size — use model's own param name and value format
   if (p.resolution) {

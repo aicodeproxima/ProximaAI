@@ -15,7 +15,7 @@ export async function initSupabase() {
   if (!isSupabaseConfigured()) return null;
   try {
     // Load Supabase from CDN — avoids npm dependency
-    const cdnUrl = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+    const cdnUrl = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/+esm";
     const mod = await import(/* @vite-ignore */ cdnUrl);
     supabase = mod.createClient(SUPABASE_URL, SUPABASE_KEY);
     return supabase;
