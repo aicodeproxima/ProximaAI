@@ -57,6 +57,59 @@ const RES_SEEDREAM = {
   ],
   default: "1024*1024",
 };
+const RES_SEEDREAM5 = {
+  paramName: "size",
+  options: [
+    { label: "2048x2048 (1:1)", value: "2048*2048" },
+    { label: "2560x1440 (16:9)", value: "2560*1440" },
+    { label: "1440x2560 (9:16)", value: "1440*2560" },
+    { label: "2048x1536 (4:3)", value: "2048*1536" },
+    { label: "1536x2048 (3:4)", value: "1536*2048" },
+    { label: "4096x4096", value: "4096*4096" },
+  ],
+  default: "2048*2048",
+};
+const RES_QWEN_PRO = {
+  paramName: "size",
+  options: [
+    { label: "1024x1024 (1:1)", value: "1024*1024" },
+    { label: "1024x576 (16:9)", value: "1024*576" },
+    { label: "576x1024 (9:16)", value: "576*1024" },
+    { label: "1024x768 (4:3)", value: "1024*768" },
+    { label: "768x1024 (3:4)", value: "768*1024" },
+    { label: "2048x2048", value: "2048*2048" },
+  ],
+  default: "1024*1024",
+};
+const RES_KANDINSKY = {
+  paramName: "resolution",
+  options: [
+    { label: "512p", value: "512p" },
+    { label: "1024p", value: "1024p" },
+  ],
+  default: "512p",
+};
+const AR_SEEDANCE = {
+  paramName: "aspect_ratio",
+  options: [
+    { label: "21:9", value: "21:9" },
+    { label: "16:9", value: "16:9" },
+    { label: "4:3", value: "4:3" },
+    { label: "1:1", value: "1:1" },
+    { label: "3:4", value: "3:4" },
+    { label: "9:16", value: "9:16" },
+  ],
+  default: "16:9",
+};
+const AR_KANDINSKY = {
+  paramName: "aspect_ratio",
+  options: [
+    { label: "3:2", value: "3:2" },
+    { label: "1:1", value: "1:1" },
+    { label: "2:3", value: "2:3" },
+  ],
+  default: "3:2",
+};
 const RES_WAN_T2I = {
   paramName: "size",
   options: [
@@ -147,7 +200,11 @@ export const MODELS = {
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true } },
 
     // ByteDance Seedream
-    { id: "bytedance/bytedance-seedream-v4.5", name: "Seedream 4.5", provider: "ByteDance", price: 0.04, hot: true,
+    { id: "bytedance/seedream-v5.0-lite", name: "Seedream 5.0 Lite", provider: "ByteDance", price: 0.035, hot: true,
+      params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false } },
+    { id: "bytedance/seedream-v5.0-lite/sequential", name: "Seedream 5.0 Sequential", provider: "ByteDance", price: 0.035,
+      params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false, optional: { maxImages: { paramName: "max_images", type: "number", default: 1, min: 1, max: 15 } } } },
+    { id: "bytedance/bytedance-seedream-v4.5", name: "Seedream 4.5", provider: "ByteDance", price: 0.04,
       params: { resolution: RES_SEEDREAM, negativePrompt: true, seed: true } },
 
     // Alibaba
@@ -155,6 +212,8 @@ export const MODELS = {
       params: { resolution: RES_WAN_T2I, negativePrompt: false, seed: true, optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
 
     // WaveSpeed / Alibaba
+    { id: "wavespeed-ai/qwen-image-2.0-pro/text-to-image", name: "Qwen Image 2.0 Pro", provider: "Alibaba", price: 0.07, hot: true,
+      params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/qwen-image-text-to-image", name: "Qwen Image", provider: "Alibaba", price: 0.02,
       params: { resolution: RES_NANO_12, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/phota/text-to-image", name: "Phota", provider: "WaveSpeed", price: 0.03,
@@ -179,7 +238,11 @@ export const MODELS = {
       params: { resolution: null, negativePrompt: false, seed: false } },
 
     // ByteDance
-    { id: "bytedance/seedream-v4.5/edit", name: "Seedream 4.5 Edit", provider: "ByteDance", price: 0.04, hot: true,
+    { id: "bytedance/seedream-v5.0-lite/edit", name: "Seedream 5.0 Lite Edit", provider: "ByteDance", price: 0.035, hot: true,
+      params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false } },
+    { id: "bytedance/seedream-v5.0-lite/edit-sequential", name: "Seedream 5.0 Edit Sequential", provider: "ByteDance", price: 0.035,
+      params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false, optional: { maxImages: { paramName: "max_images", type: "number", default: 1, min: 1, max: 15 } } } },
+    { id: "bytedance/seedream-v4.5/edit", name: "Seedream 4.5 Edit", provider: "ByteDance", price: 0.04,
       params: { resolution: RES_SEEDREAM, negativePrompt: true, seed: true } },
     { id: "bytedance/seededit-v3", name: "SeedEdit V3", provider: "ByteDance", price: 0.03,
       params: { resolution: RES_NANO_12, negativePrompt: false, seed: true } },
@@ -197,6 +260,8 @@ export const MODELS = {
       params: { resolution: null, negativePrompt: false, seed: true } },
 
     // WaveSpeed
+    { id: "wavespeed-ai/qwen-image-2.0-pro/edit", name: "Qwen Image 2.0 Pro Edit", provider: "Alibaba", price: 0.07, hot: true,
+      params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/qwen-image-edit", name: "Qwen Image Edit", provider: "Alibaba", price: 0.03,
       params: { resolution: null, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/phota/edit", name: "Phota Edit", provider: "WaveSpeed", price: 0.03,
@@ -243,6 +308,14 @@ export const MODELS = {
     // Minimax
     { id: "minimax/hailuo-2.3/t2v-pro", name: "Hailuo 2.3", provider: "Minimax", price: 0.50,
       params: { resolution: RES_VIDEO_720_1080, duration: { options: [5], default: 5 }, negativePrompt: false, seed: true } },
+
+    // WaveSpeed — Cosmos Predict
+    { id: "wavespeed-ai/cosmos-predict-2.5/text-to-video", name: "Cosmos Predict 2.5", provider: "WaveSpeed", price: 0.25,
+      params: { resolution: null, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
+
+    // WaveSpeed — Kandinsky
+    { id: "wavespeed-ai/kandinsky5-pro/text-to-video", name: "Kandinsky 5 Pro", provider: "WaveSpeed", price: 0.20,
+      params: { resolution: RES_KANDINSKY, aspectRatio: AR_KANDINSKY, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
   ],
 
   i2v: [
@@ -279,6 +352,20 @@ export const MODELS = {
     // Vidu
     { id: "vidu/vidu-q3-image-to-video", name: "Vidu Q3 I2V", provider: "Vidu", price: 0.30,
       params: { resolution: RES_VIDEO_720, duration: { options: [4,8], default: 4 }, negativePrompt: false, seed: true } },
+
+    // ByteDance Seedance I2V
+    { id: "bytedance/seedance-v1.5-pro/image-to-video", name: "Seedance 1.5 Pro I2V", provider: "ByteDance", price: 0.26, hot: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: AR_SEEDANCE, duration: { options: [4,5,6,7,8,9,10,11,12], default: 5 }, negativePrompt: false, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, cameraFixed: { paramName: "camera_fixed", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-v1.5-pro/image-to-video-fast", name: "Seedance 1.5 Pro I2V Fast", provider: "ByteDance", price: 0.20,
+      params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_SEEDANCE, duration: { options: [4,5,6,7,8,9,10,11,12], default: 5 }, negativePrompt: false, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, cameraFixed: { paramName: "camera_fixed", type: "boolean", default: false } } } },
+
+    // WaveSpeed — Cosmos Predict I2V
+    { id: "wavespeed-ai/cosmos-predict-2.5/image-to-video", name: "Cosmos Predict 2.5 I2V", provider: "WaveSpeed", price: 0.25,
+      params: { resolution: null, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
+
+    // WaveSpeed — Kandinsky I2V
+    { id: "wavespeed-ai/kandinsky5-pro/image-to-video", name: "Kandinsky 5 Pro I2V", provider: "WaveSpeed", price: 0.20,
+      params: { resolution: RES_KANDINSKY, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
   ],
 
   avatar: [
