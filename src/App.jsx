@@ -411,45 +411,52 @@ export default function PrismApp() {
   }
 
   // ─── FILE UPLOAD ───
-  async function handleFileSelect(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  async function uploadSingleFile(file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    const { res } = await proxiedFetch(`${API_BASE}/media/upload/binary`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}` },
+      body: formData
+    });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    const data = await res.json();
+    return data?.data?.download_url || data?.data?.url || null;
+  }
 
-    // Instant local preview via base64
+  async function handleFileSelect(e) {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    // Preview first image
     const reader = new FileReader();
     reader.onload = (ev) => setSourcePreview(ev.target.result);
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(files[0]);
 
-    // Upload to WaveSpeed
-    if (!apiKey) {
-      setUploadStatus("error");
-      return;
-    }
+    if (!apiKey) { setUploadStatus("error"); return; }
     setUploadStatus("uploading");
+
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      // Use proxiedFetch for the file upload too
-      const { res } = await proxiedFetch(`${API_BASE}/media/upload/binary`, {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${apiKey}` },
-        body: formData
-      });
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-      const data = await res.json();
-      const url = data?.data?.download_url || data?.data?.url;
-      if (url) {
-        setSourceImageUrl(url);
-        setUploadStatus("done");
-      } else {
-        throw new Error("No URL returned");
+      // Upload all files in parallel
+      const uploadPromises = files.map(f => uploadSingleFile(f));
+      const urls = (await Promise.all(uploadPromises)).filter(Boolean);
+
+      if (urls.length === 0) throw new Error("No URLs returned");
+
+      // First image goes to primary sourceImageUrl
+      setSourceImageUrl(urls[0]);
+
+      // Additional images go to sourceImageUrls (for multi-image models)
+      if (urls.length > 1) {
+        setSourceImageUrls(prev => [...prev, ...urls.slice(1)]);
       }
+
+      setUploadStatus("done");
     } catch (err) {
       console.error("Upload error:", err);
       setUploadStatus("error");
-      // Fallback: use base64 data URL (some models may not accept it but preview works)
     }
-    // Reset input so same file can be re-selected
+    // Reset input so same files can be re-selected
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -821,9 +828,10 @@ export default function PrismApp() {
                         {uploadStatus === "error" && <span style={{ color: "var(--error)", fontSize: 10, fontWeight: 400 }}>✗ Upload failed — try URL</span>}
                       </div>
 
-                      {/* Hidden file input — triggers native picker */}
-                      <input type="file" ref={fileInputRef} accept="image/*" style={{ display: "none" }}
-                        onChange={handleFileSelect} />
+                      {/* Hidden file input — triggers native picker, multiple when multi-image models selected */}
+                      <input type="file" ref={fileInputRef} accept="image/*"
+                        multiple={genType === "i2i" && maxImagesAllowed > 1}
+                        style={{ display: "none" }} onChange={handleFileSelect} />
 
                       {/* Upload + URL buttons */}
                       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -837,8 +845,8 @@ export default function PrismApp() {
                           onMouseOver={e => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--accent-glow)"; }}
                           onMouseOut={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg-input)"; }}>
                           <span style={{ fontSize: 24 }}>📁</span>
-                          <span>Upload from Device</span>
-                          <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Gallery · Photos · Files</span>
+                          <span>{genType === "i2i" && maxImagesAllowed > 1 ? "Upload Images" : "Upload from Device"}</span>
+                          <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{genType === "i2i" && maxImagesAllowed > 1 ? `Select up to ${maxImagesAllowed} images` : "Gallery · Photos · Files"}</span>
                         </button>
                       </div>
 
