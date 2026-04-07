@@ -25,60 +25,9 @@ const css = `
 
 body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fontBody}; }
 
-/* Space background */
-.prism-app { display: flex; height: 100vh; overflow: hidden; position: relative; background:
-  radial-gradient(ellipse at 15% 30%, rgba(120,40,200,0.2) 0%, transparent 45%),
-  radial-gradient(ellipse at 85% 15%, rgba(59,130,246,0.18) 0%, transparent 40%),
-  radial-gradient(ellipse at 50% 85%, rgba(6,182,212,0.12) 0%, transparent 45%),
-  radial-gradient(ellipse at 70% 60%, rgba(168,85,247,0.1) 0%, transparent 35%),
-  radial-gradient(ellipse at 25% 75%, rgba(236,72,153,0.08) 0%, transparent 40%),
-  radial-gradient(ellipse at 90% 80%, rgba(34,211,238,0.06) 0%, transparent 30%),
-  radial-gradient(ellipse at 40% 20%, rgba(99,102,241,0.12) 0%, transparent 35%),
-  radial-gradient(circle at 60% 40%, rgba(139,92,246,0.06) 0%, transparent 25%),
-  #020510; }
+/* Void background */
+.prism-app { display: flex; height: 100vh; overflow: hidden; position: relative; background: url('/void.jpg') center center / cover no-repeat fixed; background-color: #020510; }
 
-/* Star layers */
-.prism-app::before, .prism-app::after { content: ''; position: absolute; inset: 0; pointer-events: none; }
-.prism-app::before { z-index: 0; background-image:
-  radial-gradient(1px 1px at 2% 8%, #fff 50%, transparent 50%), radial-gradient(1px 1px at 5% 22%, rgba(255,255,255,0.6) 50%, transparent 50%),
-  radial-gradient(1.5px 1.5px at 8% 45%, rgba(167,139,250,0.9) 50%, transparent 50%), radial-gradient(1px 1px at 11% 67%, #fff 50%, transparent 50%),
-  radial-gradient(1px 1px at 14% 88%, rgba(255,255,255,0.5) 50%, transparent 50%), radial-gradient(2px 2px at 17% 12%, rgba(196,181,253,0.8) 50%, transparent 50%),
-  radial-gradient(1px 1px at 20% 35%, rgba(255,255,255,0.7) 50%, transparent 50%), radial-gradient(1px 1px at 23% 58%, rgba(255,255,255,0.4) 50%, transparent 50%),
-  radial-gradient(1.5px 1.5px at 26% 78%, rgba(129,140,248,0.8) 50%, transparent 50%), radial-gradient(1px 1px at 29% 5%, #fff 50%, transparent 50%),
-  radial-gradient(1px 1px at 32% 42%, rgba(255,255,255,0.5) 50%, transparent 50%), radial-gradient(2px 2px at 35% 70%, rgba(167,139,250,0.7) 50%, transparent 50%),
-  radial-gradient(1px 1px at 38% 92%, rgba(255,255,255,0.6) 50%, transparent 50%), radial-gradient(1px 1px at 41% 18%, rgba(255,255,255,0.4) 50%, transparent 50%),
-  radial-gradient(1.5px 1.5px at 44% 52%, #fff 50%, transparent 50%), radial-gradient(1px 1px at 47% 30%, rgba(165,180,252,0.7) 50%, transparent 50%),
-  radial-gradient(1px 1px at 50% 75%, rgba(255,255,255,0.5) 50%, transparent 50%), radial-gradient(2px 2px at 53% 10%, rgba(196,181,253,0.9) 50%, transparent 50%),
-  radial-gradient(1px 1px at 56% 48%, rgba(255,255,255,0.6) 50%, transparent 50%), radial-gradient(1px 1px at 59% 85%, #fff 50%, transparent 50%),
-  radial-gradient(1.5px 1.5px at 62% 25%, rgba(129,140,248,0.8) 50%, transparent 50%), radial-gradient(1px 1px at 65% 62%, rgba(255,255,255,0.4) 50%, transparent 50%),
-  radial-gradient(1px 1px at 68% 3%, rgba(255,255,255,0.7) 50%, transparent 50%), radial-gradient(2px 2px at 71% 38%, rgba(167,139,250,0.7) 50%, transparent 50%),
-  radial-gradient(1px 1px at 74% 55%, rgba(255,255,255,0.5) 50%, transparent 50%), radial-gradient(1px 1px at 77% 80%, rgba(255,255,255,0.6) 50%, transparent 50%),
-  radial-gradient(1.5px 1.5px at 80% 15%, #fff 50%, transparent 50%), radial-gradient(1px 1px at 83% 95%, rgba(165,180,252,0.6) 50%, transparent 50%),
-  radial-gradient(1px 1px at 86% 40%, rgba(255,255,255,0.4) 50%, transparent 50%), radial-gradient(2px 2px at 89% 65%, rgba(196,181,253,0.8) 50%, transparent 50%),
-  radial-gradient(1px 1px at 92% 22%, rgba(255,255,255,0.7) 50%, transparent 50%), radial-gradient(1px 1px at 95% 50%, #fff 50%, transparent 50%),
-  radial-gradient(1.5px 1.5px at 98% 78%, rgba(129,140,248,0.7) 50%, transparent 50%), radial-gradient(1px 1px at 3% 55%, rgba(255,255,255,0.3) 50%, transparent 50%),
-  radial-gradient(1px 1px at 7% 33%, rgba(255,255,255,0.5) 50%, transparent 50%), radial-gradient(1px 1px at 13% 77%, rgba(255,255,255,0.4) 50%, transparent 50%),
-  radial-gradient(1.5px 1.5px at 18% 50%, rgba(167,139,250,0.6) 50%, transparent 50%), radial-gradient(1px 1px at 24% 15%, rgba(255,255,255,0.7) 50%, transparent 50%),
-  radial-gradient(1px 1px at 31% 60%, rgba(255,255,255,0.3) 50%, transparent 50%), radial-gradient(1px 1px at 37% 28%, rgba(255,255,255,0.5) 50%, transparent 50%),
-  radial-gradient(2px 2px at 43% 82%, rgba(165,180,252,0.7) 50%, transparent 50%), radial-gradient(1px 1px at 48% 45%, rgba(255,255,255,0.4) 50%, transparent 50%),
-  radial-gradient(1px 1px at 54% 68%, rgba(255,255,255,0.6) 50%, transparent 50%), radial-gradient(1.5px 1.5px at 61% 7%, rgba(196,181,253,0.8) 50%, transparent 50%),
-  radial-gradient(1px 1px at 67% 90%, rgba(255,255,255,0.5) 50%, transparent 50%), radial-gradient(1px 1px at 73% 20%, rgba(255,255,255,0.3) 50%, transparent 50%),
-  radial-gradient(1px 1px at 79% 48%, rgba(255,255,255,0.6) 50%, transparent 50%), radial-gradient(2px 2px at 84% 72%, rgba(129,140,248,0.7) 50%, transparent 50%),
-  radial-gradient(1px 1px at 91% 35%, rgba(255,255,255,0.4) 50%, transparent 50%), radial-gradient(1px 1px at 97% 60%, rgba(255,255,255,0.5) 50%, transparent 50%);
-  animation: starTwinkle 8s ease-in-out infinite alternate; }
-
-/* Nebula / galaxy overlay + shooting star */
-.prism-app::after { z-index: 0;
-  background:
-    radial-gradient(ellipse 300px 200px at 75% 25%, rgba(139,92,246,0.12) 0%, transparent 70%),
-    radial-gradient(ellipse 250px 150px at 20% 70%, rgba(236,72,153,0.08) 0%, transparent 70%),
-    radial-gradient(ellipse 400px 100px at 50% 50%, rgba(99,102,241,0.05) 0%, transparent 70%),
-    radial-gradient(circle 3px at 82% 18%, rgba(255,255,255,0.9) 0%, rgba(165,180,252,0.4) 40%, transparent 70%),
-    radial-gradient(circle 2px at 15% 35%, rgba(255,200,150,0.8) 0%, rgba(251,146,60,0.3) 50%, transparent 70%),
-    radial-gradient(circle 4px at 55% 12%, rgba(56,189,248,0.5) 0%, rgba(56,189,248,0.1) 60%, transparent 70%);
-  animation: nebulaShift 20s ease-in-out infinite alternate; }
-@keyframes starTwinkle { 0% { opacity: 0.6; } 33% { opacity: 1; } 66% { opacity: 0.8; } 100% { opacity: 0.95; } }
-@keyframes nebulaShift { 0% { opacity: 0.8; transform: scale(1); } 50% { opacity: 1; transform: scale(1.02); } 100% { opacity: 0.9; transform: scale(0.99); } }
 .prism-app > * { position: relative; z-index: 1; }
 
 .sidebar { width: 56px; background: rgba(5,8,22,0.12); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 4px; flex-shrink: 0; }
