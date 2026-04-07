@@ -194,9 +194,9 @@ export const MODELS = {
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true, optional: { numInferenceSteps: { paramName: "num_inference_steps", type: "number", default: 28, min: 1, max: 50 }, guidanceScale: { paramName: "guidance_scale", type: "number", default: 3.5, min: 0, max: 20 } } } },
     { id: "wavespeed-ai/flux-schnell", name: "Flux Schnell", provider: "WaveSpeed", price: 0.01, hot: true,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true } },
-    { id: "wavespeed-ai/flux-2-klein-4b-text-to-image-lora", name: "FLUX 2 Klein 4B", provider: "BFL", price: 0.01,
+    { id: "wavespeed-ai/flux-2-klein-4b/text-to-image-lora", name: "FLUX 2 Klein 4B", provider: "BFL", price: 0.01,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true } },
-    { id: "wavespeed-ai/flux-2-klein-9b-text-to-image", name: "FLUX 2 Klein 9B", provider: "BFL", price: 0.02,
+    { id: "wavespeed-ai/flux-2-klein-9b/text-to-image", name: "FLUX 2 Klein 9B", provider: "BFL", price: 0.02,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true } },
 
     // ByteDance Seedream
@@ -254,7 +254,7 @@ export const MODELS = {
       params: { resolution: null, negativePrompt: false, seed: true } },
 
     // Flux Edit
-    { id: "wavespeed-ai/flux-2-pro-edit", name: "FLUX 2 Pro Edit", provider: "BFL", price: 0.04,
+    { id: "wavespeed-ai/flux-2-pro/edit", name: "FLUX 2 Pro Edit", provider: "BFL", price: 0.04,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true, maxImages: 3 } },
     { id: "wavespeed-ai/flux-kontext-pro", name: "FLUX Kontext Pro", provider: "BFL", price: 0.04, hot: true,
       params: { resolution: null, aspectRatio: AR_STANDARD, negativePrompt: false, seed: true, imageParam: "image" } },
