@@ -234,7 +234,7 @@ export const MODELS = {
       params: { resolution: RES_NANO, negativePrompt: true, seed: true, optional: { webSearch: { paramName: "web_search", type: "boolean", default: false } } } },
     { id: "google/nano-banana-pro/edit", name: "Nano Banana Pro Edit", provider: "Google", price: 0.14, hot: true,
       params: { resolution: RES_NANO, negativePrompt: true, seed: true } },
-    { id: "google/google-gemini-2.5-flash-image-edit", name: "Gemini 2.5 Flash Edit", provider: "Google", price: 0.05,
+    { id: "google/gemini-2.5-flash-image/edit", name: "Gemini 2.5 Flash Edit", provider: "Google", price: 0.05,
       params: { resolution: null, negativePrompt: false, seed: false, imageParam: "image", outputFormat: false } },
 
     // ByteDance
