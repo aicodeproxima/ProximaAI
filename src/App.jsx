@@ -441,7 +441,7 @@ export default function PrismApp() {
         provider: model?.provider || "Unknown", price: model?.price || 0,
         status: "pending", startTime: Date.now(), endTime: null,
         wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
-        prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl,
+        genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl,
         perModelResolution: perModelRes
       };
     });
@@ -589,18 +589,21 @@ export default function PrismApp() {
     };
     setTasks(prev => [newTask, ...prev]);
 
-    // Fire the regenerated task
+    // Fire the regenerated task — use task's own genType, not current UI tab
     (async () => {
       try {
-        const modelConfig = models.find(m => m.id === newTask.modelId);
+        const taskGenType = newTask.genType || genType;
+        const taskModels = MODELS[taskGenType] || [];
+        const modelConfig = taskModels.find(m => m.id === newTask.modelId);
         const userSettings = {
           prompt: newTask.prompt, negPrompt: newTask.negPrompt,
           resolution: newTask.resolution, duration: newTask.duration,
           seed: newTask.seed, aspectRatio: newTask.aspectRatio,
           sourceImageUrl: newTask.sourceImageUrl,
+          perModelResolution: newTask.perModelResolution || {},
         };
         const payload = modelConfig?.params
-          ? buildPayload(modelConfig, userSettings, genType)
+          ? buildPayload(modelConfig, userSettings, taskGenType)
           : { prompt: newTask.prompt };
 
         const submitRes = await submitTask(apiKey, newTask.modelId, payload);
@@ -619,8 +622,9 @@ export default function PrismApp() {
 
         setTasks(prev => prev.map(t => t.id === newTask.id ? { ...t, status: "processing", taskId } : t));
 
-        const pollInterval = (genType === "image" || genType === "i2i") ? 3000 : 15000;
-        const maxTimeout = (genType === "image" || genType === "i2i") ? 300000 : Infinity;
+        const isImageType = taskGenType === "image" || taskGenType === "i2i";
+        const pollInterval = isImageType ? 3000 : 15000;
+        const maxTimeout = isImageType ? 300000 : Infinity;
         const startPoll = Date.now();
 
         const poll = async () => {
@@ -985,7 +989,8 @@ export default function PrismApp() {
                           )}
 
                           {task.status === "completed" && task.outputs?.map((url, i) => {
-                            const isVideo = url.includes(".mp4") || url.includes("video") || genType === "t2v" || genType === "i2v";
+                            const tType = task.genType || genType;
+                            const isVideo = url.includes(".mp4") || url.includes("video") || tType === "t2v" || tType === "i2v" || tType === "avatar";
                             return isVideo ? (
                               <video key={i} className="result-video" src={url} controls autoPlay muted loop playsInline />
                             ) : (
@@ -1005,7 +1010,8 @@ export default function PrismApp() {
                                     if (!url) return;
                                     const resp = await fetch(url);
                                     const blob = await resp.blob();
-                                    const ext = (genType === "t2v" || genType === "i2v" || genType === "avatar") ? "mp4" : "png";
+                                    const tgt = task.genType || genType;
+                                    const ext = (tgt === "t2v" || tgt === "i2v" || tgt === "avatar" || blob.type.startsWith("video")) ? "mp4" : "png";
                                     const fname = `${task.modelName.replace(/\s+/g, "_")}_${Date.now()}.${ext}`;
                                     const a = document.createElement("a");
                                     a.href = URL.createObjectURL(blob);
@@ -1053,9 +1059,10 @@ export default function PrismApp() {
                         <div style={{ fontSize: 12, fontWeight: 600 }}>{task.modelName}</div>
                         <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "4px 0" }}>{task.prompt?.slice(0, 60)}...</div>
                         {task.outputs?.map((url, i) => {
-                          const isVideo = url.includes(".mp4") || url.includes("video");
+                          const gType = task.genType || "";
+                          const isVideo = url.includes(".mp4") || url.includes("video") || gType === "t2v" || gType === "i2v" || gType === "avatar";
                           return isVideo
-                            ? <video key={i} className="result-video" src={url} controls muted playsInline />
+                            ? <video key={i} className="result-video" src={url} controls muted playsInline onClick={() => setLightbox(url)} />
                             : <img key={i} className="result-img" src={url} alt="" onClick={() => setLightbox(url)} />;
                         })}
                         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "var(--text-muted)", fontFamily: font }}>
@@ -1184,7 +1191,9 @@ export default function PrismApp() {
         {/* Lightbox */}
         {lightbox && (
           <div className="lightbox" onClick={() => setLightbox(null)}>
-            <img src={lightbox} alt="Full resolution" />
+            {lightbox.includes(".mp4") || lightbox.includes("video")
+              ? <video src={lightbox} controls autoPlay muted style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 10 }} onClick={e => e.stopPropagation()} />
+              : <img src={lightbox} alt="Full resolution" />}
           </div>
         )}
       </div>
