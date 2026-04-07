@@ -26,7 +26,7 @@ const css = `
 body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fontBody}; }
 
 /* Void background */
-.prism-app { display: flex; height: 100vh; overflow: hidden; position: relative; background: url('/void.jpg') calc(50% + 0.17cm) center / cover no-repeat fixed; background-color: #020510; }
+.prism-app { display: flex; height: 100vh; overflow: hidden; position: relative; background: url('/void.jpg') calc(50% + 0.24cm) center / cover no-repeat fixed; background-color: #020510; }
 
 .prism-app > * { position: relative; z-index: 1; }
 
