@@ -1,6 +1,13 @@
 // Builds a per-model API payload using the model's params config.
 // Each model gets its OWN payload — no universal assumptions.
 
+// Find the closest value in an array of numbers to the target
+function closestValue(arr, target) {
+  return arr.reduce((prev, curr) =>
+    Math.abs(curr - target) < Math.abs(prev - target) ? curr : prev
+  );
+}
+
 export function buildPayload(model, userSettings, genType) {
   const payload = {};
   const p = model.params;
@@ -34,11 +41,13 @@ export function buildPayload(model, userSettings, genType) {
     }
   }
 
-  // Duration — always send for models that define it, falling back to model default
+  // Duration — always send for models that define it.
+  // Use the closest valid duration for this model, not just the default,
+  // so that when multiple models are selected the user's intent is preserved.
   if (p.duration) {
     const dur = parseInt(userSettings.duration) || p.duration.default;
     const validDurs = p.duration.options;
-    payload.duration = validDurs.includes(dur) ? dur : p.duration.default;
+    payload.duration = validDurs.includes(dur) ? dur : closestValue(validDurs, dur);
   }
 
   // Negative prompt — only if model supports it AND user provided one
@@ -51,13 +60,19 @@ export function buildPayload(model, userSettings, genType) {
     payload.seed = parseInt(userSettings.seed);
   }
 
-  // Source image for i2i — some models use `images: [url]` (array), others use `image: url` (string)
-  if (genType === "i2i" && userSettings.sourceImageUrl) {
+  // Source image(s) for i2i — supports multi-image for models with maxImages > 1
+  if (genType === "i2i") {
     const imageParam = p.imageParam || "images"; // default to "images" (array) for backward compat
-    if (imageParam === "image") {
-      payload.image = userSettings.sourceImageUrl;
-    } else {
-      payload.images = [userSettings.sourceImageUrl];
+    // Collect all image URLs — sourceImageUrls (array) takes priority, fall back to single sourceImageUrl
+    const allImages = userSettings.sourceImageUrls?.length > 0
+      ? userSettings.sourceImageUrls.filter(u => u?.trim())
+      : userSettings.sourceImageUrl ? [userSettings.sourceImageUrl] : [];
+    if (allImages.length > 0) {
+      if (imageParam === "image") {
+        payload.image = allImages[0]; // singular models only get first image
+      } else {
+        payload.images = allImages;
+      }
     }
   }
 

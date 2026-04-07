@@ -315,6 +315,7 @@ export default function PrismApp() {
   const [aspectRatio, setAspectRatio] = useState("auto");
   const [perModelRes, setPerModelRes] = useState({});
   const [sourceImageUrl, setSourceImageUrl] = useState("");
+  const [sourceImageUrls, setSourceImageUrls] = useState([]); // multi-image support
   const [sourcePreview, setSourcePreview] = useState("");
   const [uploadStatus, setUploadStatus] = useState(""); // "" | "uploading" | "done" | "error"
   const [testStatus, setTestStatus] = useState(null); // null | "testing" | {ok, msg}
@@ -453,9 +454,16 @@ export default function PrismApp() {
 
   function clearSourceImage() {
     setSourceImageUrl("");
+    setSourceImageUrls([]);
     setSourcePreview("");
     setUploadStatus("");
   }
+
+  // Compute max images allowed for currently selected i2i models
+  const maxImagesAllowed = genType === "i2i" ? Math.max(1, ...selectedModels.map(id => {
+    const m = models.find(x => x.id === id);
+    return m?.params?.maxImages || 1;
+  })) : 1;
 
   // ─── GENERATION ENGINE ───
   async function handleGenerate() {
@@ -478,6 +486,7 @@ export default function PrismApp() {
         status: "pending", startTime: Date.now(), endTime: null,
         wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
         genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl,
+        sourceImageUrls: sourceImageUrls.length > 0 ? sourceImageUrls : (sourceImageUrl ? [sourceImageUrl] : []),
         perModelResolution: perModelRes
       };
     });
@@ -495,10 +504,11 @@ export default function PrismApp() {
             resolution: task.resolution, duration: task.duration,
             seed: task.seed, aspectRatio: task.aspectRatio,
             sourceImageUrl: task.sourceImageUrl,
+            sourceImageUrls: task.sourceImageUrls || [],
             perModelResolution: task.perModelResolution || {},
           };
           const payload = modelConfig?.params
-            ? buildPayload(modelConfig, userSettings, genType)
+            ? buildPayload(modelConfig, userSettings, task.genType || genType)
             : { prompt: task.prompt, resolution: task.resolution };
 
           const submitRes = await submitTask(apiKey, task.modelId, payload);
@@ -861,6 +871,46 @@ export default function PrismApp() {
                           </span>
                         )}
                       </div>
+
+                      {/* Multi-image — only shown for i2i models that support maxImages > 1 */}
+                      {genType === "i2i" && maxImagesAllowed > 1 && uploadStatus === "done" && (
+                        <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6, fontFamily: font }}>
+                            Additional Reference Images ({sourceImageUrls.length}/{maxImagesAllowed} max)
+                          </div>
+                          {/* Thumbnails of additional images */}
+                          {sourceImageUrls.length > 0 && (
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                              {sourceImageUrls.map((url, i) => (
+                                <div key={i} style={{ position: "relative", width: 60, height: 60 }}>
+                                  <img src={url} alt={`Ref ${i+2}`} style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }} />
+                                  <button onClick={() => setSourceImageUrls(prev => prev.filter((_, j) => j !== i))}
+                                    style={{ position: "absolute", top: -4, right: -4, background: "var(--error)", color: "white", border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {sourceImageUrls.length < maxImagesAllowed - 1 && (
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <input type="text" className="prompt-area" style={{ minHeight: "auto", fontSize: 11, padding: 8, flex: 1 }}
+                                placeholder="Paste additional image URL..."
+                                onKeyDown={e => {
+                                  if (e.key === "Enter" && e.target.value.trim()) {
+                                    setSourceImageUrls(prev => [...prev, e.target.value.trim()]);
+                                    e.target.value = "";
+                                  }
+                                }} />
+                              <button onClick={() => {
+                                const input = document.querySelector('[placeholder="Paste additional image URL..."]');
+                                if (input?.value?.trim()) { setSourceImageUrls(prev => [...prev, input.value.trim()]); input.value = ""; }
+                              }} style={{ padding: "8px 12px", background: "var(--accent)", color: "white", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 11, fontFamily: font, whiteSpace: "nowrap" }}>+ Add</button>
+                            </div>
+                          )}
+                          <div style={{ fontSize: 9, color: "var(--text-muted)", marginTop: 4 }}>
+                            Reference images as "Figure 1", "Figure 2" etc. in your prompt
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 

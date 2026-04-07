@@ -231,17 +231,17 @@ export const MODELS = {
   i2i: [
     // Google Nano Banana Edit
     { id: "google/nano-banana-2/edit", name: "Nano Banana 2 Edit", provider: "Google", price: 0.0105, hot: true,
-      params: { resolution: RES_NANO, negativePrompt: true, seed: true, optional: { webSearch: { paramName: "web_search", type: "boolean", default: false } } } },
+      params: { resolution: RES_NANO, negativePrompt: true, seed: true, maxImages: 14, optional: { webSearch: { paramName: "web_search", type: "boolean", default: false } } } },
     { id: "google/nano-banana-pro/edit", name: "Nano Banana Pro Edit", provider: "Google", price: 0.14, hot: true,
-      params: { resolution: RES_NANO, negativePrompt: true, seed: true } },
+      params: { resolution: RES_NANO, negativePrompt: true, seed: true, maxImages: 8 } },
     { id: "google/gemini-2.5-flash-image/edit", name: "Gemini 2.5 Flash Edit", provider: "Google", price: 0.05,
       params: { resolution: null, negativePrompt: false, seed: false, imageParam: "image", outputFormat: false } },
 
     // ByteDance
     { id: "bytedance/seedream-v5.0-lite/edit", name: "Seedream 5.0 Lite Edit", provider: "ByteDance", price: 0.035, hot: true,
-      params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false } },
+      params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false, maxImages: 10 } },
     { id: "bytedance/seedream-v5.0-lite/edit-sequential", name: "Seedream 5.0 Edit Sequential", provider: "ByteDance", price: 0.035,
-      params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false, optional: { maxImages: { paramName: "max_images", type: "number", default: 1, min: 1, max: 15 } } } },
+      params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false, maxImages: 10, optional: { maxOutputImages: { paramName: "max_images", type: "number", default: 1, min: 1, max: 15 } } } },
     { id: "bytedance/seedream-v4.5/edit", name: "Seedream 4.5 Edit", provider: "ByteDance", price: 0.04,
       params: { resolution: RES_SEEDREAM, negativePrompt: true, seed: true } },
     { id: "bytedance/seededit-v3", name: "SeedEdit V3", provider: "ByteDance", price: 0.03,
@@ -255,13 +255,13 @@ export const MODELS = {
 
     // Flux Edit
     { id: "wavespeed-ai/flux-2-pro-edit", name: "FLUX 2 Pro Edit", provider: "BFL", price: 0.04,
-      params: { resolution: RES_FLUX, negativePrompt: false, seed: true } },
+      params: { resolution: RES_FLUX, negativePrompt: false, seed: true, maxImages: 3 } },
     { id: "wavespeed-ai/flux-kontext-pro", name: "FLUX Kontext Pro", provider: "BFL", price: 0.04, hot: true,
       params: { resolution: null, aspectRatio: AR_STANDARD, negativePrompt: false, seed: true, imageParam: "image" } },
 
     // WaveSpeed
     { id: "wavespeed-ai/qwen-image-2.0-pro/edit", name: "Qwen Image 2.0 Pro Edit", provider: "Alibaba", price: 0.07, hot: true,
-      params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
+      params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true, maxImages: 6 } },
     { id: "wavespeed-ai/qwen-image-edit", name: "Qwen Image Edit", provider: "Alibaba", price: 0.03,
       params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
     { id: "wavespeed-ai/phota/edit", name: "Phota Edit", provider: "WaveSpeed", price: 0.03,
@@ -280,8 +280,14 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_WAN, duration: { options: [5,10], default: 5 }, negativePrompt: true, seed: true } },
 
     // Google Veo
-    { id: "google/google-veo3-text-to-video", name: "Veo 3", provider: "Google", price: 2.00, hot: true, flagship: true,
+    { id: "google/veo3", name: "Veo 3", provider: "Google", price: 3.20, hot: true, flagship: true,
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "google/veo3-fast", name: "Veo 3 Fast", provider: "Google", price: 1.20, hot: true,
+      params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "google/veo3.1/text-to-video", name: "Veo 3.1", provider: "Google", price: 3.20, flagship: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "google/veo3.1-fast/text-to-video", name: "Veo 3.1 Fast", provider: "Google", price: 1.20, hot: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
     { id: "google/veo3.1-lite/text-to-video", name: "Veo 3.1 Lite", provider: "Google", price: 0.50,
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, duration: { options: [5,8], default: 5 }, negativePrompt: false, seed: true } },
 
@@ -326,8 +332,18 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_WAN, duration: { options: [5], default: 5 }, negativePrompt: false, seed: true } },
 
     // Google Veo
+    { id: "google/veo3/image-to-video", name: "Veo 3 I2V", provider: "Google", price: 3.20, flagship: true,
+      params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "google/veo3-fast/image-to-video", name: "Veo 3 Fast I2V", provider: "Google", price: 1.20, hot: true,
+      params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "google/veo3.1/image-to-video", name: "Veo 3.1 I2V", provider: "Google", price: 3.20,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "google/veo3.1-fast/image-to-video", name: "Veo 3.1 Fast I2V", provider: "Google", price: 1.20, hot: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
     { id: "google/veo3.1-lite/image-to-video", name: "Veo 3.1 Lite I2V", provider: "Google", price: 0.50,
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, duration: { options: [5,8], default: 5 }, negativePrompt: false, seed: true } },
+    { id: "google/veo3.1/reference-to-video", name: "Veo 3.1 Reference", provider: "Google", price: 3.20,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: false, seed: true } },
 
     // Kling
     { id: "kwaivgi/kwaivgi-kling-v3.0-pro-image-to-video", name: "Kling 3.0 I2V", provider: "Kwaivgi", price: 0.80, hot: true,
