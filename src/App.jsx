@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useReducer } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB } from "./lib/storage.js";
 import { initSupabase, syncHistoryEntry } from "./lib/supabase.js";
 
 // ─── STYLES ───
@@ -342,6 +342,8 @@ export default function PrismApp() {
       if (key && !cancelled) setApiKey(key);
       const logData = await getHistory(500);
       if (logData?.length && !cancelled) setLogs(logData);
+      const savedTasks = await getCompletedTasks(200);
+      if (savedTasks?.length && !cancelled) setTasks(savedTasks);
       const savedImgRes = await getSetting("defaultImageRes");
       if (savedImgRes && !cancelled) setDefaultImageRes(savedImgRes);
       const savedVidDur = await getSetting("defaultVideoDur");
@@ -374,6 +376,18 @@ export default function PrismApp() {
   useEffect(() => {
     const active = tasks.filter(t => t.status === "pending" || t.status === "processing").length;
     setActiveCount(active);
+  }, [tasks]);
+
+  // Persist completed/failed tasks to IndexedDB
+  const savedTaskIds = useRef(new Set());
+  useEffect(() => {
+    const toSave = tasks.filter(t =>
+      (t.status === "completed" || t.status === "failed") && !savedTaskIds.current.has(t.id)
+    );
+    for (const t of toSave) {
+      savedTaskIds.current.add(t.id);
+      saveTask(t);
+    }
   }, [tasks]);
 
   // Cleanup polling timeouts on unmount
@@ -1226,7 +1240,7 @@ export default function PrismApp() {
                     <div className="setting-label">Data</div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all generation logs?")) { setLogs([]); clearHistory(); } }}>Clear Logs ({logs.length})</button>
-                      <button className="api-test-btn" onClick={() => { setTasks([]); }}>Clear Active Tasks</button>
+                      <button className="api-test-btn" onClick={() => { if (confirm("Clear all generation outputs?")) { setTasks([]); clearTasksDB(); savedTaskIds.current.clear(); } }}>Clear All Outputs</button>
                     </div>
                   </div>
                 )}

@@ -2,13 +2,14 @@
 // Zero dependencies. Falls back to localStorage if IndexedDB unavailable.
 
 const DB_NAME = "prism";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORES = {
   settings: { keyPath: "key" },
   history: { keyPath: "id", autoIncrement: false },
   favorites: { keyPath: "id", autoIncrement: false },
   presets: { keyPath: "modelId" },
+  tasks: { keyPath: "id", autoIncrement: false },
 };
 
 let dbPromise = null;
@@ -145,6 +146,43 @@ export async function getPreset(modelId) {
     const result = await wrapRequest(store.get(modelId));
     return result?.params ?? null;
   } catch { return null; }
+}
+
+// ─── Task Persistence ───
+
+export async function saveTask(task) {
+  try {
+    const store = await tx("tasks", "readwrite");
+    await wrapRequest(store.put(task));
+  } catch {}
+}
+
+export async function saveTasks(taskList) {
+  try {
+    const db = await openDB();
+    const txn = db.transaction("tasks", "readwrite");
+    const store = txn.objectStore("tasks");
+    for (const task of taskList) {
+      try { store.put(task); } catch {}
+    }
+    await new Promise((res, rej) => { txn.oncomplete = res; txn.onerror = () => rej(txn.error); });
+  } catch {}
+}
+
+export async function getCompletedTasks(limit = 200) {
+  try {
+    const store = await tx("tasks");
+    const all = await wrapRequest(store.getAll());
+    all.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+    return limit ? all.slice(0, limit) : all;
+  } catch { return []; }
+}
+
+export async function clearTasks() {
+  try {
+    const store = await tx("tasks", "readwrite");
+    await wrapRequest(store.clear());
+  } catch {}
 }
 
 // ─── Migration from localStorage ───
