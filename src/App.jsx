@@ -1,102 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useReducer } from "react";
-
-// ─── MODEL REGISTRY ───
-const MODELS = {
-  image: [
-    { id: "google/nano-banana-2/text-to-image", name: "Nano Banana 2", provider: "Google", price: 0.0105, hot: true, resolutions: ["1k","2k","4k"], maxRefs: 14, webSearch: true, imgSearch: true },
-    { id: "google/nano-banana-2/text-to-image-fast", name: "Nano Banana 2 Fast", provider: "Google", price: 0.045, hot: false, resolutions: ["2k","4k"], maxRefs: 14, webSearch: true, imgSearch: true },
-    { id: "google/nano-banana-pro/text-to-image", name: "Nano Banana Pro", provider: "Google", price: 0.14, hot: true, resolutions: ["1k","2k","4k"], maxRefs: 8, webSearch: true, imgSearch: true },
-    { id: "google/nano-banana/text-to-image", name: "Nano Banana", provider: "Google", price: 0.01, resolutions: ["1k","2k"], maxRefs: 4 },
-    { id: "bytedance/seedream-v5.0-lite", name: "Seedream 5.0 Lite", provider: "ByteDance", price: 0.04, hot: true, resolutions: ["1k","2k","4k"] },
-    { id: "bytedance/seedream-v4.5", name: "Seedream 4.5", provider: "ByteDance", price: 0.04, resolutions: ["1k","2k","4k"] },
-    { id: "openai/gpt-image-1.5/text-to-image", name: "GPT Image 1.5", provider: "OpenAI", price: 0.08, resolutions: ["1k","2k"] },
-    { id: "wavespeed-ai/qwen-image-2.0-text-to-image", name: "Qwen Image 2.0", provider: "Alibaba", price: 0.03, resolutions: ["1k","2k"] },
-    { id: "wavespeed-ai/qwen-image-text-to-image", name: "Qwen Image", provider: "Alibaba", price: 0.02, resolutions: ["1k"] },
-    { id: "alibaba/wan-2.6/text-to-image", name: "WAN 2.6", provider: "Alibaba", price: 0.02, resolutions: ["1k","2k"] },
-    { id: "wavespeed-ai/flux-2-klein-4b-text-to-image", name: "FLUX 2 Klein", provider: "BFL", price: 0.01, resolutions: ["1k","2k"] },
-    { id: "wavespeed-ai/z-image-turbo", name: "Z-Image Turbo", provider: "WaveSpeed", price: 0.005, resolutions: ["1k"], syncMode: true },
-  ],
-  t2v: [
-    { id: "alibaba/wan-2.7/text-to-video", name: "WAN 2.7", provider: "Alibaba", price: 0.50, hot: true, resolutions: ["720p","1080p"], durations: [2,3,4,5,6,7,8,9,10,15], hasNeg: true, hasExpansion: true, hasAudio: true },
-    { id: "alibaba/wan-2.6/text-to-video", name: "WAN 2.6", provider: "Alibaba", price: 0.50, resolutions: ["720p","1080p"], durations: [5] },
-    { id: "alibaba/wan-2.5/text-to-video", name: "WAN 2.5", provider: "Alibaba", price: 0.30, resolutions: ["720p"], durations: [5] },
-    { id: "bytedance/seedance-2.0/text-to-video", name: "Seedance 2.0", provider: "ByteDance", price: 0.90, hot: true, resolutions: ["480p"], durations: [5,10,15], hasAudio: true, maxRefs: 4, flagship: true },
-    { id: "bytedance/seedance-2.0-fast/text-to-video", name: "Seedance 2.0 Fast", provider: "ByteDance", price: 0.60, resolutions: ["480p"], durations: [5,10,15], hasAudio: true, maxRefs: 4 },
-    { id: "bytedance/seedance-v1.5-pro/text-to-video", name: "Seedance 1.5 Pro", provider: "ByteDance", price: 0.40, resolutions: ["480p","720p","1080p"], durations: [4,5,6,8,10,12], hasAudio: true },
-    { id: "kwaivgi/kling-v3.0-pro/text-to-video", name: "Kling 3.0", provider: "Kwaivgi", price: 0.80, hot: true, resolutions: ["720p","1080p"], durations: [5,10] },
-    { id: "kwaivgi/kling-video-o3-pro/text-to-video", name: "Kling O3", provider: "Kwaivgi", price: 0.80, hot: true, resolutions: ["720p","1080p"], durations: [5,10] },
-    { id: "kwaivgi/kling-v2.6-pro/text-to-video", name: "Kling 2.6", provider: "Kwaivgi", price: 0.60, resolutions: ["720p","1080p"], durations: [5,10] },
-    { id: "openai/sora-2/text-to-video", name: "Sora 2", provider: "OpenAI", price: 0.50, resolutions: ["720p","1080p"], durations: [5,10,15,20] },
-    { id: "google/veo3.1/text-to-video", name: "Veo 3.1", provider: "Google", price: 2.0, resolutions: ["720p","1080p"], durations: [5,8] },
-    { id: "vidu/q3/text-to-video", name: "Vidu Q3", provider: "Vidu", price: 0.30, resolutions: ["720p"], durations: [4,8] },
-    { id: "minimax/hailuo-2.3/t2v-pro", name: "Hailuo 2.3", provider: "Minimax", price: 0.50, resolutions: ["720p","1080p"], durations: [5] },
-    { id: "x-ai/grok-imagine-video/text-to-video", name: "Grok Imagine", provider: "X AI", price: 0.40, resolutions: ["720p"], durations: [5,10] },
-  ],
-  i2v: [
-    { id: "alibaba/wan-2.7/image-to-video", name: "WAN 2.7 I2V", provider: "Alibaba", price: 0.50, hot: true, hasEndFrame: true, hasAudio: true },
-    { id: "alibaba/wan-2.6/image-to-video", name: "WAN 2.6 I2V", provider: "Alibaba", price: 0.50 },
-    { id: "alibaba/wan-2.6/image-to-video-spicy", name: "WAN 2.6 Spicy I2V", provider: "Alibaba", price: 0.50 },
-    { id: "bytedance/seedance-2.0/image-to-video", name: "Seedance 2.0 I2V", provider: "ByteDance", price: 1.20, hot: true, flagship: true, maxRefs: 4, hasAudio: true },
-    { id: "bytedance/seedance-2.0-fast/image-to-video", name: "Seedance 2.0 Fast I2V", provider: "ByteDance", price: 0.80, maxRefs: 4 },
-    { id: "bytedance/seedance-v1.5-pro/image-to-video", name: "Seedance 1.5 Pro I2V", provider: "ByteDance", price: 0.40 },
-    { id: "kwaivgi/kling-v3.0-pro/image-to-video", name: "Kling 3.0 I2V", provider: "Kwaivgi", price: 0.80, hot: true },
-    { id: "kwaivgi/kling-video-o3-pro/image-to-video", name: "Kling O3 I2V", provider: "Kwaivgi", price: 0.80, hot: true },
-    { id: "openai/sora-2/image-to-video", name: "Sora 2 I2V", provider: "OpenAI", price: 0.50 },
-    { id: "google/veo3.1/image-to-video", name: "Veo 3.1 I2V", provider: "Google", price: 2.0 },
-    { id: "vidu/q3/image-to-video", name: "Vidu Q3 I2V", provider: "Vidu", price: 0.30 },
-    { id: "minimax/hailuo-2.3/i2v-pro", name: "Hailuo 2.3 I2V", provider: "Minimax", price: 0.50 },
-  ],
-  avatar: [
-    { id: "wavespeed-ai/wan-2.2-animate", name: "WAN 2.2 Animate", provider: "WaveSpeed", price: 0.20, requiresVideo: true },
-    { id: "wavespeed-ai/infinitetalk", name: "InfiniteTalk", provider: "WaveSpeed", price: 0.15, requiresAudio: true },
-    { id: "kwaivgi/kling-v3.0-pro/motion-control", name: "Kling 3.0 Motion", provider: "Kwaivgi", price: 0.34, hot: true },
-    { id: "kwaivgi/kling-v2.6-pro/motion-control", name: "Kling 2.6 Motion", provider: "Kwaivgi", price: 0.34 },
-    { id: "wavespeed-ai/steady-dancer", name: "SteadyDancer", provider: "WaveSpeed", price: 0.20 },
-    { id: "wavespeed-ai/image-face-swap", name: "Face Swapper", provider: "WaveSpeed", price: 0.05 },
-  ],
-  i2i: [
-    { id: "google/nano-banana-2/edit", name: "Nano Banana 2 Edit", provider: "Google", price: 0.0105, hot: true, resolutions: ["1k","2k","4k"], maxRefs: 14, webSearch: true, imgSearch: true },
-    { id: "google/nano-banana-2/edit-fast", name: "Nano Banana 2 Edit Fast", provider: "Google", price: 0.045, resolutions: ["2k","4k"], maxRefs: 14, webSearch: true },
-    { id: "google/nano-banana-pro/edit", name: "Nano Banana Pro Edit", provider: "Google", price: 0.14, hot: true, resolutions: ["1k","2k","4k"], maxRefs: 8 },
-    { id: "google/nano-banana-pro/edit-ultra", name: "Nano Banana Pro Edit Ultra", provider: "Google", price: 0.28, resolutions: ["2k","4k"], maxRefs: 8 },
-    { id: "google/nano-banana/edit", name: "Nano Banana Edit", provider: "Google", price: 0.01, resolutions: ["1k","2k"] },
-    { id: "bytedance/seedream-v5.0-lite/edit", name: "Seedream 5.0 Lite Edit", provider: "ByteDance", price: 0.04, hot: true, resolutions: ["1k","2k","4k"] },
-    { id: "bytedance/seedream-v4.5/edit", name: "Seedream 4.5 Edit", provider: "ByteDance", price: 0.04, resolutions: ["2k","4k"], maxRefs: 10 },
-    { id: "bytedance/seededit-v3", name: "SeedEdit V3", provider: "ByteDance", price: 0.03, resolutions: ["1k","2k"] },
-    { id: "alibaba/wan-2.7/image-edit", name: "WAN 2.7 Edit", provider: "Alibaba", price: 0.03, hot: true, maxRefs: 9 },
-    { id: "alibaba/wan-2.7/image-edit-pro", name: "WAN 2.7 Edit Pro", provider: "Alibaba", price: 0.075, maxRefs: 9 },
-    { id: "alibaba/wan-2.6/image-edit", name: "WAN 2.6 Edit", provider: "Alibaba", price: 0.02 },
-    { id: "alibaba/wan-2.5/image-edit", name: "WAN 2.5 Edit", provider: "Alibaba", price: 0.02 },
-    { id: "wavespeed-ai/qwen-image-2.0/edit", name: "Qwen Image 2.0 Edit", provider: "Alibaba", price: 0.03 },
-    { id: "wavespeed-ai/qwen-image-2.0-pro/edit", name: "Qwen Image 2.0 Pro Edit", provider: "Alibaba", price: 0.05 },
-    { id: "openai/gpt-image-1.5/edit", name: "GPT Image 1.5 Edit", provider: "OpenAI", price: 0.08, resolutions: ["1k","2k"] },
-    { id: "wavespeed-ai/flux-2-max/edit", name: "FLUX 2 Max Edit", provider: "BFL", price: 0.05 },
-    { id: "wavespeed-ai/flux-2-pro/edit", name: "FLUX 2 Pro Edit", provider: "BFL", price: 0.04 },
-    { id: "wavespeed-ai/flux-2-dev/edit", name: "FLUX 2 Dev Edit", provider: "BFL", price: 0.02 },
-    { id: "wavespeed-ai/flux-2-flash/edit", name: "FLUX 2 Flash Edit", provider: "BFL", price: 0.01, syncMode: true },
-    { id: "wavespeed-ai/flux-kontext-pro", name: "FLUX Kontext Pro", provider: "BFL", price: 0.04, hot: true },
-    { id: "wavespeed-ai/flux-kontext-max", name: "FLUX Kontext Max", provider: "BFL", price: 0.08 },
-    { id: "kwaivgi/kling-image-o3/edit", name: "Kling Image O3 Edit", provider: "Kwaivgi", price: 0.04, hot: true },
-    { id: "x-ai/grok-imagine-image/edit", name: "Grok Imagine Edit", provider: "X AI", price: 0.03 },
-    { id: "wavespeed-ai/firered-image-v1.1-edit", name: "FireRed Edit", provider: "WaveSpeed", price: 0.02 },
-    { id: "wavespeed-ai/step1x-edit", name: "Step1X Edit", provider: "WaveSpeed", price: 0.02 },
-  ]
-};
-
-const TYPE_LABELS = { image: "Image", i2i: "Image Edit", t2v: "Text → Video", i2v: "Image → Video", avatar: "Avatar" };
-const TYPE_ICONS = { image: "🖼️", i2i: "✏️", t2v: "🎬", i2v: "📸→🎬", avatar: "🧑‍🎤" };
-const PROVIDER_COLORS = { Google: "#4285f4", ByteDance: "#fe2c55", OpenAI: "#10a37f", Alibaba: "#ff6a00", Kwaivgi: "#7c3aed", WaveSpeed: "#06b6d4", Vidu: "#ec4899", Minimax: "#f59e0b", "X AI": "#ffffff", BFL: "#a855f7" };
-
-// In the Vite version, Vite's dev server proxies /wavespeed/* to api.wavespeed.ai
-// server-side, so there are no CORS issues and no third-party proxy is needed.
-// In production builds, you'd need either a real backend proxy, a desktop wrapper
-// (Tauri/Electron), or to keep using Vite's preview server.
-const API_BASE = "/wavespeed/api/v3";
-
-async function proxiedFetch(url, options = {}) {
-  const res = await fetch(url, options);
-  return { res, proxyIndex: 0 };
-}
+import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
+import { buildPayload } from "./lib/payloadBuilder.js";
+import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage } from "./lib/storage.js";
+import { initSupabase, syncHistoryEntry } from "./lib/supabase.js";
 
 // ─── STYLES ───
 const font = `'JetBrains Mono', 'Fira Code', monospace`;
@@ -393,55 +300,6 @@ function timeAgo(ts) {
 }
 
 // ─── API SERVICE ───
-async function submitTask(apiKey, modelSlug, payload) {
-  const { res } = await proxiedFetch(`${API_BASE}/${modelSlug}`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw { code: res.status, message: err.message || res.statusText };
-  }
-  return res.json();
-}
-
-async function pollResult(apiKey, pollUrl) {
-  // The WaveSpeed API returns absolute URLs like https://api.wavespeed.ai/api/v3/predictions/...
-  // We rewrite them to go through Vite's local proxy to avoid CORS.
-  let target = pollUrl;
-  if (pollUrl.startsWith("http")) {
-    target = pollUrl.replace(/^https?:\/\/api\.wavespeed\.ai/, "/wavespeed");
-  } else if (!pollUrl.startsWith("/wavespeed")) {
-    target = `${API_BASE}${pollUrl}`;
-  }
-  const { res } = await proxiedFetch(target, {
-    headers: { "Authorization": `Bearer ${apiKey}` }
-  });
-  if (!res.ok) throw { code: res.status, message: res.statusText };
-  return res.json();
-}
-
-async function checkBalance(apiKey) {
-  try {
-    const { res, proxyIndex } = await proxiedFetch(`${API_BASE}/balance`, {
-      headers: { "Authorization": `Bearer ${apiKey}` }
-    });
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      return { error: `HTTP ${res.status}${txt ? ": " + txt.slice(0, 150) : ""}`, balance: null, proxyIndex };
-    }
-    const data = await res.json();
-    const balance = data?.data?.balance ?? data?.data?.credits ?? data?.balance ?? null;
-    if (balance === null) {
-      return { error: `Got response but no balance field. Raw: ${JSON.stringify(data).slice(0, 150)}`, balance: null, proxyIndex };
-    }
-    return { error: null, balance, proxyIndex };
-  } catch (e) {
-    return { error: e.message || "All CORS proxies failed", balance: null };
-  }
-}
-
 // ─── MAIN APP ───
 export default function PrismApp() {
   const [page, setPage] = useState("cockpit");
@@ -455,6 +313,7 @@ export default function PrismApp() {
   const [duration, setDuration] = useState(5);
   const [seed, setSeed] = useState("-1");
   const [aspectRatio, setAspectRatio] = useState("auto");
+  const [perModelRes, setPerModelRes] = useState({});
   const [sourceImageUrl, setSourceImageUrl] = useState("");
   const [sourcePreview, setSourcePreview] = useState("");
   const [uploadStatus, setUploadStatus] = useState(""); // "" | "uploading" | "done" | "error"
@@ -468,30 +327,34 @@ export default function PrismApp() {
   const pollRefs = useRef({});
   const timerRefs = useRef({});
 
-  // Load state from localStorage
+  // Load state from IndexedDB (with localStorage migration)
   useEffect(() => {
-    try {
-      const key = localStorage.getItem("prism-api-key");
+    (async () => {
+      await migrateFromLocalStorage();
+      await initSupabase();
+      const key = await getSetting("apiKey");
       if (key) setApiKey(key);
-    } catch {}
-    try {
-      const logData = localStorage.getItem("prism-logs");
-      if (logData) setLogs(JSON.parse(logData));
-    } catch {}
+      const logData = await getHistory(500);
+      if (logData?.length) setLogs(logData);
+    })();
   }, []);
 
   // Save API key
   useEffect(() => {
     if (apiKey) {
-      try { localStorage.setItem("prism-api-key", apiKey); } catch {}
+      setSetting("apiKey", apiKey);
       checkBalance(apiKey).then(r => { if (r.balance !== null) setBalance(r.balance); });
     }
   }, [apiKey]);
 
-  // Save logs
+  // Save logs to IndexedDB (and sync to Supabase)
   useEffect(() => {
     if (logs.length > 0) {
-      try { localStorage.setItem("prism-logs", JSON.stringify(logs.slice(0, 200))); } catch {}
+      const latest = logs[0];
+      if (latest?.id) {
+        addHistoryEntry(latest);
+        syncHistoryEntry(latest).catch(() => {});
+      }
     }
   }, [logs]);
 
@@ -578,7 +441,8 @@ export default function PrismApp() {
         provider: model?.provider || "Unknown", price: model?.price || 0,
         status: "pending", startTime: Date.now(), endTime: null,
         wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
-        prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl
+        prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl,
+        perModelResolution: perModelRes
       };
     });
 
@@ -588,30 +452,18 @@ export default function PrismApp() {
     for (const task of newTasks) {
       (async () => {
         try {
-          const payload = { prompt: task.prompt };
-          if (task.negPrompt) payload.negative_prompt = task.negPrompt;
-          if (genType === "image") {
-            payload.resolution = task.resolution;
-            if (task.aspectRatio !== "auto") payload.aspect_ratio = task.aspectRatio;
-            payload.output_format = "png";
-          } else if (genType === "i2i") {
-            // Image editing — send source image(s)
-            payload.images = [task.sourceImageUrl];
-            if (task.resolution) payload.resolution = task.resolution;
-            if (task.aspectRatio !== "auto") payload.aspect_ratio = task.aspectRatio;
-            payload.output_format = "png";
-          } else if (genType === "i2v") {
-            // Image to video — send source image
-            payload.image = task.sourceImageUrl;
-            payload.resolution = task.resolution;
-            payload.duration = parseInt(task.duration);
-            if (task.aspectRatio !== "auto") payload.aspect_ratio = task.aspectRatio;
-          } else {
-            payload.resolution = task.resolution;
-            payload.duration = parseInt(task.duration);
-            if (task.aspectRatio !== "auto") payload.aspect_ratio = task.aspectRatio;
-          }
-          if (task.seed !== "-1") payload.seed = parseInt(task.seed);
+          // Build per-model payload using model's params config
+          const modelConfig = models.find(m => m.id === task.modelId);
+          const userSettings = {
+            prompt: task.prompt, negPrompt: task.negPrompt,
+            resolution: task.resolution, duration: task.duration,
+            seed: task.seed, aspectRatio: task.aspectRatio,
+            sourceImageUrl: task.sourceImageUrl,
+            perModelResolution: task.perModelResolution || {},
+          };
+          const payload = modelConfig?.params
+            ? buildPayload(modelConfig, userSettings, genType)
+            : { prompt: task.prompt, resolution: task.resolution };
 
           const submitRes = await submitTask(apiKey, task.modelId, payload);
           const taskId = submitRes?.data?.id;
@@ -720,6 +572,101 @@ export default function PrismApp() {
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: "failed", error: "Cancelled", endTime: Date.now() } : t));
   }
 
+  // Regenerate — re-submit the same task with a new ID, without disrupting existing results
+  function regenerateTask(originalTask) {
+    if (!apiKey) return;
+    const newTask = {
+      ...originalTask,
+      id: genId(),
+      status: "pending",
+      startTime: Date.now(),
+      endTime: null,
+      wallClockMs: 0,
+      inferenceMs: 0,
+      outputs: [],
+      error: null,
+      seed: Math.floor(Math.random() * 999999).toString(),
+    };
+    setTasks(prev => [newTask, ...prev]);
+
+    // Fire the regenerated task
+    (async () => {
+      try {
+        const modelConfig = models.find(m => m.id === newTask.modelId);
+        const userSettings = {
+          prompt: newTask.prompt, negPrompt: newTask.negPrompt,
+          resolution: newTask.resolution, duration: newTask.duration,
+          seed: newTask.seed, aspectRatio: newTask.aspectRatio,
+          sourceImageUrl: newTask.sourceImageUrl,
+        };
+        const payload = modelConfig?.params
+          ? buildPayload(modelConfig, userSettings, genType)
+          : { prompt: newTask.prompt };
+
+        const submitRes = await submitTask(apiKey, newTask.modelId, payload);
+        const taskId = submitRes?.data?.id;
+        const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
+
+        if (submitRes?.data?.outputs?.length > 0) {
+          const wallClock = Date.now() - newTask.startTime;
+          setTasks(prev => prev.map(t => t.id === newTask.id ? {
+            ...t, status: "completed", outputs: submitRes.data.outputs,
+            endTime: Date.now(), wallClockMs: wallClock,
+            inferenceMs: submitRes.data?.timings?.inference || wallClock
+          } : t));
+          return;
+        }
+
+        setTasks(prev => prev.map(t => t.id === newTask.id ? { ...t, status: "processing", taskId } : t));
+
+        const pollInterval = (genType === "image" || genType === "i2i") ? 3000 : 15000;
+        const maxTimeout = (genType === "image" || genType === "i2i") ? 300000 : Infinity;
+        const startPoll = Date.now();
+
+        const poll = async () => {
+          if (maxTimeout !== Infinity && Date.now() - startPoll > maxTimeout) {
+            setTasks(prev => prev.map(t => t.id === newTask.id ? { ...t, status: "failed", error: "Timeout", endTime: Date.now() } : t));
+            return;
+          }
+          try {
+            const result = await pollResult(apiKey, pollUrl);
+            const data = result?.data || result;
+            if (data.status === "completed" && data.outputs?.length > 0) {
+              const wallClock = Date.now() - newTask.startTime;
+              setTasks(prev => prev.map(t => t.id === newTask.id ? {
+                ...t, status: "completed", outputs: data.outputs,
+                endTime: Date.now(), wallClockMs: wallClock,
+                inferenceMs: data?.timings?.inference || wallClock,
+              } : t));
+            } else if (data.status === "failed") {
+              setTasks(prev => prev.map(t => t.id === newTask.id ? {
+                ...t, status: "failed", error: data.error || "Generation failed", endTime: Date.now()
+              } : t));
+            } else {
+              pollRefs.current[newTask.id] = setTimeout(poll, pollInterval);
+            }
+          } catch (e) {
+            if (e.code === 429) {
+              pollRefs.current[newTask.id] = setTimeout(poll, pollInterval * 2 + Math.random() * 2000);
+            } else {
+              setTasks(prev => prev.map(t => t.id === newTask.id ? {
+                ...t, status: "failed", error: e.message || "Poll error", endTime: Date.now()
+              } : t));
+            }
+          }
+        };
+        pollRefs.current[newTask.id] = setTimeout(poll, pollInterval);
+      } catch (e) {
+        let errMsg = e.message || "Regenerate failed";
+        if (e.code === 401) errMsg = "Invalid API key";
+        if (e.code === 402) errMsg = "Insufficient balance";
+        setTasks(prev => prev.map(t => t.id === newTask.id ? {
+          ...t, status: "failed", error: errMsg, endTime: Date.now()
+        } : t));
+      }
+    })();
+  }
+
   function replayLog(log) {
     setPrompt(log.prompt);
     setNegPrompt(log.negPrompt || "");
@@ -736,10 +683,7 @@ export default function PrismApp() {
   // ─── RENDER ───
   const completedTasks = tasks.filter(t => t.status === "completed");
   const activeTasks = tasks.filter(t => t.status === "pending" || t.status === "processing");
-  const resOptions = (genType === "image" || genType === "i2i") ? ["1k","2k","4k"] : ["480p","720p","1080p"];
-  const arOptions = (genType === "image" || genType === "i2i")
-    ? ["auto","1:1","3:2","2:3","3:4","4:3","4:5","5:4","9:16","16:9","21:9"]
-    : ["16:9","9:16","4:3","3:4"];
+  // resOptions and arOptions are now computed dynamically in the settings panel based on selected models
   const needsImage = genType === "i2i" || genType === "i2v";
 
   return (
@@ -889,34 +833,97 @@ export default function PrismApp() {
                     </div>
                   </div>
 
-                  {/* Settings */}
+                  {/* Dynamic Settings — adapts to selected models */}
                   <div className="card">
-                    <div className="card-title">Settings</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                      <div className="settings-row">
-                        <label>Resolution</label>
-                        <select className="settings-select" value={resolution} onChange={e => setResolution(e.target.value)}>
-                          {resOptions.map(r => <option key={r} value={r}>{r.toUpperCase()}</option>)}
-                        </select>
-                        <label>Aspect</label>
-                        <select className="settings-select" value={aspectRatio} onChange={e => setAspectRatio(e.target.value)}>
-                          {arOptions.map(a => <option key={a} value={a}>{a === "auto" ? "Auto" : a}</option>)}
-                        </select>
+                    <div className="card-title">Settings {selectedModels.length > 0 ? `(${selectedModels.length} model${selectedModels.length > 1 ? "s" : ""})` : ""}</div>
+                    {selectedModels.length === 0 ? (
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>Select models to see parameters</div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {/* Per-model resolution dropdowns */}
+                        {(() => {
+                          const selectedWithRes = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.params?.resolution);
+                          if (selectedWithRes.length === 0) return null;
+                          // Group by param scheme (paramName)
+                          const schemes = {};
+                          selectedWithRes.forEach(m => {
+                            const key = m.params.resolution.paramName;
+                            if (!schemes[key]) schemes[key] = [];
+                            schemes[key].push(m);
+                          });
+                          const schemeKeys = Object.keys(schemes);
+                          // If all share same scheme, show one dropdown
+                          if (schemeKeys.length === 1) {
+                            const allOptions = schemes[schemeKeys[0]][0].params.resolution.options;
+                            return (
+                              <div className="settings-row">
+                                <label>Resolution</label>
+                                <select className="settings-select" value={resolution} onChange={e => setResolution(e.target.value)}>
+                                  {allOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                </select>
+                              </div>
+                            );
+                          }
+                          // Different schemes — show per-model dropdowns
+                          return selectedWithRes.map(m => (
+                            <div className="settings-row" key={m.id}>
+                              <label style={{ fontSize: 10, minWidth: 80 }}>{m.name}</label>
+                              <select className="settings-select" value={perModelRes[m.id] || m.params.resolution.default}
+                                onChange={e => setPerModelRes(prev => ({ ...prev, [m.id]: e.target.value }))}>
+                                {m.params.resolution.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                              </select>
+                            </div>
+                          ));
+                        })()}
+
+                        {/* Aspect ratio — if any selected model supports it */}
+                        {(() => {
+                          const withAR = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.params?.aspectRatio);
+                          if (withAR.length === 0) return null;
+                          // Use intersection of valid options
+                          let arOpts = withAR[0].params.aspectRatio.options;
+                          withAR.slice(1).forEach(m => {
+                            const vals = m.params.aspectRatio.options.map(o => o.value);
+                            arOpts = arOpts.filter(o => vals.includes(o.value));
+                          });
+                          return (
+                            <div className="settings-row">
+                              <label>Aspect</label>
+                              <select className="settings-select" value={aspectRatio} onChange={e => setAspectRatio(e.target.value)}>
+                                <option value="auto">Auto</option>
+                                {arOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                              </select>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Duration — for video models */}
+                        {(genType === "t2v" || genType === "i2v") && (() => {
+                          const withDur = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.params?.duration);
+                          if (withDur.length === 0) return null;
+                          // Intersection of valid durations
+                          let durOpts = withDur[0].params.duration.options;
+                          withDur.slice(1).forEach(m => {
+                            durOpts = durOpts.filter(d => m.params.duration.options.includes(d));
+                          });
+                          if (durOpts.length === 0) durOpts = withDur[0].params.duration.options; // fallback
+                          return (
+                            <div className="settings-row">
+                              <label>Duration</label>
+                              <select className="settings-select" value={duration} onChange={e => setDuration(e.target.value)}>
+                                {durOpts.map(d => <option key={d} value={d}>{d}s</option>)}
+                              </select>
+                            </div>
+                          );
+                        })()}
+
+                        <div className="settings-row">
+                          <label>Seed</label>
+                          <input type="text" className="settings-input" style={{ width: 72 }} value={seed} onChange={e => setSeed(e.target.value)} />
+                          <button onClick={() => setSeed(Math.floor(Math.random() * 999999).toString())} style={{ background: "transparent", border: "1px solid var(--border)", borderRadius: 6, padding: "5px 8px", cursor: "pointer", fontSize: 14 }} title="Random seed">🎲</button>
+                        </div>
                       </div>
-                      <div className="settings-row">
-                        {(genType === "t2v" || genType === "i2v") && (
-                          <>
-                            <label>Duration</label>
-                            <select className="settings-select" value={duration} onChange={e => setDuration(e.target.value)}>
-                              {[2,3,4,5,6,7,8,9,10,12,15,20].map(d => <option key={d} value={d}>{d}s</option>)}
-                            </select>
-                          </>
-                        )}
-                        <label>Seed</label>
-                        <input type="text" className="settings-input" style={{ width: 72 }} value={seed} onChange={e => setSeed(e.target.value)} />
-                        <button onClick={() => setSeed(Math.floor(Math.random() * 999999).toString())} style={{ background: "transparent", border: "1px solid var(--border)", borderRadius: 6, padding: "5px 8px", cursor: "pointer", fontSize: 14 }} title="Random seed">🎲</button>
-                      </div>
-                    </div>
+                    )}
                   </div>
 
                   {/* Cost + Generate */}
@@ -987,39 +994,42 @@ export default function PrismApp() {
                             );
                           })}
 
-                          {task.status === "completed" && (
+                          {(task.status === "completed" || task.status === "failed") && (
                             <div className="result-actions">
-                              <button className="result-action-btn" onClick={async () => {
-                                try {
-                                  const url = task.outputs?.[0];
-                                  if (!url) return;
-                                  const resp = await fetch(url);
-                                  const blob = await resp.blob();
-                                  const ext = (genType === "t2v" || genType === "i2v" || genType === "avatar") ? "mp4" : "png";
-                                  const fname = `${task.modelName.replace(/\s+/g, "_")}_${Date.now()}.${ext}`;
-                                  const a = document.createElement("a");
-                                  a.href = URL.createObjectURL(blob);
-                                  a.download = fname;
-                                  document.body.appendChild(a);
-                                  a.click();
-                                  a.remove();
-                                  URL.revokeObjectURL(a.href);
-                                } catch (e) { window.open(task.outputs?.[0], "_blank"); }
-                              }}>↓ Save</button>
-                              <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(task.outputs?.[0] || ""); }}>📋 URL</button>
-                              <button className="result-action-btn" onClick={() => { setSeed(Math.floor(Math.random()*999999).toString()); }}>🔄 New seed</button>
-                              {(genType === "image" || genType === "i2i") && (
-                                <button className="result-action-btn" style={{ color: "var(--accent)", borderColor: "rgba(59,130,246,0.3)" }}
-                                  onClick={() => { setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done"); setGenType("i2i"); setSelectedModels([]); setPrompt(""); }}>
-                                  ✏️ Edit
-                                </button>
-                              )}
-                              {(genType === "image" || genType === "i2i") && (
-                                <button className="result-action-btn" style={{ color: "var(--warning)", borderColor: "rgba(245,158,11,0.3)" }}
-                                  onClick={() => { setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done"); setGenType("i2v"); setSelectedModels([]); setPrompt(""); }}>
-                                  🎬 Animate
-                                </button>
-                              )}
+                              <button className="result-action-btn" style={{ color: "var(--accent)", borderColor: "rgba(99,102,241,0.3)" }}
+                                onClick={() => regenerateTask(task)}>🔄 Regenerate</button>
+                              {task.status === "completed" && <>
+                                <button className="result-action-btn" onClick={async () => {
+                                  try {
+                                    const url = task.outputs?.[0];
+                                    if (!url) return;
+                                    const resp = await fetch(url);
+                                    const blob = await resp.blob();
+                                    const ext = (genType === "t2v" || genType === "i2v" || genType === "avatar") ? "mp4" : "png";
+                                    const fname = `${task.modelName.replace(/\s+/g, "_")}_${Date.now()}.${ext}`;
+                                    const a = document.createElement("a");
+                                    a.href = URL.createObjectURL(blob);
+                                    a.download = fname;
+                                    document.body.appendChild(a);
+                                    a.click();
+                                    a.remove();
+                                    URL.revokeObjectURL(a.href);
+                                  } catch (e) { window.open(task.outputs?.[0], "_blank"); }
+                                }}>↓ Save</button>
+                                <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(task.outputs?.[0] || ""); }}>📋 URL</button>
+                                {(genType === "image" || genType === "i2i") && (
+                                  <button className="result-action-btn" style={{ color: "#a78bfa", borderColor: "rgba(167,139,250,0.3)" }}
+                                    onClick={() => { setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done"); setGenType("i2i"); setSelectedModels([]); setPrompt(""); }}>
+                                    ✏️ Edit
+                                  </button>
+                                )}
+                                {(genType === "image" || genType === "i2i") && (
+                                  <button className="result-action-btn" style={{ color: "var(--warning)", borderColor: "rgba(245,158,11,0.3)" }}
+                                    onClick={() => { setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done"); setGenType("i2v"); setSelectedModels([]); setPrompt(""); }}>
+                                    🎬 Animate
+                                  </button>
+                                )}
+                              </>}
                             </div>
                           )}
                         </div>
@@ -1161,7 +1171,7 @@ export default function PrismApp() {
                   <div className="setting-group">
                     <div className="setting-label">Data</div>
                     <div style={{ display: "flex", gap: 8 }}>
-                      <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all generation logs?")) { setLogs([]); try { localStorage.removeItem("prism-logs"); } catch {} } }}>Clear Logs ({logs.length})</button>
+                      <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all generation logs?")) { setLogs([]); clearHistory(); } }}>Clear Logs ({logs.length})</button>
                       <button className="api-test-btn" onClick={() => { setTasks([]); }}>Clear Active Tasks</button>
                     </div>
                   </div>
