@@ -356,7 +356,7 @@ export default function ProximaApp() {
   const models = MODELS[genType] || [];
   const estCost = selectedModels.reduce((sum, id) => {
     const m = models.find(x => x.id === id);
-    return sum + (m?.price || 0);
+    return sum + (m?.price || 0) * (numImages || 1);
   }, 0);
 
   function toggleModel(id) {
@@ -569,14 +569,18 @@ export default function ProximaApp() {
         const anyActive = prev.some(t => t.batchId === batchId && (t.status === "pending" || t.status === "processing"));
         if (!anyActive) {
           clearInterval(timerId);
-          isGeneratingRef.current = false;
-          setIsGenerating(false);
+          // Check if ANY tasks across ALL batches are still active
+          const anyGlobalActive = prev.some(t => t.status === "pending" || t.status === "processing");
+          if (!anyGlobalActive) {
+            isGeneratingRef.current = false;
+            setIsGenerating(false);
+          }
           // Log the batch
           const batch = prev.filter(t => t.batchId === batchId);
           if (batch.length > 0) {
             const logEntry = {
               id: batchId, timestamp: Date.now(), prompt, negPrompt, genType,
-              models: batch.map(t => t.modelName), resolution, duration, seed, aspectRatio, sourceImageUrl, sourceImageUrls: sourceImageUrls.length > 0 ? [...sourceImageUrls] : [],
+              models: batch.map(t => t.modelName), resolution, duration, seed, aspectRatio, sourceImageUrl, sourceImageUrls: sourceImageUrls.length > 0 ? [...sourceImageUrls] : [], numImages,
               tasks: batch.map(t => ({ model: t.modelName, status: t.status, wallClockMs: t.wallClockMs, cost: t.price, outputs: t.outputs, error: t.error })),
               totalCost: batch.reduce((s, t) => s + (t.status === "completed" ? t.price : 0), 0)
             };
@@ -639,6 +643,7 @@ export default function ProximaApp() {
           sourceImageUrl: newTask.sourceImageUrl,
           sourceImageUrls: newTask.sourceImageUrls || [],
           perModelResolution: newTask.perModelResolution || {},
+          numImages: newTask.numImages || 1,
         };
         const payload = modelConfig?.params
           ? buildPayload(modelConfig, userSettings, taskGenType)
@@ -717,8 +722,9 @@ export default function ProximaApp() {
     setDuration(log.duration);
     setSeed(log.seed);
     setAspectRatio(log.aspectRatio || "auto");
+    setSourceImageUrls(log.sourceImageUrls?.length > 0 ? [...log.sourceImageUrls] : []);
     if (log.sourceImageUrl) { setSourceImageUrl(log.sourceImageUrl); setSourcePreview(log.sourceImageUrl); setUploadStatus("done"); }
-    if (log.sourceImageUrls?.length > 0) { setSourceImageUrls([...log.sourceImageUrls]); }
+    if (log.numImages) setNumImages(log.numImages);
     // Try to reselect models
     const modelIds = (MODELS[log.genType] || []).filter(m => log.models.includes(m.name)).map(m => m.id);
     setSelectedModels(modelIds);
@@ -1216,7 +1222,7 @@ export default function ProximaApp() {
                                   } catch (e) { console.log("Direct download blocked, opening in new tab"); window.open(task.outputs?.[0], "_blank"); }
                                 }}>↓ Save</button>
                                 <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(task.outputs?.[0] || ""); }}>📋 URL</button>
-                                {(genType === "image" || genType === "i2i") && (
+                                {((task.genType || genType) === "image" || (task.genType || genType) === "i2i") && (
                                   <button className="result-action-btn" style={{ color: "#a78bfa", borderColor: "rgba(167,139,250,0.3)" }}
                                     onClick={() => {
                                       setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done");
@@ -1230,7 +1236,7 @@ export default function ProximaApp() {
                                     ✏️ Edit
                                   </button>
                                 )}
-                                {(genType === "image" || genType === "i2i") && (
+                                {((task.genType || genType) === "image" || (task.genType || genType) === "i2i") && (
                                   <button className="result-action-btn" style={{ color: "var(--warning)", borderColor: "rgba(245,158,11,0.3)" }}
                                     onClick={() => { setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done"); setGenType("i2v"); setSelectedModels([]); setPrompt(""); }}>
                                     🎬 Animate
