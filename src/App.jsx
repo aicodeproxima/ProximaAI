@@ -277,7 +277,9 @@ export default function ProximaApp() {
   const [defaultImageRes, setDefaultImageRes] = useState("1k");
   const [defaultVideoDur, setDefaultVideoDur] = useState(5);
   const [galleryTabState, setGalleryTabState] = useState("completed");
+  const [galleryView, setGalleryView] = useState("masonry");
   const [numImages, setNumImages] = useState(1);
+  const multiImageFileRef = useRef(null);
   const [activeCount, setActiveCount] = useState(0);
   const pollRefs = useRef({});
   const savedLogIds = useRef(new Set());
@@ -409,6 +411,22 @@ export default function ProximaApp() {
     }
     // Reset input so same files can be re-selected
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  // Upload additional reference images from gallery picker
+  async function handleAdditionalFileSelect(e) {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0 || !apiKey) return;
+    try {
+      const uploadPromises = files.map(f => uploadSingleFile(f));
+      const urls = (await Promise.all(uploadPromises)).filter(Boolean);
+      if (urls.length > 0) {
+        setSourceImageUrls(prev => [...prev, ...urls]);
+      }
+    } catch (err) {
+      console.error("Additional image upload error:", err);
+    }
+    if (multiImageFileRef.current) multiImageFileRef.current.value = "";
   }
 
   function clearSourceImage() {
@@ -558,7 +576,7 @@ export default function ProximaApp() {
           if (batch.length > 0) {
             const logEntry = {
               id: batchId, timestamp: Date.now(), prompt, negPrompt, genType,
-              models: batch.map(t => t.modelName), resolution, duration, seed, aspectRatio, sourceImageUrl,
+              models: batch.map(t => t.modelName), resolution, duration, seed, aspectRatio, sourceImageUrl, sourceImageUrls: sourceImageUrls.length > 0 ? [...sourceImageUrls] : [],
               tasks: batch.map(t => ({ model: t.modelName, status: t.status, wallClockMs: t.wallClockMs, cost: t.price, outputs: t.outputs, error: t.error })),
               totalCost: batch.reduce((s, t) => s + (t.status === "completed" ? t.price : 0), 0)
             };
@@ -700,6 +718,7 @@ export default function ProximaApp() {
     setSeed(log.seed);
     setAspectRatio(log.aspectRatio || "auto");
     if (log.sourceImageUrl) { setSourceImageUrl(log.sourceImageUrl); setSourcePreview(log.sourceImageUrl); setUploadStatus("done"); }
+    if (log.sourceImageUrls?.length > 0) { setSourceImageUrls([...log.sourceImageUrls]); }
     // Try to reselect models
     const modelIds = (MODELS[log.genType] || []).filter(m => log.models.includes(m.name)).map(m => m.id);
     setSelectedModels(modelIds);
@@ -863,21 +882,34 @@ export default function ProximaApp() {
                             </div>
                           )}
                           {sourceImageUrls.length < maxImagesAllowed - 1 && (
-                            <div style={{ display: "flex", gap: 6 }}>
-                              <input ref={multiImageInputRef} type="text" className="prompt-area" style={{ minHeight: "auto", fontSize: 11, padding: 8, flex: 1 }}
-                                placeholder="Paste additional image URL..."
-                                onKeyDown={e => {
-                                  if (e.key === "Enter" && e.target.value.trim()) {
-                                    e.preventDefault();
-                                    setSourceImageUrls(prev => [...prev, e.target.value.trim()]);
-                                    e.target.value = "";
-                                  }
-                                }} />
-                              <button onClick={() => {
-                                const input = multiImageInputRef.current;
-                                if (input?.value?.trim()) { setSourceImageUrls(prev => [...prev, input.value.trim()]); input.value = ""; }
-                              }} style={{ padding: "8px 12px", background: "var(--accent)", color: "white", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 11, fontFamily: font, whiteSpace: "nowrap" }}>+ Add</button>
-                            </div>
+                            <>
+                              {/* Hidden file input for gallery picker */}
+                              <input type="file" ref={multiImageFileRef} accept="image/*" multiple style={{ display: "none" }}
+                                onChange={handleAdditionalFileSelect} />
+                              <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                                <button onClick={() => multiImageFileRef.current?.click()}
+                                  style={{ flex: 1, padding: "10px 8px", background: "var(--bg-input)", border: "2px dashed var(--border)", borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer", fontSize: 12, fontFamily: fontBody, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, transition: "all 0.2s" }}
+                                  onMouseOver={e => { e.currentTarget.style.borderColor = "var(--accent)"; }}
+                                  onMouseOut={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
+                                  📁 Upload More from Gallery
+                                </button>
+                              </div>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <input ref={multiImageInputRef} type="text" className="prompt-area" style={{ minHeight: "auto", fontSize: 11, padding: 8, flex: 1 }}
+                                  placeholder="Or paste image URL..."
+                                  onKeyDown={e => {
+                                    if (e.key === "Enter" && e.target.value.trim()) {
+                                      e.preventDefault();
+                                      setSourceImageUrls(prev => [...prev, e.target.value.trim()]);
+                                      e.target.value = "";
+                                    }
+                                  }} />
+                                <button onClick={() => {
+                                  const input = multiImageInputRef.current;
+                                  if (input?.value?.trim()) { setSourceImageUrls(prev => [...prev, input.value.trim()]); input.value = ""; }
+                                }} style={{ padding: "8px 12px", background: "var(--accent)", color: "white", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 11, fontFamily: font, whiteSpace: "nowrap" }}>+ Add</button>
+                              </div>
+                            </>
                           )}
                           <div style={{ fontSize: 9, color: "var(--text-muted)", marginTop: 4 }}>
                             Reference images as "Figure 1", "Figure 2" etc. in your prompt
@@ -1100,7 +1132,7 @@ export default function ProximaApp() {
                   )}
 
                   <button className={`gen-btn ${isGenerating ? "running" : "ready"}`}
-                    disabled={!apiKey || (!prompt.trim() && genType !== "avatar") || selectedModels.length === 0 || isGenerating || (needsImage && !sourceImageUrl.trim())}
+                    disabled={!apiKey || (!prompt.trim() && genType !== "avatar") || selectedModels.length === 0 || (needsImage && !sourceImageUrl.trim())}
                     onClick={handleGenerate}>
                     {isGenerating ? `⏳ GENERATING (${activeCount} active)...` :
                      !apiKey ? "⚠ SET API KEY IN SETTINGS" :
@@ -1237,11 +1269,24 @@ export default function ProximaApp() {
                   ))}
                 </div>
 
-                {/* Completed — Masonry Grid */}
+                {/* View Toggle — only for completed tab */}
+                {galleryTab === "completed" && galleryCompleted.length > 0 && (
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10, gap: 4 }}>
+                    <button onClick={() => setGalleryView("masonry")}
+                      style={{ padding: "6px 10px", border: "1px solid var(--glass-border)", borderRadius: 6, cursor: "pointer", fontSize: 14, background: galleryView === "masonry" ? "rgba(99,102,241,0.15)" : "transparent", color: galleryView === "masonry" ? "var(--accent)" : "var(--text-muted)" }}
+                      title="Masonry grid view">⊞</button>
+                    <button onClick={() => setGalleryView("vertical")}
+                      style={{ padding: "6px 10px", border: "1px solid var(--glass-border)", borderRadius: 6, cursor: "pointer", fontSize: 14, background: galleryView === "vertical" ? "rgba(99,102,241,0.15)" : "transparent", color: galleryView === "vertical" ? "var(--accent)" : "var(--text-muted)" }}
+                      title="Vertical list view">☰</button>
+                  </div>
+                )}
+
+                {/* Completed outputs */}
                 {galleryTab === "completed" && (
                   galleryCompleted.length === 0 ? (
                     <div className="empty-state"><div className="emoji">🖼️</div><div className="msg">Completed outputs will appear here.</div></div>
-                  ) : (
+                  ) : galleryView === "masonry" ? (
+                    /* Masonry grid — packed by aspect ratio */
                     <div style={{ columns: "2 280px", columnGap: 12 }}>
                       {galleryCompleted.map(task => (
                         <div key={task.id} style={{ breakInside: "avoid", marginBottom: 12, background: "rgba(8,12,25,0.45)", border: "1px solid var(--glass-border)", borderRadius: 12, overflow: "hidden" }}>
@@ -1261,6 +1306,38 @@ export default function ProximaApp() {
                               <span>{timeAgo(task.endTime)}</span>
                             </div>
                           </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    /* Vertical list — full-width previews with detailed info */
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                      {galleryCompleted.map(task => (
+                        <div key={task.id} className="task-card">
+                          <div className="task-header">
+                            <span className="task-model">{task.modelName}</span>
+                            <span className="task-status completed">COMPLETED</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--text-secondary)", margin: "4px 0" }}>{task.prompt}</div>
+                          {task.outputs?.map((url, i) => {
+                            const gType = task.genType || "";
+                            const isVideo = url.includes(".mp4") || url.includes("video") || gType === "t2v" || gType === "i2v" || gType === "avatar";
+                            return isVideo
+                              ? <video key={i} className="result-video" src={url} controls muted playsInline onClick={() => setLightbox(url)} />
+                              : <img key={i} className="result-img" src={url} alt="" onClick={() => setLightbox(url)} />;
+                          })}
+                          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "var(--text-muted)", fontFamily: font }}>
+                            <span>{task.provider}</span>
+                            <span>{formatTime(task.wallClockMs)}</span>
+                            <span>{formatCost(task.price)}</span>
+                            <span>{task.endTime ? new Date(task.endTime).toLocaleString() : timeAgo(task.endTime)}</span>
+                          </div>
+                          {task.sourceImageUrl && (
+                            <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-muted)" }}>
+                              Source: <a href={task.sourceImageUrl} target="_blank" rel="noopener" style={{ color: "var(--accent)" }}>{task.sourceImageUrl.slice(0, 50)}...</a>
+                              {task.sourceImageUrls?.length > 0 && ` + ${task.sourceImageUrls.length} ref(s)`}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>

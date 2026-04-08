@@ -243,15 +243,15 @@ export const MODELS = {
     { id: "bytedance/seedream-v5.0-lite/edit-sequential", name: "Seedream 5.0 Edit Sequential", provider: "ByteDance", price: 0.035,
       params: { resolution: RES_SEEDREAM5, negativePrompt: false, seed: false, maxImages: 10, optional: { maxOutputImages: { paramName: "max_images", type: "number", default: 1, min: 1, max: 15 } } } },
     { id: "bytedance/seedream-v4.5/edit", name: "Seedream 4.5 Edit", provider: "ByteDance", price: 0.04,
-      params: { resolution: RES_SEEDREAM, negativePrompt: true, seed: true } },
+      params: { resolution: RES_SEEDREAM, negativePrompt: true, seed: true, maxImages: 10 } },
     { id: "bytedance/seededit-v3", name: "SeedEdit V3", provider: "ByteDance", price: 0.03,
-      params: { resolution: RES_SEEDREAM, negativePrompt: false, seed: true } },
+      params: { resolution: RES_SEEDREAM, negativePrompt: false, seed: true, maxImages: 5 } },
 
     // Alibaba WAN Edit
     { id: "alibaba/wan-2.7/image-edit", name: "WAN 2.7 Edit", provider: "Alibaba", price: 0.03, hot: true,
-      params: { resolution: null, negativePrompt: false, seed: true } },
+      params: { resolution: null, negativePrompt: false, seed: true, maxImages: 9 } },
     { id: "alibaba/wan-2.7/image-edit-pro", name: "WAN 2.7 Edit Pro", provider: "Alibaba", price: 0.075,
-      params: { resolution: null, negativePrompt: false, seed: true } },
+      params: { resolution: null, negativePrompt: false, seed: true, maxImages: 9 } },
 
     // Flux Edit
     { id: "wavespeed-ai/flux-2-pro/edit", name: "FLUX 2 Pro Edit", provider: "BFL", price: 0.04,
@@ -265,7 +265,7 @@ export const MODELS = {
     { id: "wavespeed-ai/qwen-image-edit", name: "Qwen Image Edit", provider: "Alibaba", price: 0.03,
       params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
     { id: "wavespeed-ai/phota/edit", name: "Phota Edit", provider: "WaveSpeed", price: 0.03,
-      params: { resolution: RES_FLUX, negativePrompt: true, seed: true } },
+      params: { resolution: RES_FLUX, negativePrompt: true, seed: true, maxImages: 3 } },
     { id: "wavespeed-ai/firered-image-v1.1-edit", name: "FireRed Edit", provider: "WaveSpeed", price: 0.02,
       params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
     { id: "wavespeed-ai/step1x-edit", name: "Step1X Edit", provider: "WaveSpeed", price: 0.02,
