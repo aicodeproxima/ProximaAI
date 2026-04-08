@@ -277,61 +277,92 @@ export async function getStorageStats() {
 
 // ─── Migration from localStorage + old "prism" DB ───
 
+// Helper: read all data from an old IndexedDB store
+function readOldStore(db, storeName) {
+  return new Promise((resolve) => {
+    if (!db.objectStoreNames.contains(storeName)) { resolve([]); return; }
+    try {
+      const txn = db.transaction(storeName, "readonly");
+      const store = txn.objectStore(storeName);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    } catch { resolve([]); }
+  });
+}
+
+// Helper: open old DB without triggering version upgrade
+function openOldDB(name, version) {
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(name, version);
+      req.onupgradeneeded = () => { req.transaction.abort(); resolve(null); };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  });
+}
+
 export async function migrateFromLocalStorage() {
+  // Check if we already migrated
+  const migrated = localStorage.getItem("proximaai-migrated");
+  if (migrated) return;
+
   try {
-    // Migrate API key from old keys
-    const oldKey = localStorage.getItem("prism-api-key") || localStorage.getItem("proximaai-apiKey");
+    // 1. Migrate from old "prism" IndexedDB (MUST happen first, before localStorage cleanup)
+    const oldDb = await openOldDB("prism", 2);
+    if (oldDb) {
+      try {
+        // Read ALL stores from old DB
+        const oldTasks = await readOldStore(oldDb, "tasks");
+        const oldHistory = await readOldStore(oldDb, "history");
+        const oldSettings = await readOldStore(oldDb, "settings");
+        const oldFavorites = await readOldStore(oldDb, "favorites");
+        const oldPresets = await readOldStore(oldDb, "presets");
+
+        oldDb.close();
+
+        // Write to new DB
+        if (oldTasks.length > 0) await batchPut("tasks", oldTasks);
+        if (oldHistory.length > 0) await batchPut("history", oldHistory);
+        if (oldFavorites.length > 0) await batchPut("favorites", oldFavorites);
+        if (oldPresets.length > 0) await batchPut("presets", oldPresets);
+        for (const s of oldSettings) {
+          if (s?.key && s?.value !== undefined) await setSetting(s.key, s.value);
+        }
+
+        // Delete old DB after successful migration
+        try { indexedDB.deleteDatabase("prism"); } catch {}
+      } catch {
+        try { oldDb.close(); } catch {}
+      }
+    }
+
+    // 2. Migrate from localStorage (fallback keys)
+    const oldKey = localStorage.getItem("prism-api-key");
     if (oldKey) {
       await setSetting("apiKey", oldKey);
       localStorage.removeItem("prism-api-key");
-      localStorage.removeItem("proximaai-apiKey");
     }
 
-    // Migrate logs from old keys
-    const oldLogs = localStorage.getItem("prism-logs") || localStorage.getItem("proximaai-logs");
+    const oldLogs = localStorage.getItem("prism-logs");
     if (oldLogs) {
       let logs;
       try { logs = JSON.parse(oldLogs); } catch { logs = []; }
-      if (logs.length > 0) {
-        await batchPut("history", logs);
-      }
+      if (logs.length > 0) await batchPut("history", logs);
       localStorage.removeItem("prism-logs");
-      localStorage.removeItem("proximaai-logs");
     }
 
-    // Migrate settings
     for (const key of ["defaultImageRes", "defaultVideoDur"]) {
-      const val = localStorage.getItem(`prism-${key}`) || localStorage.getItem(`proximaai-${key}`);
+      const val = localStorage.getItem(`prism-${key}`);
       if (val) {
         try { await setSetting(key, JSON.parse(val)); } catch { await setSetting(key, val); }
         localStorage.removeItem(`prism-${key}`);
-        localStorage.removeItem(`proximaai-${key}`);
       }
     }
 
-    // Try to migrate from old "prism" IndexedDB if it exists
-    try {
-      const oldRequest = indexedDB.open("prism", 2);
-      oldRequest.onsuccess = () => {
-        const oldDb = oldRequest.result;
-        if (oldDb.objectStoreNames.contains("tasks")) {
-          const oldTxn = oldDb.transaction("tasks", "readonly");
-          const oldStore = oldTxn.objectStore("tasks");
-          const getAll = oldStore.getAll();
-          getAll.onsuccess = async () => {
-            if (getAll.result?.length > 0) {
-              await batchPut("tasks", getAll.result);
-            }
-            oldDb.close();
-            // Delete old DB after migration
-            try { indexedDB.deleteDatabase("prism"); } catch {}
-          };
-        } else {
-          oldDb.close();
-        }
-      };
-      oldRequest.onerror = () => {};
-    } catch {}
+    // Mark migration as done so it doesn't run again
+    localStorage.setItem("proximaai-migrated", "1");
   } catch {
     // Migration failed silently — old data preserved as fallback
   }
