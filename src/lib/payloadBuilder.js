@@ -128,17 +128,27 @@ export function buildPayload(model, userSettings, genType) {
     payload.seed = parseInt(userSettings.seed);
   }
 
-  // Source image(s) for i2i — supports multi-image for models with maxImages > 1
+  // Source image(s) for i2i — primary image (Ref 1) + additional refs merged into one array
   if (genType === "i2i") {
     const imageParam = p.imageParam || "images";
-    const allImages = userSettings.sourceImageUrls?.length > 0
-      ? userSettings.sourceImageUrls.filter(u => u?.trim())
-      : userSettings.sourceImageUrl ? [userSettings.sourceImageUrl] : [];
+    // Always start with the primary source image (Ref 1)
+    const allImages = [];
+    if (userSettings.sourceImageUrl?.trim()) {
+      allImages.push(userSettings.sourceImageUrl.trim());
+    }
+    // Append additional reference images (Ref 2, 3, etc.)
+    if (userSettings.sourceImageUrls?.length > 0) {
+      for (const url of userSettings.sourceImageUrls) {
+        if (url?.trim() && !allImages.includes(url.trim())) {
+          allImages.push(url.trim());
+        }
+      }
+    }
     if (allImages.length > 0) {
       if (imageParam === "image") {
-        payload.image = allImages[0];
+        payload.image = allImages[0]; // singular models only get first image
       } else {
-        payload.images = allImages;
+        payload.images = allImages; // multi-image models get the full array
       }
     }
   }
