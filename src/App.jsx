@@ -245,7 +245,11 @@ function timeAgo(ts) {
   if (diff < 60000) return "just now";
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return new Date(ts).toLocaleDateString();
+  return formatTimestamp(ts);
+}
+function formatTimestamp(ts) {
+  if (!ts) return "";
+  return new Date(ts).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: true, month: "short", day: "numeric" });
 }
 
 // ─── API SERVICE ───
@@ -1335,7 +1339,7 @@ export default function ProximaApp() {
                             <span>{task.provider}</span>
                             <span>{formatTime(task.wallClockMs)}</span>
                             <span>{formatCost(task.price)}</span>
-                            <span>{task.endTime ? new Date(task.endTime).toLocaleString() : timeAgo(task.endTime)}</span>
+                            <span>{task.endTime ? formatTimestamp(task.endTime) : timeAgo(task.endTime)}</span>
                           </div>
                           {task.sourceImageUrl && (
                             <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-muted)" }}>
@@ -1397,7 +1401,7 @@ export default function ProximaApp() {
                             <div><strong>Seed:</strong> {task.seed || "-1"}</div>
                             <div><strong>Aspect:</strong> {task.aspectRatio || "auto"}</div>
                             <div><strong>Prompt:</strong> <span style={{ color: "var(--text-secondary)" }}>{task.prompt?.slice(0, 120)}</span></div>
-                            <div><strong>Time:</strong> {task.startTime ? new Date(task.startTime).toLocaleString() : "unknown"}</div>
+                            <div><strong>Time:</strong> {task.startTime ? formatTimestamp(task.startTime) : "unknown"}</div>
                           </div>
                           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                             <button className="result-action-btn" style={{ color: "var(--accent)" }} onClick={() => regenerateTask(task)}>🔄 Retry</button>
@@ -1545,7 +1549,7 @@ export default function ProximaApp() {
                       <span>Time: {formatTime(lbTask.wallClockMs)}</span>
                       <span>Cost: {formatCost(lbTask.price)}</span>
                       <span>Seed: {lbTask.seed || "-1"}</span>
-                      <span>{lbTask.endTime ? new Date(lbTask.endTime).toLocaleString() : ""}</span>
+                      <span>{lbTask.endTime ? formatTimestamp(lbTask.endTime) : ""}</span>
                     </div>
                     <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                       <button className="result-action-btn" onClick={async () => {
