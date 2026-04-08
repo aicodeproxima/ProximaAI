@@ -276,6 +276,8 @@ export default function ProximaApp() {
   const [lightbox, setLightbox] = useState(null);
   const [defaultImageRes, setDefaultImageRes] = useState("1k");
   const [defaultVideoDur, setDefaultVideoDur] = useState(5);
+  const [galleryTabState, setGalleryTabState] = useState("completed");
+  const [numImages, setNumImages] = useState(1);
   const [activeCount, setActiveCount] = useState(0);
   const pollRefs = useRef({});
   const savedLogIds = useRef(new Set());
@@ -428,7 +430,6 @@ export default function ProximaApp() {
 
   // ─── GENERATION ENGINE ───
   async function handleGenerate() {
-    if (isGeneratingRef.current) return;
     if (!apiKey || (!prompt.trim() && genType !== "avatar") || selectedModels.length === 0) return;
     if ((genType === "i2i" || genType === "i2v") && !sourceImageUrl.trim()) {
       alert("Please provide a source image URL for " + (genType === "i2i" ? "image editing" : "image-to-video"));
@@ -448,7 +449,7 @@ export default function ProximaApp() {
         wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
         genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl,
         sourceImageUrls: sourceImageUrls.length > 0 ? sourceImageUrls : (sourceImageUrl ? [sourceImageUrl] : []),
-        perModelResolution: perModelRes
+        perModelResolution: perModelRes, numImages
       };
     });
 
@@ -467,6 +468,7 @@ export default function ProximaApp() {
             sourceImageUrl: task.sourceImageUrl,
             sourceImageUrls: task.sourceImageUrls || [],
             perModelResolution: task.perModelResolution || {},
+            numImages: task.numImages || 1,
           };
           const payload = modelConfig?.params
             ? buildPayload(modelConfig, userSettings, task.genType || genType)
@@ -818,6 +820,9 @@ export default function ProximaApp() {
                           <img src={sourcePreview || sourceImageUrl} alt="Source"
                             style={{ width: "100%", maxHeight: 180, objectFit: "contain", borderRadius: 8, border: "1px solid var(--border)", background: "#000" }}
                             onError={e => { e.target.style.display = "none"; setUploadStatus("error"); }} />
+                          {genType === "i2i" && maxImagesAllowed > 1 && (
+                            <div style={{ position: "absolute", bottom: 6, left: 6, background: "rgba(0,0,0,0.7)", color: "#a78bfa", fontSize: 10, padding: "2px 6px", borderRadius: 4, fontFamily: font, fontWeight: 600 }}>Ref 1</div>
+                          )}
                           <button onClick={clearSourceImage}
                             style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,0.8)", color: "white", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, width: 26, height: 26, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
                           {uploadStatus === "uploading" && (
@@ -850,6 +855,7 @@ export default function ProximaApp() {
                               {sourceImageUrls.map((url, i) => (
                                 <div key={i} style={{ position: "relative", width: 60, height: 60 }}>
                                   <img src={url} alt={`Ref ${i+2}`} style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }} />
+                                  <div style={{ position: "absolute", bottom: 2, left: 2, background: "rgba(0,0,0,0.7)", color: "#a78bfa", fontSize: 8, padding: "1px 4px", borderRadius: 3, fontFamily: font }}>Ref {i+2}</div>
                                   <button onClick={() => setSourceImageUrls(prev => prev.filter((_, j) => j !== i))}
                                     style={{ position: "absolute", top: -4, right: -4, background: "var(--error)", color: "white", border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
                                 </div>
@@ -1067,6 +1073,15 @@ export default function ProximaApp() {
                           );
                         })()}
 
+                        {(genType === "image" || genType === "i2i") && (
+                          <div className="settings-row">
+                            <label>Batch</label>
+                            <select className="settings-select" value={numImages} onChange={e => setNumImages(Number(e.target.value))}>
+                              {[1,2,3,4,8,12,16].map(n => <option key={n} value={n}>{n} image{n > 1 ? "s" : ""}</option>)}
+                            </select>
+                          </div>
+                        )}
+
                         <div className="settings-row">
                           <label>Seed</label>
                           <input type="text" className="settings-input" style={{ width: 72 }} value={seed} onChange={e => setSeed(e.target.value)} />
@@ -1171,7 +1186,15 @@ export default function ProximaApp() {
                                 <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(task.outputs?.[0] || ""); }}>📋 URL</button>
                                 {(genType === "image" || genType === "i2i") && (
                                   <button className="result-action-btn" style={{ color: "#a78bfa", borderColor: "rgba(167,139,250,0.3)" }}
-                                    onClick={() => { setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done"); setGenType("i2i"); setSelectedModels([]); setPrompt(""); }}>
+                                    onClick={() => {
+                                      setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done");
+                                      setGenType("i2i"); setPrompt(task.prompt || "");
+                                      // Auto-select the edit variant of the same model if available
+                                      const editModels = MODELS["i2i"] || [];
+                                      const sameProviderEdit = editModels.find(m => m.provider === task.provider);
+                                      setSelectedModels(sameProviderEdit ? [sameProviderEdit.id] : []);
+                                      setPage("cockpit");
+                                    }}>
                                     ✏️ Edit
                                   </button>
                                 )}
@@ -1193,35 +1216,119 @@ export default function ProximaApp() {
             )}
 
             {/* ═══ GALLERY ═══ */}
-            {page === "gallery" && (
+            {page === "gallery" && (() => {
+              const galleryCompleted = tasks.filter(t => t.status === "completed");
+              const galleryProcessing = tasks.filter(t => t.status === "pending" || t.status === "processing");
+              const galleryFailed = tasks.filter(t => t.status === "failed");
+              const [galleryTab, setGalleryTab] = [galleryTabState, setGalleryTabState];
+              const tabCounts = { completed: galleryCompleted.length, processing: galleryProcessing.length, failed: galleryFailed.length };
+              return (
               <div>
-                <h2 style={{ fontFamily: font, fontSize: 16, marginBottom: 16, color: "var(--text-secondary)" }}>Completed Outputs ({completedTasks.length})</h2>
-                {completedTasks.length === 0 ? (
-                  <div className="empty-state"><div className="emoji">🖼️</div><div className="msg">Your generated outputs will appear here after generation.</div></div>
-                ) : (
-                  <div className="results-grid">
-                    {completedTasks.map(task => (
-                      <div key={task.id} className="task-card">
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>{task.modelName}</div>
-                        <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "4px 0" }}>{task.prompt?.slice(0, 60)}...</div>
-                        {task.outputs?.map((url, i) => {
-                          const gType = task.genType || "";
-                          const isVideo = url.includes(".mp4") || url.includes("video") || gType === "t2v" || gType === "i2v" || gType === "avatar";
-                          return isVideo
-                            ? <video key={i} className="result-video" src={url} controls muted playsInline onClick={() => setLightbox(url)} />
-                            : <img key={i} className="result-img" src={url} alt="" onClick={() => setLightbox(url)} />;
-                        })}
-                        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "var(--text-muted)", fontFamily: font }}>
-                          <span>{formatTime(task.wallClockMs)}</span>
-                          <span>{formatCost(task.price)}</span>
-                          <span>{timeAgo(task.endTime)}</span>
+                {/* Gallery Tabs */}
+                <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "rgba(10,20,40,0.3)", borderRadius: 10, padding: 3 }}>
+                  {[["completed","Completed"],["processing","Processing"],["failed","Failed"]].map(([key,label]) => (
+                    <button key={key} onClick={() => setGalleryTabState(key)}
+                      style={{ flex: 1, padding: "8px 6px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: fontBody, fontWeight: 500, transition: "all 0.2s",
+                        background: galleryTab === key ? "linear-gradient(135deg, #6366f1, #8b5cf6)" : "transparent",
+                        color: galleryTab === key ? "white" : "var(--text-muted)",
+                        boxShadow: galleryTab === key ? "0 2px 8px rgba(99,102,241,0.3)" : "none" }}>
+                      {label} ({tabCounts[key]})
+                    </button>
+                  ))}
+                </div>
+
+                {/* Completed — Masonry Grid */}
+                {galleryTab === "completed" && (
+                  galleryCompleted.length === 0 ? (
+                    <div className="empty-state"><div className="emoji">🖼️</div><div className="msg">Completed outputs will appear here.</div></div>
+                  ) : (
+                    <div style={{ columns: "2 280px", columnGap: 12 }}>
+                      {galleryCompleted.map(task => (
+                        <div key={task.id} style={{ breakInside: "avoid", marginBottom: 12, background: "rgba(8,12,25,0.45)", border: "1px solid var(--glass-border)", borderRadius: 12, overflow: "hidden" }}>
+                          {task.outputs?.map((url, i) => {
+                            const gType = task.genType || "";
+                            const isVideo = url.includes(".mp4") || url.includes("video") || gType === "t2v" || gType === "i2v" || gType === "avatar";
+                            return isVideo
+                              ? <video key={i} src={url} controls muted playsInline style={{ width: "100%", display: "block" }} onClick={() => setLightbox(url)} />
+                              : <img key={i} src={url} alt="" style={{ width: "100%", display: "block", cursor: "pointer" }} onClick={() => setLightbox(url)} />;
+                          })}
+                          <div style={{ padding: "8px 10px" }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-primary)" }}>{task.modelName}</div>
+                            <div style={{ fontSize: 10, color: "var(--text-muted)", margin: "2px 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.prompt?.slice(0, 80)}</div>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "var(--text-muted)", fontFamily: font, marginTop: 4 }}>
+                              <span>{formatTime(task.wallClockMs)}</span>
+                              <span>{formatCost(task.price)}</span>
+                              <span>{timeAgo(task.endTime)}</span>
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )
+                )}
+
+                {/* Processing — Live status cards */}
+                {galleryTab === "processing" && (
+                  galleryProcessing.length === 0 ? (
+                    <div className="empty-state"><div className="emoji">⏳</div><div className="msg">No generations currently processing.</div></div>
+                  ) : (
+                    <div className="results-grid">
+                      {galleryProcessing.map(task => (
+                        <div key={task.id} className="task-card">
+                          <div className="task-header">
+                            <span className="task-model">{task.modelName}</span>
+                            <span className={`task-status ${task.status}`}>{task.status.toUpperCase()}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "4px 0" }}>{task.prompt?.slice(0, 80)}</div>
+                          <div className="task-timer">{formatTime(task.wallClockMs || (Date.now() - task.startTime))}</div>
+                          <div className="task-progress"><div className="task-progress-fill" style={{ width: `${Math.min(95, ((Date.now() - task.startTime) / 60000) * 100)}%` }} /></div>
+                          <div style={{ marginTop: 8 }}>
+                            <button className="result-action-btn" onClick={() => cancelTask(task.id)}>✕ Cancel</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                )}
+
+                {/* Failed — Full debug info */}
+                {galleryTab === "failed" && (
+                  galleryFailed.length === 0 ? (
+                    <div className="empty-state"><div className="emoji">✓</div><div className="msg">No failed generations. Looking good!</div></div>
+                  ) : (
+                    <div className="results-grid">
+                      {galleryFailed.map(task => (
+                        <div key={task.id} className="task-card" style={{ borderColor: "rgba(239,68,68,0.2)" }}>
+                          <div className="task-header">
+                            <span className="task-model">{task.modelName}</span>
+                            <span className="task-status failed">FAILED</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--error)", margin: "6px 0", fontFamily: font, background: "rgba(239,68,68,0.08)", padding: "8px 10px", borderRadius: 6, wordBreak: "break-word" }}>
+                            {task.error || "Unknown error"}
+                          </div>
+                          <div style={{ fontSize: 10, color: "var(--text-muted)", lineHeight: 1.6, fontFamily: font }}>
+                            <div><strong>Model ID:</strong> {task.modelId}</div>
+                            <div><strong>Provider:</strong> {task.provider}</div>
+                            <div><strong>Gen Type:</strong> {task.genType || "unknown"}</div>
+                            <div><strong>Resolution:</strong> {task.resolution || "default"}</div>
+                            <div><strong>Duration:</strong> {task.duration || "N/A"}</div>
+                            <div><strong>Seed:</strong> {task.seed || "-1"}</div>
+                            <div><strong>Aspect:</strong> {task.aspectRatio || "auto"}</div>
+                            <div><strong>Prompt:</strong> <span style={{ color: "var(--text-secondary)" }}>{task.prompt?.slice(0, 120)}</span></div>
+                            <div><strong>Time:</strong> {task.startTime ? new Date(task.startTime).toLocaleString() : "unknown"}</div>
+                          </div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            <button className="result-action-btn" style={{ color: "var(--accent)" }} onClick={() => regenerateTask(task)}>🔄 Retry</button>
+                            <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(JSON.stringify({ modelId: task.modelId, error: task.error, prompt: task.prompt, resolution: task.resolution, duration: task.duration, seed: task.seed, genType: task.genType }, null, 2)); }}>📋 Copy Debug</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
                 )}
               </div>
-            )}
+              );
+            })()}
 
             {/* ═══ LOGS ═══ */}
             {page === "logs" && (

@@ -158,6 +158,12 @@ export function buildPayload(model, userSettings, genType) {
     payload.output_format = "png";
   }
 
+  // Batch num_images — for models that support generating multiple images per request
+  if (userSettings.numImages && userSettings.numImages > 1 && (genType === "image" || genType === "i2i")) {
+    const maxBatch = p.maxBatchImages || 4;
+    payload.num_images = Math.min(parseInt(userSettings.numImages), maxBatch);
+  }
+
   // Model-specific optional params
   if (p.optional) {
     for (const [key, config] of Object.entries(p.optional)) {
