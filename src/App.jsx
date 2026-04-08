@@ -26,9 +26,9 @@ const css = `
 body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fontBody}; }
 
 /* Void background */
-.prism-app { display: flex; height: 100vh; overflow: hidden; position: relative; background: url('/void.jpg') calc(50% + 0.24cm) center / cover no-repeat fixed; background-color: #020510; }
+.proxima-app { display: flex; height: 100vh; overflow: hidden; position: relative; background: url('/void.jpg') calc(50% + 0.24cm) center / cover no-repeat fixed; background-color: #020510; }
 
-.prism-app > * { position: relative; z-index: 1; }
+.proxima-app > * { position: relative; z-index: 1; }
 
 .sidebar { width: 56px; background: rgba(5,8,22,0.12); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 4px; flex-shrink: 0; }
 .sidebar-btn { width: 40px; height: 40px; border: none; background: transparent; color: var(--text-muted); border-radius: 10px; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.3s cubic-bezier(0.4,0,0.2,1); }
@@ -164,7 +164,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .task-status.processing { animation: glowPulse 2s ease-in-out infinite; }
 
 @media (max-width: 768px) {
-  .prism-app { flex-direction: column; }
+  .proxima-app { flex-direction: column; }
   .sidebar { width: 100%; flex-direction: row; padding: 0 8px; gap: 2px; border-right: none; border-bottom: 1px solid var(--glass-border); overflow-x: auto; flex-shrink: 0; height: 52px; justify-content: center; background: rgba(5,8,22,0.12); }
   .sidebar-logo { margin-bottom: 0; margin-right: 8px; font-size: 18px; }
   .sidebar-btn { width: 44px; height: 44px; font-size: 20px; }
@@ -250,7 +250,7 @@ function timeAgo(ts) {
 
 // ─── API SERVICE ───
 // ─── MAIN APP ───
-export default function PrismApp() {
+export default function ProximaApp() {
   const [page, setPage] = useState("cockpit");
   const [apiKey, setApiKey] = useState("");
   const [balance, setBalance] = useState(null);
@@ -714,10 +714,10 @@ export default function PrismApp() {
   return (
     <>
       <style>{css}</style>
-      <div className="prism-app">
+      <div className="proxima-app">
         {/* Sidebar */}
         <div className="sidebar">
-          <div className="sidebar-logo" title="PRISM">◈</div>
+          <div className="sidebar-logo" title="ProximaAI">◈</div>
           <button className={`sidebar-btn ${page==="cockpit"?"active":""}`} onClick={() => setPage("cockpit")} title="Cockpit">⚡</button>
           <button className={`sidebar-btn ${page==="gallery"?"active":""}`} onClick={() => setPage("gallery")} title="Gallery">🖼</button>
           <button className={`sidebar-btn ${page==="logs"?"active":""}`} onClick={() => setPage("logs")} title="Logs">📋</button>
@@ -730,7 +730,7 @@ export default function PrismApp() {
         {/* Main */}
         <div className="main">
           <div className="topbar">
-            <div className="topbar-title">PRISM — {page === "cockpit" ? "GENERATION COCKPIT" : page === "gallery" ? "SAVED OUTPUTS" : page === "logs" ? "GENERATION LOG" : "SETTINGS"}</div>
+            <div className="topbar-title">ProximaAI — {page === "cockpit" ? "GENERATION COCKPIT" : page === "gallery" ? "SAVED OUTPUTS" : page === "logs" ? "GENERATION LOG" : "SETTINGS"}</div>
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
               {balance !== null && <div className="balance-pill">${Number(balance).toFixed(2)}</div>}
               {!apiKey && <span style={{ fontSize: 11, color: "var(--error)" }}>⚠ No API Key</span>}
@@ -1316,7 +1316,7 @@ export default function PrismApp() {
                 <div className="setting-group">
                   <div className="setting-label">About</div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
-                    <strong style={{ color: "var(--text-primary)" }}>PRISM v1.0</strong> — Parallel Rendering & Inference Studio for Media<br />
+                    <strong style={{ color: "var(--text-primary)" }}>ProximaAI v1.0</strong> — Parallel AI Generation Cockpit<br />
                     {Object.values(MODELS).flat().length} models registered across {Object.keys(MODELS).length} categories<br />
                     Powered by WaveSpeed.ai unified API
                   </div>

@@ -1,6 +1,6 @@
 {
-  "name": "PRISM — Parallel AI Generation Cockpit",
-  "short_name": "PRISM",
+  "name": "ProximaAI — Parallel AI Generation Cockpit",
+  "short_name": "ProximaAI",
   "description": "Fire prompts at multiple AI models simultaneously and compare results side-by-side.",
   "start_url": "/",
   "display": "standalone",
