@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useReducer } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB, getStorageStats } from "./lib/storage.js";
 import { initSupabase, syncHistoryEntry } from "./lib/supabase.js";
 
 // ─── STYLES ───
@@ -283,6 +283,7 @@ export default function ProximaApp() {
   const [galleryTabState, setGalleryTabState] = useState("completed");
   const [galleryView, setGalleryView] = useState("masonry");
   const [numImages, setNumImages] = useState(1);
+  const [storageStats, setStorageStats] = useState(null);
   const multiImageFileRef = useRef(null);
   const [activeCount, setActiveCount] = useState(0);
   const pollRefs = useRef({});
@@ -752,7 +753,7 @@ export default function ProximaApp() {
           <button className={`sidebar-btn ${page==="cockpit"?"active":""}`} onClick={() => setPage("cockpit")} title="Cockpit">⚡</button>
           <button className={`sidebar-btn ${page==="gallery"?"active":""}`} onClick={() => setPage("gallery")} title="Gallery">🖼</button>
           <button className={`sidebar-btn ${page==="logs"?"active":""}`} onClick={() => setPage("logs")} title="Logs">📋</button>
-          <button className={`sidebar-btn ${page==="settings"?"active":""}`} onClick={() => setPage("settings")} title="Settings">⚙</button>
+          <button className={`sidebar-btn ${page==="settings"?"active":""}`} onClick={() => { setPage("settings"); getStorageStats().then(s => setStorageStats(s)); }} title="Settings">⚙</button>
           {activeCount > 0 && (
             <div style={{ position: "absolute", top: 68, left: 36, background: "var(--accent)", color: "white", fontSize: 9, fontWeight: 700, width: 16, height: 16, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: font }} className="pulse">{activeCount}</div>
           )}
@@ -1515,15 +1516,22 @@ export default function ProximaApp() {
                   </div>
                 </div>
 
-                {logs.length > 0 && (
-                  <div className="setting-group">
-                    <div className="setting-label">Data</div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all generation logs?")) { setLogs([]); clearHistory(); } }}>Clear Logs ({logs.length})</button>
-                      <button className="api-test-btn" onClick={() => { if (confirm("Clear all generation outputs?")) { setTasks([]); clearTasksDB(); savedTaskIds.current.clear(); } }}>Clear All Outputs</button>
+                <div className="setting-group">
+                  <div className="setting-label">Storage</div>
+                  {storageStats && (
+                    <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: font, lineHeight: 1.8, marginBottom: 10 }}>
+                      <div>Saved Outputs: <strong style={{ color: "var(--text-primary)" }}>{storageStats.tasks}</strong></div>
+                      <div>Generation Logs: <strong style={{ color: "var(--text-primary)" }}>{storageStats.history}</strong></div>
+                      <div>Favorites: <strong style={{ color: "var(--text-primary)" }}>{storageStats.favorites}</strong></div>
+                      {storageStats.usedMB && <div>Disk Usage: <strong style={{ color: "var(--text-primary)" }}>{storageStats.usedMB} MB</strong></div>}
                     </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all generation logs?")) { setLogs([]); clearHistory(); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Logs</button>
+                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all saved outputs?")) { setTasks([]); clearTasksDB(); savedTaskIds.current.clear(); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Outputs</button>
+                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear ALL data? This removes everything.")) { setLogs([]); setTasks([]); clearHistory(); clearTasksDB(); savedTaskIds.current.clear(); setSetting("apiKey", ""); setApiKey(""); getStorageStats().then(s => setStorageStats(s)); } }}>Reset Everything</button>
                   </div>
-                )}
+                </div>
               </div>
             )}
           </div>

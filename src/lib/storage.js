@@ -1,16 +1,22 @@
-// ─── IndexedDB Storage Layer ───
-// Zero dependencies. Falls back to localStorage if IndexedDB unavailable.
+// ─── ProximaAI IndexedDB Storage Layer ───
+// Optimized for: tasks with outputs, generation history, settings, favorites, presets
+// Falls back to localStorage if IndexedDB unavailable.
 
-const DB_NAME = "prism";
-const DB_VERSION = 2;
+const DB_NAME = "proximaai";
+const DB_VERSION = 3;
 
 const STORES = {
   settings: { keyPath: "key" },
-  history: { keyPath: "id", autoIncrement: false },
+  history: { keyPath: "id", autoIncrement: false, indexes: [{ name: "by_timestamp", keyPath: "timestamp" }] },
   favorites: { keyPath: "id", autoIncrement: false },
   presets: { keyPath: "modelId" },
-  tasks: { keyPath: "id", autoIncrement: false },
+  tasks: { keyPath: "id", autoIncrement: false, indexes: [{ name: "by_status", keyPath: "status" }, { name: "by_startTime", keyPath: "startTime" }] },
 };
+
+// Limits
+const MAX_TASKS = 500;
+const MAX_HISTORY = 1000;
+const PRUNE_BATCH = 50; // How many to delete when pruning
 
 let dbPromise = null;
 
@@ -25,15 +31,28 @@ function openDB() {
     request.onupgradeneeded = (e) => {
       const db = e.target.result;
       for (const [name, config] of Object.entries(STORES)) {
+        let store;
         if (!db.objectStoreNames.contains(name)) {
-          db.createObjectStore(name, config);
+          store = db.createObjectStore(name, { keyPath: config.keyPath, autoIncrement: config.autoIncrement || false });
+        } else {
+          store = e.currentTarget.transaction.objectStore(name);
+        }
+        // Create indexes if defined
+        if (config.indexes) {
+          for (const idx of config.indexes) {
+            if (!store.indexNames.contains(idx.name)) {
+              store.createIndex(idx.name, idx.keyPath, { unique: false });
+            }
+          }
         }
       }
+      // Migrate from old "prism" DB if upgrading
+      // Old data will be re-loaded via migrateFromLocalStorage on first run
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   }).catch(err => {
-    dbPromise = null; // Clear so next call retries
+    dbPromise = null;
     throw err;
   });
   return dbPromise;
@@ -51,7 +70,35 @@ function wrapRequest(req) {
   });
 }
 
-// ─── Public API ───
+// Batch write helper — uses a single transaction for multiple puts
+async function batchPut(storeName, items) {
+  if (!items.length) return;
+  try {
+    const db = await openDB();
+    const txn = db.transaction(storeName, "readwrite");
+    const store = txn.objectStore(storeName);
+    for (const item of items) {
+      try { store.put(item); } catch {}
+    }
+    await new Promise((res, rej) => { txn.oncomplete = res; txn.onerror = () => rej(txn.error); });
+  } catch {}
+}
+
+// Batch delete helper
+async function batchDelete(storeName, ids) {
+  if (!ids.length) return;
+  try {
+    const db = await openDB();
+    const txn = db.transaction(storeName, "readwrite");
+    const store = txn.objectStore(storeName);
+    for (const id of ids) {
+      try { store.delete(id); } catch {}
+    }
+    await new Promise((res, rej) => { txn.oncomplete = res; txn.onerror = () => rej(txn.error); });
+  } catch {}
+}
+
+// ─── Settings ───
 
 export async function getSetting(key) {
   try {
@@ -59,7 +106,7 @@ export async function getSetting(key) {
     const result = await wrapRequest(store.get(key));
     return result?.value ?? null;
   } catch {
-    const raw = localStorage.getItem(`prism-${key}`);
+    const raw = localStorage.getItem(`proximaai-${key}`) || localStorage.getItem(`prism-${key}`);
     if (raw === null) return null;
     try { return JSON.parse(raw); } catch { return raw; }
   }
@@ -70,21 +117,22 @@ export async function setSetting(key, value) {
     const store = await tx("settings", "readwrite");
     await wrapRequest(store.put({ key, value }));
   } catch {
-    localStorage.setItem(`prism-${key}`, typeof value === "string" ? value : JSON.stringify(value));
+    localStorage.setItem(`proximaai-${key}`, typeof value === "string" ? value : JSON.stringify(value));
   }
 }
+
+// ─── History (Generation Logs) ───
 
 export async function addHistoryEntry(entry) {
   try {
     const store = await tx("history", "readwrite");
     await wrapRequest(store.put(entry));
   } catch {
-    // Fallback: append to localStorage (capped at 200)
     try {
-      const logs = JSON.parse(localStorage.getItem("prism-logs") || "[]");
+      const logs = JSON.parse(localStorage.getItem("proximaai-logs") || "[]");
       logs.unshift(entry);
       if (logs.length > 200) logs.length = 200;
-      localStorage.setItem("prism-logs", JSON.stringify(logs));
+      localStorage.setItem("proximaai-logs", JSON.stringify(logs));
     } catch {}
   }
 }
@@ -93,12 +141,16 @@ export async function getHistory(limit = 500) {
   try {
     const store = await tx("history");
     const all = await wrapRequest(store.getAll());
-    // Sort newest first
     all.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    // Auto-prune if over limit
+    if (all.length > MAX_HISTORY) {
+      const toDelete = all.slice(MAX_HISTORY).map(h => h.id);
+      batchDelete("history", toDelete); // fire-and-forget
+    }
     return limit ? all.slice(0, limit) : all;
   } catch {
     try {
-      return JSON.parse(localStorage.getItem("prism-logs") || "[]");
+      return JSON.parse(localStorage.getItem("proximaai-logs") || localStorage.getItem("prism-logs") || "[]");
     } catch { return []; }
   }
 }
@@ -108,9 +160,12 @@ export async function clearHistory() {
     const store = await tx("history", "readwrite");
     await wrapRequest(store.clear());
   } catch {
+    localStorage.removeItem("proximaai-logs");
     localStorage.removeItem("prism-logs");
   }
 }
+
+// ─── Favorites ───
 
 export async function addFavorite(entry) {
   try {
@@ -133,6 +188,8 @@ export async function removeFavorite(id) {
   } catch {}
 }
 
+// ─── Presets ───
+
 export async function setPreset(modelId, params) {
   try {
     const store = await tx("presets", "readwrite");
@@ -152,37 +209,40 @@ export async function getPreset(modelId) {
 
 export async function saveTask(task) {
   try {
+    // Strip large unnecessary fields to save space — keep outputs, drop intermediate state
+    const slim = {
+      id: task.id, batchId: task.batchId, modelId: task.modelId,
+      modelName: task.modelName, provider: task.provider, price: task.price,
+      status: task.status, startTime: task.startTime, endTime: task.endTime,
+      wallClockMs: task.wallClockMs, inferenceMs: task.inferenceMs,
+      outputs: task.outputs, error: task.error,
+      genType: task.genType, prompt: task.prompt, negPrompt: task.negPrompt,
+      resolution: task.resolution, duration: task.duration,
+      seed: task.seed, aspectRatio: task.aspectRatio,
+      sourceImageUrl: task.sourceImageUrl,
+      sourceImageUrls: task.sourceImageUrls,
+      numImages: task.numImages,
+    };
     const store = await tx("tasks", "readwrite");
-    await wrapRequest(store.put(task));
+    await wrapRequest(store.put(slim));
   } catch {}
 }
 
 export async function saveTasks(taskList) {
-  try {
-    const db = await openDB();
-    const txn = db.transaction("tasks", "readwrite");
-    const store = txn.objectStore("tasks");
-    for (const task of taskList) {
-      try { store.put(task); } catch {}
-    }
-    await new Promise((res, rej) => { txn.oncomplete = res; txn.onerror = () => rej(txn.error); });
-  } catch {}
+  await batchPut("tasks", taskList);
 }
 
 export async function getCompletedTasks(limit = 200) {
   try {
     const store = await tx("tasks");
     const all = await wrapRequest(store.getAll());
-    // Only return terminal states — reject stale pending/processing from interrupted sessions
+    // Only return terminal states
     const terminal = all.filter(t => t.status === "completed" || t.status === "failed");
     terminal.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
-    // Prune old tasks beyond limit from IndexedDB to prevent unbounded growth
-    if (limit && terminal.length > limit) {
-      try {
-        const delStore = await tx("tasks", "readwrite");
-        const toDelete = terminal.slice(limit);
-        for (const t of toDelete) { try { delStore.delete(t.id); } catch {} }
-      } catch {}
+    // Auto-prune beyond limit
+    if (terminal.length > MAX_TASKS) {
+      const toDelete = terminal.slice(MAX_TASKS).map(t => t.id);
+      batchDelete("tasks", toDelete); // fire-and-forget
     }
     return limit ? terminal.slice(0, limit) : terminal;
   } catch { return []; }
@@ -195,34 +255,84 @@ export async function clearTasks() {
   } catch {}
 }
 
-// ─── Migration from localStorage ───
+// ─── Storage Stats ───
+
+export async function getStorageStats() {
+  try {
+    const taskStore = await tx("tasks");
+    const taskCount = await wrapRequest(taskStore.count());
+    const histStore = await tx("history");
+    const histCount = await wrapRequest(histStore.count());
+    const favStore = await tx("favorites");
+    const favCount = await wrapRequest(favStore.count());
+    // Estimate size via navigator.storage if available
+    let usedMB = null;
+    if (navigator.storage?.estimate) {
+      const est = await navigator.storage.estimate();
+      usedMB = ((est.usage || 0) / (1024 * 1024)).toFixed(1);
+    }
+    return { tasks: taskCount, history: histCount, favorites: favCount, usedMB };
+  } catch { return { tasks: 0, history: 0, favorites: 0, usedMB: null }; }
+}
+
+// ─── Migration from localStorage + old "prism" DB ───
+
 export async function migrateFromLocalStorage() {
   try {
-    // Migrate API key
-    const oldKey = localStorage.getItem("prism-api-key");
+    // Migrate API key from old keys
+    const oldKey = localStorage.getItem("prism-api-key") || localStorage.getItem("proximaai-apiKey");
     if (oldKey) {
       await setSetting("apiKey", oldKey);
       localStorage.removeItem("prism-api-key");
+      localStorage.removeItem("proximaai-apiKey");
     }
 
-    // Migrate logs
-    const oldLogs = localStorage.getItem("prism-logs");
+    // Migrate logs from old keys
+    const oldLogs = localStorage.getItem("prism-logs") || localStorage.getItem("proximaai-logs");
     if (oldLogs) {
       let logs;
       try { logs = JSON.parse(oldLogs); } catch { logs = []; }
       if (logs.length > 0) {
-        // Use synchronous puts within a single transaction to avoid auto-close
-        const db = await openDB();
-        const txn = db.transaction("history", "readwrite");
-        const store = txn.objectStore("history");
-        for (const log of logs) {
-          try { store.put(log); } catch {} // sync — no await
-        }
-        await new Promise((res, rej) => { txn.oncomplete = res; txn.onerror = () => rej(txn.error); });
+        await batchPut("history", logs);
       }
       localStorage.removeItem("prism-logs");
+      localStorage.removeItem("proximaai-logs");
     }
+
+    // Migrate settings
+    for (const key of ["defaultImageRes", "defaultVideoDur"]) {
+      const val = localStorage.getItem(`prism-${key}`) || localStorage.getItem(`proximaai-${key}`);
+      if (val) {
+        try { await setSetting(key, JSON.parse(val)); } catch { await setSetting(key, val); }
+        localStorage.removeItem(`prism-${key}`);
+        localStorage.removeItem(`proximaai-${key}`);
+      }
+    }
+
+    // Try to migrate from old "prism" IndexedDB if it exists
+    try {
+      const oldRequest = indexedDB.open("prism", 2);
+      oldRequest.onsuccess = () => {
+        const oldDb = oldRequest.result;
+        if (oldDb.objectStoreNames.contains("tasks")) {
+          const oldTxn = oldDb.transaction("tasks", "readonly");
+          const oldStore = oldTxn.objectStore("tasks");
+          const getAll = oldStore.getAll();
+          getAll.onsuccess = async () => {
+            if (getAll.result?.length > 0) {
+              await batchPut("tasks", getAll.result);
+            }
+            oldDb.close();
+            // Delete old DB after migration
+            try { indexedDB.deleteDatabase("prism"); } catch {}
+          };
+        } else {
+          oldDb.close();
+        }
+      };
+      oldRequest.onerror = () => {};
+    } catch {}
   } catch {
-    // Migration failed silently — localStorage data preserved as fallback
+    // Migration failed silently — old data preserved as fallback
   }
 }
