@@ -1292,28 +1292,27 @@ export default function ProximaApp() {
                   galleryCompleted.length === 0 ? (
                     <div className="empty-state"><div className="emoji">🖼️</div><div className="msg">Completed outputs will appear here.</div></div>
                   ) : galleryView === "masonry" ? (
-                    /* Masonry grid — packed by aspect ratio */
-                    <div style={{ columns: "2 280px", columnGap: 12 }}>
-                      {galleryCompleted.map(task => (
-                        <div key={task.id} style={{ breakInside: "avoid", marginBottom: 12, background: "rgba(8,12,25,0.45)", border: "1px solid var(--glass-border)", borderRadius: 12, overflow: "hidden" }}>
-                          {task.outputs?.map((url, i) => {
-                            const gType = task.genType || "";
-                            const isVideo = url.includes(".mp4") || url.includes("video") || gType === "t2v" || gType === "i2v" || gType === "avatar";
-                            return isVideo
-                              ? <video key={i} src={url} controls muted playsInline style={{ width: "100%", display: "block" }} onClick={() => setLightbox(url)} />
-                              : <img key={i} src={url} alt="" style={{ width: "100%", display: "block", cursor: "pointer" }} onClick={() => setLightbox(url)} />;
-                          })}
-                          <div style={{ padding: "8px 10px" }}>
-                            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-primary)" }}>{task.modelName}</div>
-                            <div style={{ fontSize: 10, color: "var(--text-muted)", margin: "2px 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.prompt?.slice(0, 80)}</div>
-                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "var(--text-muted)", fontFamily: font, marginTop: 4 }}>
-                              <span>{formatTime(task.wallClockMs)}</span>
-                              <span>{formatCost(task.price)}</span>
-                              <span>{timeAgo(task.endTime)}</span>
+                    /* 3-column thumbnail grid — tap to lightbox, long-press for info */
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4 }}>
+                      {galleryCompleted.flatMap(task =>
+                        (task.outputs || []).map((url, i) => {
+                          const gType = task.genType || "";
+                          const isVideo = url.includes(".mp4") || url.includes("video") || gType === "t2v" || gType === "i2v" || gType === "avatar";
+                          return (
+                            <div key={`${task.id}-${i}`} style={{ position: "relative", aspectRatio: "1", overflow: "hidden", borderRadius: 6, cursor: "pointer", background: "#111" }}
+                              onClick={() => setLightbox(url)}
+                              onContextMenu={e => { e.preventDefault(); setLightbox({ url, task }); }}>
+                              {isVideo
+                                ? <video src={url} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                                : <img src={url} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
+                              {isVideo && <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: 24, color: "white", textShadow: "0 1px 4px rgba(0,0,0,0.6)", pointerEvents: "none" }}>▶</div>}
+                              <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "16px 4px 3px", background: "linear-gradient(transparent, rgba(0,0,0,0.7))", fontSize: 8, color: "rgba(255,255,255,0.8)", fontFamily: font, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {task.modelName}
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      ))}
+                          );
+                        })
+                      )}
                     </div>
                   ) : (
                     /* Vertical list — full-width previews with detailed info */
@@ -1527,13 +1526,40 @@ export default function ProximaApp() {
         </div>
 
         {/* Lightbox */}
-        {lightbox && (
-          <div className="lightbox" onClick={() => setLightbox(null)}>
-            {lightbox.includes(".mp4") || lightbox.includes("video")
-              ? <video src={lightbox} controls autoPlay muted style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 10 }} onClick={e => e.stopPropagation()} />
-              : <img src={lightbox} alt="Full resolution" />}
-          </div>
-        )}
+        {lightbox && (() => {
+          const lbUrl = typeof lightbox === "string" ? lightbox : lightbox.url;
+          const lbTask = typeof lightbox === "object" ? lightbox.task : null;
+          const isVid = lbUrl?.includes(".mp4") || lbUrl?.includes("video");
+          return (
+            <div className="lightbox" onClick={() => setLightbox(null)}>
+              <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "94vw", maxHeight: "94vh" }}>
+                {isVid
+                  ? <video src={lbUrl} controls autoPlay muted style={{ maxWidth: "92vw", maxHeight: lbTask ? "70vh" : "92vh", borderRadius: 10 }} />
+                  : <img src={lbUrl} alt="Full resolution" style={{ maxWidth: "92vw", maxHeight: lbTask ? "70vh" : "92vh", borderRadius: 10, objectFit: "contain" }} />}
+                {lbTask && (
+                  <div style={{ marginTop: 10, padding: "12px 16px", background: "rgba(8,12,25,0.85)", borderRadius: 10, width: "92vw", maxHeight: "22vh", overflowY: "auto", border: "1px solid var(--glass-border)" }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>{lbTask.modelName}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", margin: "4px 0" }}>{lbTask.prompt}</div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: font, display: "flex", flexWrap: "wrap", gap: "6px 16px", marginTop: 6 }}>
+                      <span>Provider: {lbTask.provider}</span>
+                      <span>Time: {formatTime(lbTask.wallClockMs)}</span>
+                      <span>Cost: {formatCost(lbTask.price)}</span>
+                      <span>Seed: {lbTask.seed || "-1"}</span>
+                      <span>{lbTask.endTime ? new Date(lbTask.endTime).toLocaleString() : ""}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                      <button className="result-action-btn" onClick={async () => {
+                        try { const r = await fetch(lbUrl); const b = await r.blob(); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `${lbTask.modelName.replace(/\s+/g,"_")}_${Date.now()}.${isVid?"mp4":"png"}`; a.click(); URL.revokeObjectURL(a.href); } catch { window.open(lbUrl,"_blank"); }
+                      }}>↓ Save</button>
+                      <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(lbUrl); }}>📋 URL</button>
+                      <button className="result-action-btn" onClick={() => setLightbox(null)}>✕ Close</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </>
   );
