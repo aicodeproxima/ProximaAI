@@ -3,7 +3,7 @@ import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/model
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB, getStorageStats } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote } from "./lib/supabase.js";
 
 // ─── STYLES ───
 const font = `'JetBrains Mono', 'Fira Code', monospace`;
@@ -288,8 +288,13 @@ export default function ProximaApp() {
   const [activeCount, setActiveCount] = useState(0);
   const pollRefs = useRef({});
   const savedLogIds = useRef(new Set());
+  const savedTaskIds = useRef(new Set());
   const isGeneratingRef = useRef(false);
   const timerRefs = useRef({});
+  const initialLoadDone = useRef(false);
+  const apiKeyDebounceRef = useRef(null);
+  const taskSyncQueueRef = useRef([]);
+  const taskSyncTimerRef = useRef(null);
 
   // Load state from IndexedDB (with localStorage migration)
   useEffect(() => {
@@ -300,7 +305,11 @@ export default function ProximaApp() {
 
       // Load local data first (fast)
       const key = await getSetting("apiKey");
-      if (key && !cancelled) setApiKey(key);
+      if (key && !cancelled) {
+        setApiKey(key);
+        // Trigger balance check directly on initial load (bypasses debounced effect)
+        checkBalance(key).then(r => { if (r.balance !== null && !cancelled) setBalance(r.balance); }).catch(() => {});
+      }
       const logData = await getHistory(500);
       if (logData?.length && !cancelled) setLogs(logData);
       const savedTasks = await getCompletedTasks(500);
@@ -349,22 +358,33 @@ export default function ProximaApp() {
 
         // Merge settings: cloud wins for keys not set locally
         if (remote.settings) {
-          if (!key && remote.settings.apiKey) { setApiKey(remote.settings.apiKey); setSetting("apiKey", remote.settings.apiKey); }
+          if (!key && remote.settings.apiKey) {
+            setApiKey(remote.settings.apiKey);
+            setSetting("apiKey", remote.settings.apiKey);
+            checkBalance(remote.settings.apiKey).then(r => { if (r.balance !== null && !cancelled) setBalance(r.balance); }).catch(() => {});
+          }
           if (!savedImgRes && remote.settings.defaultImageRes) { setDefaultImageRes(remote.settings.defaultImageRes); setSetting("defaultImageRes", remote.settings.defaultImageRes); }
           if (!savedVidDur && remote.settings.defaultVideoDur) { setDefaultVideoDur(Number(remote.settings.defaultVideoDur)); setSetting("defaultVideoDur", remote.settings.defaultVideoDur); }
         }
       } catch {}
+      // Mark initial load complete so future apiKey changes debounce-sync to cloud
+      if (!cancelled) initialLoadDone.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Save API key
+  // Save API key — debounced to avoid keystroke-level syncs
   useEffect(() => {
-    if (apiKey) {
+    if (!apiKey) return;
+    // Skip sync if this update came from the initial cloud load (avoids echo)
+    if (!initialLoadDone.current) return;
+    if (apiKeyDebounceRef.current) clearTimeout(apiKeyDebounceRef.current);
+    apiKeyDebounceRef.current = setTimeout(() => {
       setSetting("apiKey", apiKey);
       syncSetting("apiKey", apiKey).catch(() => {});
       checkBalance(apiKey).then(r => { if (r.balance !== null) setBalance(r.balance); });
-    }
+    }, 800);
+    return () => { if (apiKeyDebounceRef.current) clearTimeout(apiKeyDebounceRef.current); };
   }, [apiKey]);
 
   // Save NEW logs to IndexedDB (and sync to Supabase) — skip already-saved entries
@@ -385,17 +405,23 @@ export default function ProximaApp() {
     setActiveCount(active);
   }, [tasks]);
 
-  // Persist completed/failed tasks to IndexedDB
-  const savedTaskIds = useRef(new Set());
+  // Persist completed/failed tasks to IndexedDB + batch sync to Supabase
   useEffect(() => {
     const toSave = tasks.filter(t =>
       (t.status === "completed" || t.status === "failed") && !savedTaskIds.current.has(t.id)
     );
+    if (toSave.length === 0) return;
     for (const t of toSave) {
       savedTaskIds.current.add(t.id);
       saveTask(t);
-      syncTask(t).catch(() => {});
+      taskSyncQueueRef.current.push(t);
     }
+    // Debounced batch upload to Supabase (flushes 300ms after last task)
+    if (taskSyncTimerRef.current) clearTimeout(taskSyncTimerRef.current);
+    taskSyncTimerRef.current = setTimeout(() => {
+      const queue = taskSyncQueueRef.current.splice(0);
+      if (queue.length > 0) syncTasksBatch(queue).catch(() => {});
+    }, 300);
   }, [tasks]);
 
   // Cleanup polling timeouts on unmount
@@ -1574,7 +1600,30 @@ export default function ProximaApp() {
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all generation logs? (local + cloud)")) { setLogs([]); savedLogIds.current.clear(); clearHistory(); clearHistoryRemote().catch(() => {}); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Logs</button>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all saved outputs? (local + cloud)")) { setTasks([]); clearTasksDB(); clearTasksRemote().catch(() => {}); savedTaskIds.current.clear(); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Outputs</button>
-                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear ALL data? This removes everything locally AND from the cloud.")) { setLogs([]); setTasks([]); savedLogIds.current.clear(); savedTaskIds.current.clear(); clearHistory(); clearTasksDB(); clearHistoryRemote().catch(() => {}); clearTasksRemote().catch(() => {}); setSetting("apiKey", ""); setApiKey(""); getStorageStats().then(s => setStorageStats(s)); } }}>Reset Everything</button>
+                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
+                      if (!confirm("Clear ALL data? This removes everything locally AND from the cloud.")) return;
+                      // Clear local state
+                      setLogs([]); setTasks([]);
+                      savedLogIds.current.clear();
+                      savedTaskIds.current.clear();
+                      taskSyncQueueRef.current = [];
+                      if (taskSyncTimerRef.current) clearTimeout(taskSyncTimerRef.current);
+                      // Clear local IndexedDB
+                      await clearHistory();
+                      await clearTasksDB();
+                      // Clear cloud (all tables)
+                      await Promise.allSettled([
+                        clearHistoryRemote(),
+                        clearTasksRemote(),
+                        clearSettingsRemote(),
+                        clearFavoritesRemote(),
+                      ]);
+                      // Clear local settings
+                      setSetting("apiKey", "");
+                      setApiKey("");
+                      setBalance(null);
+                      getStorageStats().then(s => setStorageStats(s));
+                    }}>Reset Everything</button>
                   </div>
                 </div>
               </div>

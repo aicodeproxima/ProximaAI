@@ -28,11 +28,15 @@ CREATE TABLE IF NOT EXISTS public.tasks (
   end_time BIGINT,
   wall_clock_ms INT,
   inference_ms INT,
+  per_model_resolution JSONB,
+  nsfw JSONB,
+  task_id TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS tasks_device_id_idx ON public.tasks(device_id);
 CREATE INDEX IF NOT EXISTS tasks_start_time_idx ON public.tasks(start_time DESC);
 CREATE INDEX IF NOT EXISTS tasks_status_idx ON public.tasks(status);
+CREATE INDEX IF NOT EXISTS tasks_device_time_idx ON public.tasks(device_id, start_time DESC);
 
 -- ─── HISTORY (generation logs / batches) ───
 CREATE TABLE IF NOT EXISTS public.history (
@@ -56,6 +60,7 @@ CREATE TABLE IF NOT EXISTS public.history (
 );
 CREATE INDEX IF NOT EXISTS history_device_id_idx ON public.history(device_id);
 CREATE INDEX IF NOT EXISTS history_timestamp_idx ON public.history(timestamp DESC);
+CREATE INDEX IF NOT EXISTS history_device_time_idx ON public.history(device_id, timestamp DESC);
 
 -- ─── SETTINGS (per-device key-value store) ───
 CREATE TABLE IF NOT EXISTS public.settings (
