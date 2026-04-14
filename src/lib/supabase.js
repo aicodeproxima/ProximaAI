@@ -17,6 +17,12 @@ export function isSupabaseConfigured() {
 }
 
 export function getDeviceId() {
+  // Use logged-in username as scope key — enables cross-device data sync
+  try {
+    const user = localStorage.getItem("proximaai-user");
+    if (user) return `user:${user}`;
+  } catch {}
+  // Fallback: random device ID for anonymous/pre-login sessions
   if (deviceId) return deviceId;
   try {
     let id = localStorage.getItem("proximaai-device-id");
@@ -31,6 +37,11 @@ export function getDeviceId() {
   } catch {
     return "anonymous";
   }
+}
+
+// Reset cached device ID — call after login/logout so next getDeviceId() re-reads
+export function resetDeviceIdCache() {
+  deviceId = null;
 }
 
 export async function initSupabase() {

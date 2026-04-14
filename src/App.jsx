@@ -3,7 +3,109 @@ import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/model
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB, getStorageStats } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache } from "./lib/supabase.js";
+
+// ─── LOGIN SCREEN ───
+function LoginScreen({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const font = `'JetBrains Mono', 'Fira Code', monospace`;
+  const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!username.trim() || !password) return;
+    const success = onLogin(username.trim(), password);
+    if (!success) {
+      setError("Invalid username or password");
+      setPassword("");
+    }
+  }
+
+  return (
+    <div style={{ width: "100%", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, boxSizing: "border-box" }}>
+      <form onSubmit={handleSubmit} style={{
+        background: "rgba(8,12,25,0.6)",
+        border: "1px solid rgba(99,102,241,0.2)",
+        borderRadius: 18,
+        padding: "36px 32px",
+        width: "100%",
+        maxWidth: 400,
+        boxShadow: "0 10px 60px rgba(0,0,0,0.5), 0 0 60px rgba(99,102,241,0.12)",
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+        fontFamily: fontBody,
+        color: "#e2e8f0",
+      }}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ fontSize: 48, marginBottom: 10, color: "#a78bfa", filter: "drop-shadow(0 0 20px rgba(167,139,250,0.4))" }}>◈</div>
+          <div style={{ fontFamily: font, fontSize: 20, fontWeight: 700, color: "#f1f5f9", letterSpacing: 1.5 }}>ProximaAI</div>
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontFamily: font, letterSpacing: 0.5 }}>PARALLEL AI GENERATION COCKPIT</div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <label style={{ display: "block", fontSize: 11, color: "#94a3b8", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Username</label>
+            <input
+              type="text"
+              value={username}
+              onChange={e => { setUsername(e.target.value); setError(""); }}
+              autoFocus
+              autoComplete="username"
+              style={{
+                width: "100%", background: "rgba(10,20,40,0.5)", border: "1px solid rgba(99,102,241,0.15)",
+                borderRadius: 10, padding: "12px 14px", color: "#f1f5f9", fontFamily: font, fontSize: 15,
+                outline: "none", boxSizing: "border-box", transition: "border-color 0.3s, box-shadow 0.3s",
+              }}
+              onFocus={e => { e.target.style.borderColor = "#6366f1"; e.target.style.boxShadow = "0 0 0 3px rgba(99,102,241,0.1)"; }}
+              onBlur={e => { e.target.style.borderColor = "rgba(99,102,241,0.15)"; e.target.style.boxShadow = "none"; }}
+            />
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 11, color: "#94a3b8", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => { setPassword(e.target.value); setError(""); }}
+              autoComplete="current-password"
+              style={{
+                width: "100%", background: "rgba(10,20,40,0.5)", border: "1px solid rgba(99,102,241,0.15)",
+                borderRadius: 10, padding: "12px 14px", color: "#f1f5f9", fontFamily: font, fontSize: 15,
+                outline: "none", boxSizing: "border-box", transition: "border-color 0.3s, box-shadow 0.3s",
+              }}
+              onFocus={e => { e.target.style.borderColor = "#6366f1"; e.target.style.boxShadow = "0 0 0 3px rgba(99,102,241,0.1)"; }}
+              onBlur={e => { e.target.style.borderColor = "rgba(99,102,241,0.15)"; e.target.style.boxShadow = "none"; }}
+            />
+          </div>
+          {error && (
+            <div style={{ fontSize: 12, color: "#ef4444", padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 10, fontFamily: font }}>
+              ✗ {error}
+            </div>
+          )}
+          <button type="submit"
+            disabled={!username.trim() || !password}
+            style={{
+              width: "100%", padding: "14px", border: "none", borderRadius: 12,
+              fontFamily: font, fontSize: 14, fontWeight: 700, letterSpacing: 0.5,
+              cursor: (!username.trim() || !password) ? "not-allowed" : "pointer",
+              background: (!username.trim() || !password) ? "rgba(30,41,59,0.3)" : "linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa)",
+              color: "white",
+              boxShadow: (!username.trim() || !password) ? "none" : "0 4px 20px rgba(99,102,241,0.35)",
+              transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)",
+              marginTop: 4,
+            }}>
+            SIGN IN
+          </button>
+        </div>
+
+        <div style={{ textAlign: "center", marginTop: 24, fontSize: 10, color: "#64748b", fontFamily: font, letterSpacing: 0.5 }}>
+          Cloud sync enabled · Works across all devices
+        </div>
+      </form>
+    </div>
+  );
+}
 
 // ─── STYLES ───
 const font = `'JetBrains Mono', 'Fira Code', monospace`;
@@ -255,6 +357,9 @@ function formatTimestamp(ts) {
 // ─── API SERVICE ───
 // ─── MAIN APP ───
 export default function ProximaApp() {
+  const [isAuthed, setIsAuthed] = useState(() => {
+    try { return !!localStorage.getItem("proximaai-user"); } catch { return false; }
+  });
   const [page, setPage] = useState("cockpit");
   const [apiKey, setApiKey] = useState("");
   const [balance, setBalance] = useState(null);
@@ -296,8 +401,41 @@ export default function ProximaApp() {
   const taskSyncQueueRef = useRef([]);
   const taskSyncTimerRef = useRef(null);
 
-  // Load state from IndexedDB (with localStorage migration)
+  // ─── AUTH HANDLERS ───
+  function handleLogin(username, password) {
+    // Simple credential check. Replace with stronger auth later if needed.
+    const VALID_USERS = { "admin": "admin" };
+    if (VALID_USERS[username] && VALID_USERS[username] === password) {
+      try {
+        localStorage.setItem("proximaai-user", username);
+      } catch {}
+      resetDeviceIdCache();
+      setIsAuthed(true);
+      return true;
+    }
+    return false;
+  }
+
+  function handleLogout() {
+    if (!confirm("Sign out? Your data will remain safely in the cloud — sign back in any time.")) return;
+    try { localStorage.removeItem("proximaai-user"); } catch {}
+    resetDeviceIdCache();
+    // Clear in-memory state so next login re-fetches fresh
+    setIsAuthed(false);
+    setTasks([]);
+    setLogs([]);
+    setApiKey("");
+    setBalance(null);
+    setPage("cockpit");
+    savedLogIds.current.clear();
+    savedTaskIds.current.clear();
+    initialLoadDone.current = false;
+    taskSyncQueueRef.current = [];
+  }
+
+  // Load state from IndexedDB + Supabase (gated on authentication)
   useEffect(() => {
+    if (!isAuthed) return;
     let cancelled = false;
     (async () => {
       await migrateFromLocalStorage();
@@ -371,7 +509,7 @@ export default function ProximaApp() {
       if (!cancelled) initialLoadDone.current = true;
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [isAuthed]);
 
   // Save API key — debounced to avoid keystroke-level syncs
   useEffect(() => {
@@ -813,6 +951,18 @@ export default function ProximaApp() {
   const activeTasks = tasks.filter(t => t.status === "pending" || t.status === "processing");
   // resOptions and arOptions are now computed dynamically in the settings panel based on selected models
   const needsImage = genType === "i2i" || genType === "i2v" || genType === "avatar";
+
+  // Show login screen if not authenticated
+  if (!isAuthed) {
+    return (
+      <>
+        <style>{css}</style>
+        <div className="proxima-app">
+          <LoginScreen onLogin={handleLogin} />
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -1518,6 +1668,24 @@ export default function ProximaApp() {
             {page === "settings" && (
               <div style={{ maxWidth: 500 }}>
                 <h2 style={{ fontFamily: font, fontSize: 16, marginBottom: 24, color: "var(--text-secondary)" }}>Settings</h2>
+
+                {/* Account */}
+                <div className="setting-group">
+                  <div className="setting-label">Account</div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 14px", background: "rgba(8,12,25,0.4)", border: "1px solid var(--glass-border)", borderRadius: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 600 }}>
+                        {(() => { try { return localStorage.getItem("proximaai-user") || "anonymous"; } catch { return "anonymous"; } })()}
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: font, marginTop: 2 }}>Signed in · Cloud sync active</div>
+                    </div>
+                    <button onClick={handleLogout}
+                      style={{ padding: "8px 14px", background: "rgba(239,68,68,0.1)", color: "var(--error)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, fontFamily: font, fontSize: 12, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
+                      Sign Out
+                    </button>
+                  </div>
+                </div>
+
                 <div className="setting-group">
                   <div className="setting-label">WaveSpeed API Key</div>
                   <input type="password" className="setting-input" placeholder="Enter your WaveSpeed API key..."
