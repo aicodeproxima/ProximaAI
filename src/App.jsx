@@ -3,7 +3,7 @@ import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/model
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB, getStorageStats } from "./lib/storage.js";
-import { initSupabase, syncHistoryEntry } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote } from "./lib/supabase.js";
 
 // ─── STYLES ───
 const font = `'JetBrains Mono', 'Fira Code', monospace`;
@@ -296,13 +296,14 @@ export default function ProximaApp() {
     let cancelled = false;
     (async () => {
       await migrateFromLocalStorage();
-      await initSupabase();
       if (cancelled) return;
+
+      // Load local data first (fast)
       const key = await getSetting("apiKey");
       if (key && !cancelled) setApiKey(key);
       const logData = await getHistory(500);
       if (logData?.length && !cancelled) setLogs(logData);
-      const savedTasks = await getCompletedTasks(200);
+      const savedTasks = await getCompletedTasks(500);
       if (savedTasks?.length && !cancelled) {
         for (const t of savedTasks) savedTaskIds.current.add(t.id);
         setTasks(savedTasks);
@@ -311,6 +312,48 @@ export default function ProximaApp() {
       if (savedImgRes && !cancelled) setDefaultImageRes(savedImgRes);
       const savedVidDur = await getSetting("defaultVideoDur");
       if (savedVidDur && !cancelled) setDefaultVideoDur(Number(savedVidDur));
+
+      // Then pull cloud data and merge (fills any gaps from other devices / recovery)
+      await initSupabase();
+      if (cancelled || !isSupabaseConfigured()) return;
+      try {
+        const remote = await pullAllRemoteData();
+        if (cancelled || !remote) return;
+
+        // Merge tasks: add any cloud tasks not already in local
+        if (remote.tasks?.length > 0) {
+          setTasks(prev => {
+            const existingIds = new Set(prev.map(t => t.id));
+            const newOnes = remote.tasks.filter(t => !existingIds.has(t.id));
+            // Save new cloud tasks to local IndexedDB
+            for (const t of newOnes) {
+              savedTaskIds.current.add(t.id);
+              saveTask(t);
+            }
+            return [...newOnes, ...prev].sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+          });
+        }
+
+        // Merge history: add any cloud logs not already in local
+        if (remote.history?.length > 0) {
+          setLogs(prev => {
+            const existingIds = new Set(prev.map(l => l.id));
+            const newOnes = remote.history.filter(l => !existingIds.has(l.id));
+            for (const l of newOnes) {
+              savedLogIds.current.add(l.id);
+              addHistoryEntry(l);
+            }
+            return [...newOnes, ...prev].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          });
+        }
+
+        // Merge settings: cloud wins for keys not set locally
+        if (remote.settings) {
+          if (!key && remote.settings.apiKey) { setApiKey(remote.settings.apiKey); setSetting("apiKey", remote.settings.apiKey); }
+          if (!savedImgRes && remote.settings.defaultImageRes) { setDefaultImageRes(remote.settings.defaultImageRes); setSetting("defaultImageRes", remote.settings.defaultImageRes); }
+          if (!savedVidDur && remote.settings.defaultVideoDur) { setDefaultVideoDur(Number(remote.settings.defaultVideoDur)); setSetting("defaultVideoDur", remote.settings.defaultVideoDur); }
+        }
+      } catch {}
     })();
     return () => { cancelled = true; };
   }, []);
@@ -319,6 +362,7 @@ export default function ProximaApp() {
   useEffect(() => {
     if (apiKey) {
       setSetting("apiKey", apiKey);
+      syncSetting("apiKey", apiKey).catch(() => {});
       checkBalance(apiKey).then(r => { if (r.balance !== null) setBalance(r.balance); });
     }
   }, [apiKey]);
@@ -350,6 +394,7 @@ export default function ProximaApp() {
     for (const t of toSave) {
       savedTaskIds.current.add(t.id);
       saveTask(t);
+      syncTask(t).catch(() => {});
     }
   }, [tasks]);
 
@@ -1493,14 +1538,14 @@ export default function ProximaApp() {
                     <div>
                       <label style={{ fontSize: 11, color: "var(--text-muted)" }}>Image Resolution</label>
                       <select className="settings-select" style={{ display: "block", marginTop: 4 }}
-                        value={defaultImageRes} onChange={e => { setDefaultImageRes(e.target.value); setSetting("defaultImageRes", e.target.value); }}>
+                        value={defaultImageRes} onChange={e => { setDefaultImageRes(e.target.value); setSetting("defaultImageRes", e.target.value); syncSetting("defaultImageRes", e.target.value).catch(() => {}); }}>
                         <option value="1k">1K</option><option value="2k">2K</option><option value="4k">4K</option>
                       </select>
                     </div>
                     <div>
                       <label style={{ fontSize: 11, color: "var(--text-muted)" }}>Video Duration</label>
                       <select className="settings-select" style={{ display: "block", marginTop: 4 }}
-                        value={defaultVideoDur} onChange={e => { setDefaultVideoDur(Number(e.target.value)); setSetting("defaultVideoDur", e.target.value); }}>
+                        value={defaultVideoDur} onChange={e => { setDefaultVideoDur(Number(e.target.value)); setSetting("defaultVideoDur", e.target.value); syncSetting("defaultVideoDur", e.target.value).catch(() => {}); }}>
                         <option value={5}>5s</option><option value={10}>10s</option><option value={15}>15s</option>
                       </select>
                     </div>
@@ -1527,9 +1572,9 @@ export default function ProximaApp() {
                     </div>
                   )}
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all generation logs?")) { setLogs([]); clearHistory(); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Logs</button>
-                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all saved outputs?")) { setTasks([]); clearTasksDB(); savedTaskIds.current.clear(); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Outputs</button>
-                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear ALL data? This removes everything.")) { setLogs([]); setTasks([]); clearHistory(); clearTasksDB(); savedTaskIds.current.clear(); setSetting("apiKey", ""); setApiKey(""); getStorageStats().then(s => setStorageStats(s)); } }}>Reset Everything</button>
+                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all generation logs? (local + cloud)")) { setLogs([]); savedLogIds.current.clear(); clearHistory(); clearHistoryRemote().catch(() => {}); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Logs</button>
+                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all saved outputs? (local + cloud)")) { setTasks([]); clearTasksDB(); clearTasksRemote().catch(() => {}); savedTaskIds.current.clear(); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Outputs</button>
+                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear ALL data? This removes everything locally AND from the cloud.")) { setLogs([]); setTasks([]); savedLogIds.current.clear(); savedTaskIds.current.clear(); clearHistory(); clearTasksDB(); clearHistoryRemote().catch(() => {}); clearTasksRemote().catch(() => {}); setSetting("apiKey", ""); setApiKey(""); getStorageStats().then(s => setStorageStats(s)); } }}>Reset Everything</button>
                   </div>
                 </div>
               </div>
