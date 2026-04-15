@@ -294,10 +294,12 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
   .topbar { height: 44px; padding: 0 16px; }
   .topbar-title { font-size: 11px; }
 
-  .content { padding: 16px; }
+  .content { padding: 16px 16px 120px 16px; -webkit-overflow-scrolling: touch; }
 
-  .cockpit { grid-template-columns: 1fr; gap: 16px; height: auto; }
-  .cockpit-left { padding-right: 0; gap: 14px; }
+  .cockpit { grid-template-columns: 1fr; gap: 16px; height: auto; min-height: auto; }
+  .cockpit-left { padding-right: 0; padding-bottom: 0; gap: 14px; overflow: visible; min-height: auto; }
+  .cockpit-left::-webkit-scrollbar { display: none; }
+  .cockpit-right { overflow: visible; padding-bottom: 0; }
 
   .type-tabs { gap: 4px; padding: 4px; border-radius: 12px; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .type-tabs::-webkit-scrollbar { display: none; }
