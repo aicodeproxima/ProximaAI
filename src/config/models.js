@@ -235,7 +235,7 @@ export const MODELS = {
     { id: "google/nano-banana-pro/edit", name: "Nano Banana Pro Edit", provider: "Google", price: 0.14, hot: true,
       params: { resolution: RES_NANO, negativePrompt: true, seed: true, maxImages: 8 } },
     { id: "google/gemini-2.5-flash-image/edit", name: "Gemini 2.5 Flash Edit", provider: "Google", price: 0.05,
-      params: { resolution: null, negativePrompt: false, seed: false, imageParam: "image", outputFormat: false } },
+      params: { resolution: null, negativePrompt: false, seed: false, maxImages: 10, outputFormat: false } },
 
     // ByteDance
     { id: "bytedance/seedream-v5.0-lite/edit", name: "Seedream 5.0 Lite Edit", provider: "ByteDance", price: 0.035, hot: true,
