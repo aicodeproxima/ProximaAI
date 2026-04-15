@@ -147,9 +147,13 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .content { flex: 1; overflow-y: auto; padding: 20px; min-width: 0; max-width: 100%; }
 
 /* Cockpit */
-.cockpit { display: grid; grid-template-columns: 360px 1fr; gap: 24px; height: 100%; }
-.cockpit-left { display: flex; flex-direction: column; gap: 16px; overflow-y: auto; padding-right: 8px; flex-shrink: 0; }
-.cockpit-right { overflow-y: auto; min-width: 0; }
+.cockpit { display: grid; grid-template-columns: 360px 1fr; gap: 24px; height: 100%; min-height: 0; }
+.cockpit-left { display: flex; flex-direction: column; gap: 16px; overflow-y: auto; overflow-x: hidden; padding-right: 8px; padding-bottom: 60px; flex-shrink: 0; min-height: 0; scrollbar-gutter: stable; }
+.cockpit-left::-webkit-scrollbar { width: 8px; }
+.cockpit-left::-webkit-scrollbar-track { background: rgba(10,20,40,0.2); border-radius: 4px; }
+.cockpit-left::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 4px; }
+.cockpit-left::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.5); }
+.cockpit-right { overflow-y: auto; min-width: 0; min-height: 0; padding-bottom: 40px; }
 @media (min-width: 1600px) {
   .cockpit { grid-template-columns: 400px 1fr; gap: 28px; }
 }
@@ -161,9 +165,15 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .card:hover { border-color: rgba(99,102,241,0.25); box-shadow: 0 4px 24px rgba(99,102,241,0.06); }
 .card-title { font-family: ${font}; font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 10px; }
 
-.type-tabs { display: flex; gap: 4px; background: rgba(10,20,40,0.08); border: 1px solid var(--glass-border); border-radius: 12px; padding: 3px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; flex-wrap: nowrap; flex-shrink: 0; }
-.type-tabs::-webkit-scrollbar { display: none; }
-.type-tab { flex: 0 0 auto; padding: 8px 10px; min-width: 100px; border: none; background: transparent; color: var(--text-muted); font-size: 12px; font-family: ${fontBody}; font-weight: 500; border-radius: 9px; cursor: pointer; transition: all 0.3s cubic-bezier(0.4,0,0.2,1); white-space: nowrap; text-align: center; }
+.type-tabs-wrap { position: relative; flex-shrink: 0; }
+.type-tabs-wrap::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 28px; pointer-events: none; background: linear-gradient(to right, transparent, rgba(5,8,22,0.6)); border-radius: 0 12px 12px 0; opacity: 0; transition: opacity 0.2s; }
+.type-tabs-wrap.has-overflow::after { opacity: 1; }
+.type-tabs { display: flex; gap: 4px; background: rgba(10,20,40,0.08); border: 1px solid var(--glass-border); border-radius: 12px; padding: 3px; overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+.type-tabs::-webkit-scrollbar { height: 4px; }
+.type-tabs::-webkit-scrollbar-track { background: transparent; }
+.type-tabs::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.25); border-radius: 2px; }
+.type-tabs::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.4); }
+.type-tab { flex: 0 0 auto; padding: 9px 14px; min-width: 110px; border: none; background: transparent; color: var(--text-muted); font-size: 12px; font-family: ${fontBody}; font-weight: 500; border-radius: 9px; cursor: pointer; transition: all 0.3s cubic-bezier(0.4,0,0.2,1); white-space: nowrap; text-align: center; scroll-snap-align: start; }
 .type-tab:hover { color: var(--text-secondary); background: rgba(99,102,241,0.08); }
 .type-tab:active { transform: scale(0.97); }
 .type-tab.active { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; box-shadow: 0 2px 12px rgba(99,102,241,0.3); }
@@ -1006,13 +1016,38 @@ export default function ProximaApp() {
               <div className="cockpit">
                 <div className="cockpit-left">
                   {/* Type Tabs */}
-                  <div className="type-tabs">
-                    {Object.entries(TYPE_LABELS).map(([key, label]) => (
-                      <button key={key} className={`type-tab ${genType===key?"active":""}`}
-                        onClick={() => { setGenType(key); setSelectedModels([]); setPerModelRes({}); setResolution(""); setDuration(5); setAspectRatio("auto"); setSourceImageUrls([]); if (key !== "i2i" && key !== "i2v" && key !== "avatar") { clearSourceImage(); } }}>
-                        {TYPE_ICONS[key]} {label}
-                      </button>
-                    ))}
+                  <div className="type-tabs-wrap" ref={el => {
+                    if (!el) return;
+                    const tabs = el.querySelector('.type-tabs');
+                    if (!tabs) return;
+                    const updateFade = () => {
+                      const maxScroll = tabs.scrollWidth - tabs.clientWidth;
+                      if (maxScroll > 2 && tabs.scrollLeft < maxScroll - 2) {
+                        el.classList.add('has-overflow');
+                      } else {
+                        el.classList.remove('has-overflow');
+                      }
+                    };
+                    updateFade();
+                    tabs.onscroll = updateFade;
+                    if (!el._resizeObs) {
+                      el._resizeObs = new ResizeObserver(updateFade);
+                      el._resizeObs.observe(tabs);
+                    }
+                  }}>
+                    <div className="type-tabs">
+                      {Object.entries(TYPE_LABELS).map(([key, label]) => (
+                        <button key={key} className={`type-tab ${genType===key?"active":""}`}
+                          onClick={e => {
+                            setGenType(key); setSelectedModels([]); setPerModelRes({}); setResolution(""); setDuration(5); setAspectRatio("auto"); setSourceImageUrls([]);
+                            if (key !== "i2i" && key !== "i2v" && key !== "avatar") { clearSourceImage(); }
+                            // Scroll selected tab into view
+                            e.currentTarget.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+                          }}>
+                          {TYPE_ICONS[key]} {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Prompt */}
