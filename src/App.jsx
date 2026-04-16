@@ -1200,7 +1200,29 @@ export default function ProximaApp() {
 
                   {/* Model Selector */}
                   <div className="card">
-                    <div className="card-title">Models — {selectedModels.length} selected</div>
+                    <div className="card-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span>Models — {selectedModels.length} selected</span>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {(genType === "image" || genType === "i2i") && (
+                          <button title="Select favorites (Nano Banana Pro, Seedream 5.0 Lite, Qwen 2.0 Pro)" onClick={() => {
+                            const favIds = genType === "image"
+                              ? ["google/nano-banana-pro/text-to-image", "bytedance/seedream-v5.0-lite", "wavespeed-ai/qwen-image-2.0-pro/text-to-image"]
+                              : ["google/nano-banana-pro/edit", "bytedance/seedream-v5.0-lite/edit", "wavespeed-ai/qwen-image-2.0-pro/edit"];
+                            const available = favIds.filter(id => models.some(m => m.id === id));
+                            setSelectedModels(available);
+                          }} style={{ background: "transparent", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontSize: 13, color: "var(--warning)", transition: "all 0.2s", lineHeight: 1 }}
+                            onMouseOver={e => { e.currentTarget.style.background = "rgba(245,158,11,0.1)"; }}
+                            onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}>⭐</button>
+                        )}
+                        <button title={selectedModels.length === models.length ? "Deselect all" : "Select all"} onClick={() => {
+                          setSelectedModels(selectedModels.length === models.length ? [] : models.map(m => m.id));
+                        }} style={{ background: "transparent", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontSize: 10, color: "var(--accent)", fontFamily: font, fontWeight: 600, transition: "all 0.2s", lineHeight: 1.4 }}
+                          onMouseOver={e => { e.currentTarget.style.background = "rgba(99,102,241,0.1)"; }}
+                          onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}>
+                          {selectedModels.length === models.length ? "NONE" : "ALL"}
+                        </button>
+                      </div>
+                    </div>
                     <div className="model-grid">
                       {models.map(m => (
                         <div key={m.id} className={`model-item ${selectedModels.includes(m.id)?"selected":""}`} onClick={() => toggleModel(m.id)}>
