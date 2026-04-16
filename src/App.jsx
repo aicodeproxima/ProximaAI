@@ -357,6 +357,33 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 `;
 
 // ─── HELPERS ───
+// Empirical avg generation time (ms) per model — from actual Supabase history
+const MODEL_AVG_MS = {
+  "alibaba/wan-2.6/text-to-image": 7000, "alibaba/wan-2.7/image-edit-pro": 19600,
+  "bytedance/seedream-v4.5": 25900, "bytedance/seedream-v5.0-lite": 34700,
+  "bytedance/seedream-v5.0-lite/edit": 35000, "bytedance/seedream-v5.0-lite/edit-sequential": 51100,
+  "bytedance/seedream-v5.0-lite/sequential": 36500, "bytedance/seedream-v4.5/edit": 26000,
+  "bytedance/seededit-v3": 20000, "google/imagen4": 22200,
+  "google/nano-banana-2/text-to-image": 30800, "google/nano-banana-2/edit": 31000,
+  "google/nano-banana-pro/text-to-image": 52000, "google/nano-banana-pro/edit": 52000,
+  "google/gemini-2.5-flash-image/edit": 15000,
+  "luma/photon": 6900, "openai/dall-e-3": 15000,
+  "wavespeed-ai/flux-2-klein-4b/text-to-image-lora": 23600,
+  "wavespeed-ai/flux-2-klein-9b/text-to-image": 5500,
+  "wavespeed-ai/flux-dev": 7000, "wavespeed-ai/flux-schnell": 5500,
+  "wavespeed-ai/flux-2-pro/edit": 12000, "wavespeed-ai/flux-kontext-pro": 12000,
+  "wavespeed-ai/phota/text-to-image": 33000, "wavespeed-ai/phota/edit": 33000,
+  "wavespeed-ai/qwen-image-2.0-pro/text-to-image": 10200,
+  "wavespeed-ai/qwen-image-2.0-pro/edit": 10200,
+  "wavespeed-ai/qwen-image-edit": 10000, "wavespeed-ai/qwen-image-text-to-image": 10000,
+  "wavespeed-ai/firered-image-v1.1-edit": 8000, "wavespeed-ai/step1x-edit": 8000,
+  "alibaba/wan-2.7/image-edit": 18000,
+};
+const FALLBACK_MS = { image: 15000, i2i: 20000, t2v: 120000, i2v: 90000, avatar: 60000 };
+function getExpectedMs(modelId, genType) {
+  return MODEL_AVG_MS[modelId] || FALLBACK_MS[genType] || 30000;
+}
+
 function genId() { return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
 function formatTime(ms) {
   if (ms < 1000) return `${ms}ms`;
@@ -1477,7 +1504,7 @@ export default function ProximaApp() {
                             <>
                               <div className="task-progress">
                                 <div className="task-progress-fill" style={{
-                                  width: `${Math.min(95, (task.wallClockMs / (genType === "image" ? 10000 : 180000)) * 100)}%`
+                                  width: `${Math.min(95, (task.wallClockMs / getExpectedMs(task.modelId, task.genType || genType)) * 100)}%`
                                 }} />
                               </div>
                               <button className="result-action-btn" style={{ marginTop: 6, fontSize: 10 }} onClick={() => cancelTask(task.id)}>✕ Cancel</button>
@@ -1660,7 +1687,7 @@ export default function ProximaApp() {
                           </div>
                           <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "4px 0" }}>{task.prompt?.slice(0, 80)}</div>
                           <div className="task-timer">{formatTime(task.wallClockMs || (Date.now() - task.startTime))}</div>
-                          <div className="task-progress"><div className="task-progress-fill" style={{ width: `${Math.min(95, ((Date.now() - task.startTime) / 60000) * 100)}%` }} /></div>
+                          <div className="task-progress"><div className="task-progress-fill" style={{ width: `${Math.min(95, ((Date.now() - task.startTime) / getExpectedMs(task.modelId, task.genType)) * 100)}%` }} /></div>
                           <div style={{ marginTop: 8 }}>
                             <button className="result-action-btn" onClick={() => cancelTask(task.id)}>✕ Cancel</button>
                           </div>
