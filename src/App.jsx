@@ -1234,7 +1234,7 @@ export default function ProximaApp() {
                           <button title="Select favorites (Nano Banana Pro, Seedream 5.0 Lite, Qwen 2.0 Pro)" onClick={() => {
                             const favIds = genType === "image"
                               ? ["google/nano-banana-pro/text-to-image", "bytedance/seedream-v5.0-lite", "wavespeed-ai/qwen-image-2.0-pro/text-to-image"]
-                              : ["google/nano-banana-pro/edit", "bytedance/seedream-v5.0-lite/edit", "wavespeed-ai/qwen-image-2.0-pro/edit"];
+                              : ["google/nano-banana-2/edit", "google/nano-banana-pro/edit", "bytedance/seedream-v5.0-lite/edit", "wavespeed-ai/qwen-image-2.0-pro/edit"];
                             const available = favIds.filter(id => models.some(m => m.id === id));
                             setSelectedModels(available);
                           }} style={{ background: "transparent", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontSize: 13, color: "var(--warning)", transition: "all 0.2s", lineHeight: 1 }}
