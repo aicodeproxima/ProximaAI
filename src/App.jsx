@@ -1214,13 +1214,15 @@ export default function ProximaApp() {
                             onMouseOver={e => { e.currentTarget.style.background = "rgba(245,158,11,0.1)"; }}
                             onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}>⭐</button>
                         )}
-                        <button title={selectedModels.length === models.length ? "Deselect all" : "Select all"} onClick={() => {
-                          setSelectedModels(selectedModels.length === models.length ? [] : models.map(m => m.id));
-                        }} style={{ background: "transparent", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontSize: 10, color: "var(--accent)", fontFamily: font, fontWeight: 600, transition: "all 0.2s", lineHeight: 1.4 }}
-                          onMouseOver={e => { e.currentTarget.style.background = "rgba(99,102,241,0.1)"; }}
-                          onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}>
-                          {selectedModels.length === models.length ? "NONE" : "ALL"}
-                        </button>
+                        <button title="Select all" onClick={() => setSelectedModels(models.map(m => m.id))}
+                          style={{ background: selectedModels.length === models.length ? "rgba(99,102,241,0.15)" : "transparent", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontSize: 10, color: "var(--accent)", fontFamily: font, fontWeight: 600, transition: "all 0.2s", lineHeight: 1.4 }}
+                          onMouseOver={e => { e.currentTarget.style.background = "rgba(99,102,241,0.15)"; }}
+                          onMouseOut={e => { e.currentTarget.style.background = selectedModels.length === models.length ? "rgba(99,102,241,0.15)" : "transparent"; }}>ALL</button>
+                        <button title="Deselect all" onClick={() => setSelectedModels([])}
+                          disabled={selectedModels.length === 0}
+                          style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, padding: "2px 7px", cursor: selectedModels.length === 0 ? "default" : "pointer", fontSize: 10, color: selectedModels.length === 0 ? "var(--text-muted)" : "var(--error)", fontFamily: font, fontWeight: 600, transition: "all 0.2s", lineHeight: 1.4, opacity: selectedModels.length === 0 ? 0.4 : 1 }}
+                          onMouseOver={e => { if (selectedModels.length > 0) e.currentTarget.style.background = "rgba(239,68,68,0.1)"; }}
+                          onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}>✕</button>
                       </div>
                     </div>
                     <div className="model-grid">
