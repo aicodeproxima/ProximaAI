@@ -221,7 +221,7 @@ export const MODELS = {
 
     // OpenAI
     { id: "openai/dall-e-3", name: "DALL-E 3", provider: "OpenAI", price: 0.08,
-      params: { resolution: { paramName: "size", options: [{ label: "1024x1024", value: "1024x1024" }, { label: "1024x1792", value: "1024x1792" }, { label: "1792x1024", value: "1792x1024" }], default: "1024x1024" }, negativePrompt: false, seed: false, outputFormat: false } },
+      params: { resolution: { paramName: "size", options: [{ label: "1024x1024", value: "1024*1024" }, { label: "1024x1792", value: "1024*1792" }, { label: "1792x1024", value: "1792*1024" }], default: "1024*1024" }, negativePrompt: false, seed: false, outputFormat: false } },
 
     // Luma
     { id: "luma/photon", name: "Luma Photon", provider: "Luma", price: 0.03,
