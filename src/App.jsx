@@ -158,7 +158,16 @@ function AccountModal({ onClose, onSaved }) {
       setStep("set-email");
       return;
     }
-    // Already verified — send OTP to existing email
+    // Skip re-verification if user verified within the last 10 minutes
+    const lastVerified = parseInt(creds?.last_verified_at || "0", 10);
+    const tenMinAgo = Date.now() - 10 * 60 * 1000;
+    if (lastVerified > tenMinAgo) {
+      if (kind === "username") setStep("change-username");
+      else if (kind === "password") setStep("change-password");
+      else if (kind === "email") setStep("change-email-new");
+      return;
+    }
+    // Send OTP to existing email
     const ok = await doSendOtp(creds.email);
     if (ok) setStep("verify-otp");
   }
@@ -176,12 +185,14 @@ function AccountModal({ onClose, onSaved }) {
     const r = await verifyEmailOtp(pendingVerifyEmail, otp.trim());
     setBusy(false);
     if (!r.ok) { setError(r.error || "Invalid code"); return; }
+    const now = String(Date.now());
     // First-time email setup: save email as verified and finish
     if (!creds?.email || creds.email !== pendingVerifyEmail) {
-      await saveCredentials({ email: pendingVerifyEmail, emailVerified: true });
-      setCreds(c => ({ ...c, email: pendingVerifyEmail, email_verified: "true" }));
+      await saveCredentials({ email: pendingVerifyEmail, emailVerified: true, lastVerifiedAt: now });
+      setCreds(c => ({ ...c, email: pendingVerifyEmail, email_verified: "true", last_verified_at: now }));
     } else {
-      await saveCredentials({ emailVerified: true });
+      await saveCredentials({ emailVerified: true, lastVerifiedAt: now });
+      setCreds(c => ({ ...c, last_verified_at: now }));
     }
     // Route to the action they wanted
     if (action === "username") setStep("change-username");
@@ -271,11 +282,21 @@ function AccountModal({ onClose, onSaved }) {
               Signed in as <b style={{ color: "#e2e8f0" }}>{creds?.username || "admin"}</b>
               {creds?.email && <><br/>Email: <span style={{ color: "#e2e8f0" }}>{creds.email}</span> {creds.email_verified === "true" ? "✓" : <span style={{ color: "#f59e0b" }}>(unverified)</span>}</>}
               {!creds?.email && <><br/><span style={{ color: "#f59e0b" }}>No email set — add one for account recovery</span></>}
+              {(() => {
+                const lv = parseInt(creds?.last_verified_at || "0", 10);
+                if (lv > Date.now() - 10 * 60 * 1000) {
+                  const mins = Math.max(1, Math.ceil((lv + 10 * 60 * 1000 - Date.now()) / 60000));
+                  return <><br/><span style={{ color: "#22c55e", fontSize: 11 }}>✓ Recently verified · skip re-verify for {mins} more min</span></>;
+                }
+                return null;
+              })()}
             </div>
+            {busy && <div style={{ color: "#6366f1", fontSize: 12, marginBottom: 10, textAlign: "center" }}>Sending verification code to your email...</div>}
+            {error && <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 10, padding: "10px 12px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 8 }}>✗ {error}</div>}
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <button style={btn()} onClick={() => startAction("username")}>Change Username</button>
-              <button style={btn()} onClick={() => startAction("password")}>Change Password</button>
-              <button style={btn()} onClick={() => startAction("email")}>{creds?.email ? "Change Email" : "Set Email"}</button>
+              <button disabled={busy} style={btn()} onClick={() => startAction("username")}>Change Username</button>
+              <button disabled={busy} style={btn()} onClick={() => startAction("password")}>Change Password</button>
+              <button disabled={busy} style={btn()} onClick={() => startAction("email")}>{creds?.email ? "Change Email" : "Set Email"}</button>
               <button style={{ ...btn(), marginTop: 8, background: "transparent" }} onClick={onClose}>Close</button>
             </div>
           </>

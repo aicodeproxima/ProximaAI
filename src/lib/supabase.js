@@ -377,14 +377,16 @@ export async function verifyCredentials(username, password) {
   return stored.password_hash === hash;
 }
 
-export async function saveCredentials({ username, password, email, emailVerified }) {
+export async function saveCredentials({ username, password, email, emailVerified, lastVerifiedAt }) {
   if (!supabase) return false;
   try {
     const rows = [];
-    if (username !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "username", value: username, updated_at: new Date().toISOString() });
-    if (password !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "password_hash", value: await sha256Hex(password), updated_at: new Date().toISOString() });
-    if (email !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "email", value: email, updated_at: new Date().toISOString() });
-    if (emailVerified !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "email_verified", value: String(emailVerified), updated_at: new Date().toISOString() });
+    const ts = new Date().toISOString();
+    if (username !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "username", value: username, updated_at: ts });
+    if (password !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "password_hash", value: await sha256Hex(password), updated_at: ts });
+    if (email !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "email", value: email, updated_at: ts });
+    if (emailVerified !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "email_verified", value: String(emailVerified), updated_at: ts });
+    if (lastVerifiedAt !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "last_verified_at", value: String(lastVerifiedAt), updated_at: ts });
     if (rows.length === 0) return true;
     const { error } = await supabase.from("settings").upsert(rows, { onConflict: "device_id,key" });
     return !error;
