@@ -343,3 +343,77 @@ export async function pullAllRemoteData() {
     favorites: results[3].status === "fulfilled" ? results[3].value : [],
   };
 }
+
+// ─── Account Credentials (globally stored, not device-scoped) ───
+// Stored in `settings` table with device_id="_account" so they sync across all devices
+
+const ACCOUNT_SCOPE = "_account";
+
+async function sha256Hex(str) {
+  const buf = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function getStoredCredentials() {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase.from("settings").select("key,value").eq("device_id", ACCOUNT_SCOPE);
+    if (error || !data) return null;
+    const result = {};
+    for (const row of data) result[row.key] = row.value;
+    return Object.keys(result).length > 0 ? result : null;
+  } catch { return null; }
+}
+
+export async function verifyCredentials(username, password) {
+  const stored = await getStoredCredentials();
+  if (!stored) {
+    // No stored creds — fallback to hardcoded admin/admin for initial setup
+    return username === "admin" && password === "admin";
+  }
+  if (stored.username !== username) return false;
+  const hash = await sha256Hex(password);
+  return stored.password_hash === hash;
+}
+
+export async function saveCredentials({ username, password, email, emailVerified }) {
+  if (!supabase) return false;
+  try {
+    const rows = [];
+    if (username !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "username", value: username, updated_at: new Date().toISOString() });
+    if (password !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "password_hash", value: await sha256Hex(password), updated_at: new Date().toISOString() });
+    if (email !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "email", value: email, updated_at: new Date().toISOString() });
+    if (emailVerified !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "email_verified", value: String(emailVerified), updated_at: new Date().toISOString() });
+    if (rows.length === 0) return true;
+    const { error } = await supabase.from("settings").upsert(rows, { onConflict: "device_id,key" });
+    return !error;
+  } catch { return false; }
+}
+
+// ─── Email OTP via Supabase Auth ───
+// Uses supabase.auth.signInWithOtp + verifyOtp to send/verify 6-digit email codes.
+// We discard the resulting auth session — we just use it for email verification.
+
+export async function sendEmailOtp(email) {
+  if (!supabase) return { ok: false, error: "Cloud sync not configured" };
+  try {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: true }
+    });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message || "Failed to send code" }; }
+}
+
+export async function verifyEmailOtp(email, token) {
+  if (!supabase) return { ok: false, error: "Cloud sync not configured" };
+  try {
+    const { error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
+    if (error) return { ok: false, error: error.message };
+    // Immediately sign out from Supabase Auth — we use our own auth system
+    try { await supabase.auth.signOut(); } catch {}
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message || "Verification failed" }; }
+}

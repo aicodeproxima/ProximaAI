@@ -3,7 +3,7 @@ import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/model
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB, getStorageStats } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp } from "./lib/supabase.js";
 
 // ─── LOGIN SCREEN ───
 function LoginScreen({ onLogin }) {
@@ -13,13 +13,19 @@ function LoginScreen({ onLogin }) {
   const font = `'JetBrains Mono', 'Fira Code', monospace`;
   const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
 
-  function handleSubmit(e) {
+  const [loading, setLoading] = useState(false);
+  async function handleSubmit(e) {
     e.preventDefault();
     if (!username.trim() || !password) return;
-    const success = onLogin(username.trim(), password);
-    if (!success) {
-      setError("Invalid username or password");
-      setPassword("");
+    setLoading(true);
+    try {
+      const success = await onLogin(username.trim(), password);
+      if (!success) {
+        setError("Invalid username or password");
+        setPassword("");
+      }
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -107,9 +113,275 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-// ─── STYLES ───
 const font = `'JetBrains Mono', 'Fira Code', monospace`;
 const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
+
+// ─── ACCOUNT MANAGEMENT MODAL ───
+function AccountModal({ onClose, onSaved }) {
+  // Steps: load → menu → set-email → verify-email → change-username → change-password → change-email-verify-new → done
+  const [step, setStep] = useState("load");
+  const [creds, setCreds] = useState(null);
+  const [email, setEmail] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const [newUsername, setNewUsername] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [action, setAction] = useState(""); // "username" | "password" | "email"
+  const [pendingVerifyEmail, setPendingVerifyEmail] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const stored = await getStoredCredentials();
+      setCreds(stored || {});
+      setEmail(stored?.email || "");
+      setStep("menu");
+    })();
+  }, []);
+
+  async function doSendOtp(toEmail) {
+    setBusy(true); setError("");
+    const r = await sendEmailOtp(toEmail);
+    setBusy(false);
+    if (!r.ok) { setError(r.error || "Failed to send code"); return false; }
+    setPendingVerifyEmail(toEmail);
+    return true;
+  }
+
+  async function startAction(kind) {
+    setError("");
+    setAction(kind);
+    if (!creds?.email || creds?.email_verified !== "true") {
+      setStep("set-email");
+      return;
+    }
+    // Already verified — send OTP to existing email
+    const ok = await doSendOtp(creds.email);
+    if (ok) setStep("verify-otp");
+  }
+
+  async function submitSetEmail(e) {
+    e.preventDefault();
+    if (!email.includes("@")) { setError("Enter a valid email"); return; }
+    const ok = await doSendOtp(email);
+    if (ok) setStep("verify-otp");
+  }
+
+  async function submitVerifyOtp(e) {
+    e.preventDefault();
+    setBusy(true); setError("");
+    const r = await verifyEmailOtp(pendingVerifyEmail, otp.trim());
+    setBusy(false);
+    if (!r.ok) { setError(r.error || "Invalid code"); return; }
+    // First-time email setup: save email as verified and finish
+    if (!creds?.email || creds.email !== pendingVerifyEmail) {
+      await saveCredentials({ email: pendingVerifyEmail, emailVerified: true });
+      setCreds(c => ({ ...c, email: pendingVerifyEmail, email_verified: "true" }));
+    } else {
+      await saveCredentials({ emailVerified: true });
+    }
+    // Route to the action they wanted
+    if (action === "username") setStep("change-username");
+    else if (action === "password") setStep("change-password");
+    else if (action === "email") setStep("change-email-new");
+    else setStep("menu");
+    setOtp("");
+  }
+
+  async function submitNewUsername(e) {
+    e.preventDefault();
+    if (!newUsername.trim() || newUsername.length < 2) { setError("Username must be at least 2 characters"); return; }
+    setBusy(true);
+    const ok = await saveCredentials({ username: newUsername.trim() });
+    setBusy(false);
+    if (!ok) { setError("Failed to save. Try again."); return; }
+    try { localStorage.setItem("proximaai-user", newUsername.trim()); } catch {}
+    setStep("done");
+    onSaved?.("Username changed");
+  }
+
+  async function submitNewPassword(e) {
+    e.preventDefault();
+    if (newPassword.length < 4) { setError("Password must be at least 4 characters"); return; }
+    if (newPassword !== confirmPassword) { setError("Passwords don't match"); return; }
+    setBusy(true);
+    const ok = await saveCredentials({ password: newPassword });
+    setBusy(false);
+    if (!ok) { setError("Failed to save. Try again."); return; }
+    setStep("done");
+    onSaved?.("Password changed");
+  }
+
+  async function submitNewEmail(e) {
+    e.preventDefault();
+    if (!newEmail.includes("@")) { setError("Enter a valid email"); return; }
+    // Send OTP to the NEW email to verify ownership
+    const ok = await doSendOtp(newEmail);
+    if (ok) setStep("verify-new-email");
+  }
+
+  async function submitVerifyNewEmail(e) {
+    e.preventDefault();
+    setBusy(true); setError("");
+    const r = await verifyEmailOtp(pendingVerifyEmail, otp.trim());
+    if (!r.ok) { setBusy(false); setError(r.error || "Invalid code"); return; }
+    const ok = await saveCredentials({ email: pendingVerifyEmail, emailVerified: true });
+    setBusy(false);
+    if (!ok) { setError("Failed to save"); return; }
+    setStep("done");
+    onSaved?.("Email changed");
+  }
+
+  const box = {
+    background: "rgba(8,12,25,0.95)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 16,
+    padding: "28px 26px", width: "100%", maxWidth: 440, color: "#e2e8f0", fontFamily: fontBody,
+    boxShadow: "0 20px 80px rgba(0,0,0,0.6), 0 0 80px rgba(99,102,241,0.15)",
+    backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+  };
+  const input = {
+    width: "100%", background: "rgba(10,20,40,0.5)", border: "1px solid rgba(99,102,241,0.2)",
+    borderRadius: 10, padding: "12px 14px", color: "#f1f5f9", fontFamily: font, fontSize: 15,
+    outline: "none", boxSizing: "border-box",
+  };
+  const btn = (variant) => ({
+    padding: "12px 20px", borderRadius: 10, fontFamily: font, fontSize: 13, fontWeight: 700,
+    cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1, letterSpacing: 0.5,
+    background: variant === "primary" ? "linear-gradient(135deg, #6366f1, #8b5cf6)" : "rgba(30,41,59,0.5)",
+    color: variant === "primary" ? "white" : "#e2e8f0",
+    border: variant === "primary" ? "none" : "1px solid rgba(99,102,241,0.2)",
+    transition: "all 0.2s",
+  });
+  const label = { fontSize: 11, color: "#94a3b8", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, display: "block" };
+  const title = { fontFamily: font, fontSize: 16, fontWeight: 700, marginBottom: 6, color: "#f1f5f9" };
+  const subtitle = { fontSize: 12, color: "#94a3b8", marginBottom: 20, lineHeight: 1.5 };
+
+  return (
+    <div onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(2,5,16,0.85)", backdropFilter: "blur(8px)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={box}>
+        {step === "load" && <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Loading...</div>}
+
+        {step === "menu" && (
+          <>
+            <div style={title}>Account Settings</div>
+            <div style={subtitle}>
+              Signed in as <b style={{ color: "#e2e8f0" }}>{creds?.username || "admin"}</b>
+              {creds?.email && <><br/>Email: <span style={{ color: "#e2e8f0" }}>{creds.email}</span> {creds.email_verified === "true" ? "✓" : <span style={{ color: "#f59e0b" }}>(unverified)</span>}</>}
+              {!creds?.email && <><br/><span style={{ color: "#f59e0b" }}>No email set — add one for account recovery</span></>}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <button style={btn()} onClick={() => startAction("username")}>Change Username</button>
+              <button style={btn()} onClick={() => startAction("password")}>Change Password</button>
+              <button style={btn()} onClick={() => startAction("email")}>{creds?.email ? "Change Email" : "Set Email"}</button>
+              <button style={{ ...btn(), marginTop: 8, background: "transparent" }} onClick={onClose}>Close</button>
+            </div>
+          </>
+        )}
+
+        {step === "set-email" && (
+          <form onSubmit={submitSetEmail}>
+            <div style={title}>Verify Your Email</div>
+            <div style={subtitle}>We'll send a 6-digit code to confirm it's really you before making account changes.</div>
+            <label style={label}>Email Address</label>
+            <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError(""); }} style={input} placeholder="you@example.com" autoFocus />
+            {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button type="button" style={btn()} onClick={() => setStep("menu")}>Back</button>
+              <button type="submit" disabled={busy} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Sending..." : "Send Code"}</button>
+            </div>
+          </form>
+        )}
+
+        {step === "verify-otp" && (
+          <form onSubmit={submitVerifyOtp}>
+            <div style={title}>Enter Verification Code</div>
+            <div style={subtitle}>Sent to <b style={{ color: "#e2e8f0" }}>{pendingVerifyEmail}</b>. Check spam if you don't see it.</div>
+            <label style={label}>6-Digit Code</label>
+            <input type="text" value={otp} onChange={e => { setOtp(e.target.value); setError(""); }} style={{ ...input, letterSpacing: 6, textAlign: "center", fontSize: 22 }} maxLength={6} autoFocus />
+            {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
+              <button type="submit" disabled={busy || otp.length < 6} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Verifying..." : "Verify"}</button>
+            </div>
+            <button type="button" onClick={() => doSendOtp(pendingVerifyEmail)} style={{ marginTop: 12, background: "transparent", border: "none", color: "#6366f1", fontSize: 12, cursor: "pointer", fontFamily: font }}>Resend code</button>
+          </form>
+        )}
+
+        {step === "change-username" && (
+          <form onSubmit={submitNewUsername}>
+            <div style={title}>New Username</div>
+            <div style={subtitle}>Current: <b>{creds?.username || "admin"}</b></div>
+            <label style={label}>New Username</label>
+            <input type="text" value={newUsername} onChange={e => { setNewUsername(e.target.value); setError(""); }} style={input} autoFocus />
+            {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
+              <button type="submit" disabled={busy} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Saving..." : "Save"}</button>
+            </div>
+          </form>
+        )}
+
+        {step === "change-password" && (
+          <form onSubmit={submitNewPassword}>
+            <div style={title}>New Password</div>
+            <div style={subtitle}>Minimum 4 characters.</div>
+            <label style={label}>New Password</label>
+            <input type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} style={input} autoFocus />
+            <label style={{ ...label, marginTop: 12 }}>Confirm Password</label>
+            <input type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setError(""); }} style={input} />
+            {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
+              <button type="submit" disabled={busy} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Saving..." : "Save"}</button>
+            </div>
+          </form>
+        )}
+
+        {step === "change-email-new" && (
+          <form onSubmit={submitNewEmail}>
+            <div style={title}>New Email</div>
+            <div style={subtitle}>We'll send a verification code to the new address.</div>
+            <label style={label}>New Email Address</label>
+            <input type="email" value={newEmail} onChange={e => { setNewEmail(e.target.value); setError(""); }} style={input} autoFocus />
+            {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
+              <button type="submit" disabled={busy} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Sending..." : "Send Code"}</button>
+            </div>
+          </form>
+        )}
+
+        {step === "verify-new-email" && (
+          <form onSubmit={submitVerifyNewEmail}>
+            <div style={title}>Confirm New Email</div>
+            <div style={subtitle}>Code sent to <b style={{ color: "#e2e8f0" }}>{pendingVerifyEmail}</b></div>
+            <label style={label}>6-Digit Code</label>
+            <input type="text" value={otp} onChange={e => { setOtp(e.target.value); setError(""); }} style={{ ...input, letterSpacing: 6, textAlign: "center", fontSize: 22 }} maxLength={6} autoFocus />
+            {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
+              <button type="submit" disabled={busy || otp.length < 6} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Verifying..." : "Verify & Save"}</button>
+            </div>
+          </form>
+        )}
+
+        {step === "done" && (
+          <div style={{ textAlign: "center", padding: "20px 0" }}>
+            <div style={{ fontSize: 48, color: "#22c55e", marginBottom: 12 }}>✓</div>
+            <div style={title}>Saved!</div>
+            <div style={subtitle}>Your changes are synced to the cloud and available on all your devices.</div>
+            <button style={btn("primary")} onClick={onClose}>Done</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── STYLES ───
 
 const css = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;700&display=swap');
@@ -438,6 +710,8 @@ export default function ProximaApp() {
   const [galleryView, setGalleryView] = useState("masonry");
   const [numImages, setNumImages] = useState(1);
   const [storageStats, setStorageStats] = useState(null);
+  const [showAccountModal, setShowAccountModal] = useState(false);
+  const [accountToast, setAccountToast] = useState("");
   const multiImageFileRef = useRef(null);
   const [activeCount, setActiveCount] = useState(0);
   const pollRefs = useRef({});
@@ -451,13 +725,14 @@ export default function ProximaApp() {
   const taskSyncTimerRef = useRef(null);
 
   // ─── AUTH HANDLERS ───
-  function handleLogin(username, password) {
-    // Simple credential check. Replace with stronger auth later if needed.
-    const VALID_USERS = { "admin": "admin" };
-    if (VALID_USERS[username] && VALID_USERS[username] === password) {
-      try {
-        localStorage.setItem("proximaai-user", username);
-      } catch {}
+  // Initialize Supabase early so verifyCredentials can run before login
+  useEffect(() => { if (isSupabaseConfigured()) initSupabase(); }, []);
+
+  async function handleLogin(username, password) {
+    // Check Supabase-stored credentials first, falls back to admin/admin if none set
+    const valid = await verifyCredentials(username, password);
+    if (valid) {
+      try { localStorage.setItem("proximaai-user", "admin"); } catch {}
       resetDeviceIdCache();
       setIsAuthed(true);
       return true;
@@ -1777,11 +2052,22 @@ export default function ProximaApp() {
                       </div>
                       <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: font, marginTop: 2 }}>Signed in · Cloud sync active</div>
                     </div>
-                    <button onClick={handleLogout}
-                      style={{ padding: "8px 14px", background: "rgba(239,68,68,0.1)", color: "var(--error)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, fontFamily: font, fontSize: 12, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
-                      Sign Out
-                    </button>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => setShowAccountModal(true)}
+                        style={{ padding: "8px 14px", background: "rgba(99,102,241,0.1)", color: "var(--accent)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 8, fontFamily: font, fontSize: 12, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
+                        Manage
+                      </button>
+                      <button onClick={handleLogout}
+                        style={{ padding: "8px 14px", background: "rgba(239,68,68,0.1)", color: "var(--error)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, fontFamily: font, fontSize: 12, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
+                        Sign Out
+                      </button>
+                    </div>
                   </div>
+                  {accountToast && (
+                    <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 8, fontSize: 12, color: "var(--success)", fontFamily: font }}>
+                      ✓ {accountToast}
+                    </div>
+                  )}
                 </div>
 
                 <div className="setting-group">
@@ -1896,6 +2182,17 @@ export default function ProximaApp() {
             )}
           </div>
         </div>
+
+        {/* Account Modal */}
+        {showAccountModal && (
+          <AccountModal
+            onClose={() => setShowAccountModal(false)}
+            onSaved={(msg) => {
+              setAccountToast(msg);
+              setTimeout(() => setAccountToast(""), 5000);
+            }}
+          />
+        )}
 
         {/* Lightbox */}
         {lightbox && (() => {
