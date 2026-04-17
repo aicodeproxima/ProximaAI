@@ -501,6 +501,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .settings-select, .settings-input { background: rgba(8,12,25,0.4); border: 1px solid var(--glass-border); border-radius: 6px; padding: 6px 8px; color: var(--text-primary); font-size: 12px; font-family: ${font}; outline: none; min-width: 70px; transition: border-color 0.3s, box-shadow 0.3s; }
 .settings-select:focus, .settings-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
 
+.action-panel { display: flex; flex-direction: column; gap: 10px; }
 .gen-btn { width: 100%; padding: 12px; border: none; border-radius: 12px; font-family: ${font}; font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.35s cubic-bezier(0.4,0,0.2,1); letter-spacing: 0.5px; position: relative; overflow: hidden; }
 .gen-btn.ready { background: linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa); color: white; box-shadow: 0 2px 12px rgba(99,102,241,0.25); }
 .gen-btn.ready:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(99,102,241,0.4); }
@@ -588,33 +589,37 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 
 @media (max-width: 768px) {
   .proxima-app { flex-direction: column; }
-  .sidebar { width: 100%; flex-direction: row; padding: 0 8px; gap: 2px; border-right: none; border-bottom: 1px solid var(--glass-border); overflow-x: auto; flex-shrink: 0; height: 52px; justify-content: center; background: rgba(5,8,22,0.12); }
-  .sidebar-logo { margin-bottom: 0; margin-right: 8px; font-size: 18px; }
-  .sidebar-btn { width: 44px; height: 44px; font-size: 20px; }
+  .sidebar { width: 100%; flex-direction: row; padding: 0 8px 0 max(8px, env(safe-area-inset-left)); gap: 2px; border-right: none; border-bottom: 1px solid var(--glass-border); overflow-x: auto; flex-shrink: 0; height: 56px; padding-top: env(safe-area-inset-top); justify-content: center; background: rgba(5,8,22,0.3); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .sidebar-logo { margin-bottom: 0; margin-right: 10px; font-size: 20px; }
+  .sidebar-btn { width: 46px; height: 46px; font-size: 22px; }
 
-  .topbar { height: 44px; padding: 0 16px; }
-  .topbar-title { font-size: 11px; }
+  .topbar { height: 46px; padding: 0 16px; background: rgba(5,8,22,0.3); }
+  .topbar-title { font-size: 11px; letter-spacing: 0.4px; }
 
-  .content { padding: 16px 16px 120px 16px; -webkit-overflow-scrolling: touch; }
+  /* Page-scroll container: large bottom pad so the sticky gen bar never covers content */
+  .content { padding: 14px 14px calc(160px + env(safe-area-inset-bottom)) 14px; -webkit-overflow-scrolling: touch; }
 
-  .cockpit { grid-template-columns: 1fr; gap: 16px; height: auto; min-height: auto; }
-  .cockpit-left { padding-right: 0; padding-bottom: 0; gap: 14px; overflow: visible; min-height: auto; }
+  .cockpit { grid-template-columns: 1fr; gap: 12px; height: auto; min-height: auto; position: relative; }
+  .cockpit-left { padding-right: 0; padding-bottom: 0; gap: 12px; overflow: visible; min-height: auto; }
   .cockpit-left::-webkit-scrollbar { display: none; }
   .cockpit-right { overflow: visible; padding-bottom: 0; }
 
+  .type-tabs-wrap { margin: 0 -2px; }
   .type-tabs { gap: 4px; padding: 4px; border-radius: 12px; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .type-tabs::-webkit-scrollbar { display: none; }
-  .type-tab { padding: 10px 12px; font-size: 13px; border-radius: 10px; flex: 0 0 auto; }
+  .type-tab { padding: 11px 14px; font-size: 13px; border-radius: 10px; flex: 0 0 auto; min-width: 0; }
 
-  .card { padding: 18px; border-radius: 14px; }
-  .card-title { font-size: 12px; margin-bottom: 12px; }
+  .card { padding: 14px; border-radius: 14px; }
+  .card-title { font-size: 11px; margin-bottom: 10px; letter-spacing: 0.8px; }
 
-  .prompt-area { min-height: 100px; padding: 14px; font-size: 16px; border-radius: 12px; }
+  .prompt-area { min-height: 96px; padding: 13px; font-size: 16px; border-radius: 11px; }
 
-  .model-grid { max-height: 280px; gap: 6px; }
-  .model-item { padding: 14px; border-radius: 12px; gap: 0; flex-wrap: wrap; align-items: flex-start; }
+  /* On taller screens, expand the model list so users see more without scrolling the inner panel */
+  .model-grid { max-height: 320px; gap: 6px; }
+
+  .model-item { padding: 12px 14px; border-radius: 11px; gap: 0; flex-wrap: wrap; align-items: flex-start; min-height: 56px; }
   .model-check { width: 22px; height: 22px; border-radius: 6px; font-size: 13px; margin-right: 12px; margin-top: 1px; }
-  .model-name { font-size: 15px; white-space: normal; overflow: visible; text-overflow: unset; flex: 1; min-width: calc(100% - 36px); }
+  .model-name { font-size: 14.5px; white-space: normal; overflow: visible; text-overflow: unset; flex: 1; min-width: calc(100% - 36px); line-height: 1.3; }
   .model-meta { display: flex; align-items: center; gap: 8px; width: 100%; padding-left: 34px; margin-top: 6px; }
   .model-provider { font-size: 11px; padding: 3px 8px; border-radius: 5px; }
   .hot-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
@@ -622,9 +627,14 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 
   .settings-row { gap: 10px; }
   .settings-row label { font-size: 13px; }
-  .settings-select, .settings-input { padding: 10px 12px; font-size: 14px; border-radius: 8px; min-width: 80px; }
+  .settings-select, .settings-input { padding: 10px 12px; font-size: 14px; border-radius: 8px; min-width: 80px; min-height: 40px; }
 
-  .gen-btn { padding: 16px; font-size: 16px; border-radius: 14px; }
+  /* Sticky bottom action panel — contains cost + generate button, always reachable by thumb on 6.7" phones */
+  .action-panel { position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)) 14px; background: linear-gradient(to top, rgba(2,5,16,0.97) 60%, rgba(2,5,16,0.8) 90%, rgba(2,5,16,0)); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-top: 1px solid rgba(99,102,241,0.15); display: flex; flex-direction: column; gap: 8px; }
+  .action-panel .cost-bar { margin: 0; padding: 9px 14px; font-size: 13px; border-radius: 10px; }
+  .action-panel .gen-btn { margin: 0; }
+  .action-panel .gen-hint { display: none; }
+  .gen-btn { padding: 15px; font-size: 15px; border-radius: 12px; min-height: 52px; letter-spacing: 0.8px; }
 
   .cost-bar { padding: 12px 16px; font-size: 14px; border-radius: 10px; }
 
@@ -1757,23 +1767,25 @@ export default function ProximaApp() {
                     )}
                   </div>
 
-                  {/* Cost + Generate */}
-                  {selectedModels.length > 0 && (
-                    <div className="cost-bar">
-                      <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>Est. cost ({selectedModels.length} model{selectedModels.length > 1 ? "s" : ""})</span>
-                      <span className="cost-amount">{formatCost(estCost)}</span>
-                    </div>
-                  )}
+                  {/* Cost + Generate — sticky on mobile, inline on desktop */}
+                  <div className="action-panel">
+                    {selectedModels.length > 0 && (
+                      <div className="cost-bar">
+                        <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>Est. cost ({selectedModels.length} model{selectedModels.length > 1 ? "s" : ""})</span>
+                        <span className="cost-amount">{formatCost(estCost)}</span>
+                      </div>
+                    )}
 
-                  <button className={`gen-btn ${isGenerating ? "running" : "ready"}`}
-                    disabled={!apiKey || (!prompt.trim() && genType !== "avatar") || selectedModels.length === 0 || (needsImage && !sourceImageUrl.trim())}
-                    onClick={handleGenerate}>
-                    {isGenerating ? `⏳ GENERATING (${activeCount} active)...` :
-                     !apiKey ? "⚠ SET API KEY IN SETTINGS" :
-                     needsImage && !sourceImageUrl.trim() ? "⚠ ADD SOURCE IMAGE ABOVE" :
-                     `⚡ ${genType === "i2i" ? "EDIT" : "GENERATE"}${selectedModels.length > 0 ? ` ACROSS ${selectedModels.length} MODELS` : ""}`}
-                  </button>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center" }}>Ctrl+Enter to generate</div>
+                    <button className={`gen-btn ${isGenerating ? "running" : "ready"}`}
+                      disabled={!apiKey || (!prompt.trim() && genType !== "avatar") || selectedModels.length === 0 || (needsImage && !sourceImageUrl.trim())}
+                      onClick={handleGenerate}>
+                      {isGenerating ? `⏳ GENERATING (${activeCount} active)...` :
+                       !apiKey ? "⚠ SET API KEY IN SETTINGS" :
+                       needsImage && !sourceImageUrl.trim() ? "⚠ ADD SOURCE IMAGE ABOVE" :
+                       `⚡ ${genType === "i2i" ? "EDIT" : "GENERATE"}${selectedModels.length > 0 ? ` ACROSS ${selectedModels.length} MODELS` : ""}`}
+                    </button>
+                    <div className="gen-hint" style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center" }}>Ctrl+Enter to generate</div>
+                  </div>
                 </div>
 
                 {/* Results */}
