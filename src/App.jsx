@@ -475,6 +475,9 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .type-tabs::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.25); border-radius: 2px; }
 .type-tabs::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.4); }
 .type-tab { flex: 0 0 auto; padding: 9px 14px; min-width: 110px; border: none; background: transparent; color: var(--text-muted); font-size: 12px; font-family: ${fontBody}; font-weight: 500; border-radius: 9px; cursor: pointer; transition: all 0.3s cubic-bezier(0.4,0,0.2,1); white-space: nowrap; text-align: center; scroll-snap-align: start; }
+.tab-label-full { display: inline; }
+.tab-label-short { display: none; }
+.tab-icon { display: none; }
 .type-tab:hover { color: var(--text-secondary); background: rgba(99,102,241,0.08); }
 .type-tab:active { transform: scale(0.97); }
 .type-tab.active { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; box-shadow: 0 2px 12px rgba(99,102,241,0.3); }
@@ -588,6 +591,8 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .task-status.processing { animation: glowPulse 2s ease-in-out infinite; }
 
 @media (max-width: 768px) {
+  /* Lock horizontal scroll — no page panning at all */
+  html, body, #root, .proxima-app, .main, .content { overflow-x: hidden; max-width: 100vw; }
   .proxima-app { flex-direction: column; }
   .sidebar { width: 100%; flex-direction: row; padding: 0 8px 0 max(8px, env(safe-area-inset-left)); gap: 2px; border-right: none; border-bottom: 1px solid var(--glass-border); overflow-x: auto; flex-shrink: 0; height: 56px; padding-top: env(safe-area-inset-top); justify-content: center; background: rgba(5,8,22,0.3); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
   .sidebar-logo { margin-bottom: 0; margin-right: 10px; font-size: 20px; }
@@ -604,10 +609,14 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
   .cockpit-left::-webkit-scrollbar { display: none; }
   .cockpit-right { overflow: visible; padding-bottom: 0; }
 
-  .type-tabs-wrap { margin: 0 -2px; }
-  .type-tabs { gap: 4px; padding: 4px; border-radius: 12px; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
-  .type-tabs::-webkit-scrollbar { display: none; }
-  .type-tab { padding: 11px 14px; font-size: 13px; border-radius: 10px; flex: 0 0 auto; min-width: 0; }
+  /* All 5 tabs fit on one row: icon stacked above short label, equal flex distribution */
+  .type-tabs-wrap { margin: 0; }
+  .type-tabs-wrap::after { display: none; }
+  .type-tabs { gap: 3px; padding: 3px; border-radius: 11px; overflow: hidden; flex-wrap: nowrap; width: 100%; }
+  .type-tab { padding: 7px 2px; font-size: 9.5px; border-radius: 9px; flex: 1 1 0; min-width: 0; max-width: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; line-height: 1.2; letter-spacing: 0.2px; font-weight: 600; white-space: nowrap; }
+  .type-tab .tab-icon { display: block; font-size: 16px; line-height: 1; }
+  .type-tab .tab-label-full { display: none; }
+  .type-tab .tab-label-short { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
 
   .card { padding: 14px; border-radius: 14px; }
   .card-title { font-size: 11px; margin-bottom: 10px; letter-spacing: 0.8px; }
@@ -1384,10 +1393,12 @@ export default function ProximaApp() {
                           onClick={e => {
                             setGenType(key); setSelectedModels([]); setPerModelRes({}); setResolution(""); setDuration(5); setAspectRatio("auto"); setSourceImageUrls([]);
                             if (key !== "i2i" && key !== "i2v" && key !== "avatar") { clearSourceImage(); }
-                            // Scroll selected tab into view
-                            e.currentTarget.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+                            // Scroll selected tab into view (desktop only — mobile shows all 5 in one row)
+                            if (window.innerWidth > 768) e.currentTarget.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
                           }}>
-                          {TYPE_ICONS[key]} {label}
+                          <span className="tab-icon">{TYPE_ICONS[key]}</span>
+                          <span className="tab-label tab-label-full">{label}</span>
+                          <span className="tab-label tab-label-short">{({ image: "Image", i2i: "Edit", t2v: "T→V", i2v: "I→V", avatar: "Avatar" }[key] || label)}</span>
                         </button>
                       ))}
                     </div>
