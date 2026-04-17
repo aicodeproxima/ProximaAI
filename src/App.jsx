@@ -299,8 +299,12 @@ function AccountModal({ onClose, onSaved }) {
           <form onSubmit={submitVerifyOtp}>
             <div style={title}>Enter Verification Code</div>
             <div style={subtitle}>Sent to <b style={{ color: "#e2e8f0" }}>{pendingVerifyEmail}</b>. Check spam if you don't see it.</div>
-            <label style={label}>6-Digit Code</label>
-            <input type="text" value={otp} onChange={e => { setOtp(e.target.value); setError(""); }} style={{ ...input, letterSpacing: 6, textAlign: "center", fontSize: 22 }} maxLength={6} autoFocus />
+            <label style={label}>Verification Code</label>
+            <input type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code"
+              value={otp}
+              onChange={e => { setOtp(e.target.value.replace(/\D/g, "").slice(0, 10)); setError(""); }}
+              onPaste={e => { e.preventDefault(); const t = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 10); setOtp(t); }}
+              style={{ ...input, letterSpacing: 6, textAlign: "center", fontSize: 22 }} maxLength={10} autoFocus />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
@@ -358,8 +362,12 @@ function AccountModal({ onClose, onSaved }) {
           <form onSubmit={submitVerifyNewEmail}>
             <div style={title}>Confirm New Email</div>
             <div style={subtitle}>Code sent to <b style={{ color: "#e2e8f0" }}>{pendingVerifyEmail}</b></div>
-            <label style={label}>6-Digit Code</label>
-            <input type="text" value={otp} onChange={e => { setOtp(e.target.value); setError(""); }} style={{ ...input, letterSpacing: 6, textAlign: "center", fontSize: 22 }} maxLength={6} autoFocus />
+            <label style={label}>Verification Code</label>
+            <input type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code"
+              value={otp}
+              onChange={e => { setOtp(e.target.value.replace(/\D/g, "").slice(0, 10)); setError(""); }}
+              onPaste={e => { e.preventDefault(); const t = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 10); setOtp(t); }}
+              style={{ ...input, letterSpacing: 6, textAlign: "center", fontSize: 22 }} maxLength={10} autoFocus />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
