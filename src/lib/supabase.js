@@ -344,6 +344,54 @@ export async function pullAllRemoteData() {
   };
 }
 
+// ─── Cloud Archive: store actual image/video bytes in Supabase Storage ───
+// WaveSpeed CDN URLs expire ~24h. If archive is enabled, we fetch each
+// output, upload the bytes to `generations` bucket, and swap the URL on
+// the task to the permanent Supabase Storage URL.
+
+const ARCHIVE_BUCKET = "generations";
+
+export async function archiveUrl(url, { taskId, index = 0 } = {}) {
+  if (!supabase) return { ok: false, error: "Cloud not configured" };
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return { ok: false, error: `Fetch failed ${resp.status}` };
+    const blob = await resp.blob();
+    // Infer extension from content-type (video/mp4 -> mp4, image/png -> png)
+    const ct = blob.type || resp.headers.get("content-type") || "application/octet-stream";
+    const ext = (ct.split("/")[1] || "bin").split(";")[0];
+    const username = getDeviceId().replace(/[^a-zA-Z0-9_-]/g, "_");
+    const id = taskId || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    const path = `${username}/${id}-${index}.${ext}`;
+    const { error } = await supabase.storage.from(ARCHIVE_BUCKET).upload(path, blob, {
+      contentType: ct, upsert: true, cacheControl: "31536000",
+    });
+    if (error) return { ok: false, error: error.message };
+    const { data: pub } = supabase.storage.from(ARCHIVE_BUCKET).getPublicUrl(path);
+    return { ok: true, url: pub.publicUrl, path, size: blob.size, contentType: ct };
+  } catch (e) { return { ok: false, error: e.message || "Archive failed" }; }
+}
+
+export async function deleteArchivedPath(path) {
+  if (!supabase || !path) return false;
+  try {
+    const { error } = await supabase.storage.from(ARCHIVE_BUCKET).remove([path]);
+    return !error;
+  } catch { return false; }
+}
+
+// Returns current cloud storage usage for the logged-in user (bytes + file count)
+export async function getArchiveStats() {
+  if (!supabase) return { bytes: 0, count: 0 };
+  const username = getDeviceId().replace(/[^a-zA-Z0-9_-]/g, "_");
+  try {
+    const { data, error } = await supabase.storage.from(ARCHIVE_BUCKET).list(username, { limit: 1000 });
+    if (error || !data) return { bytes: 0, count: 0 };
+    const bytes = data.reduce((s, f) => s + (f.metadata?.size || 0), 0);
+    return { bytes, count: data.length };
+  } catch { return { bytes: 0, count: 0 }; }
+}
+
 // ─── Backups: rolling snapshots of a user's full data, manual or auto ───
 // Stored in data_backups table. Auto-backups run via pg_cron every 2 days.
 // Manual backups happen before destructive actions (Clear Outputs / Reset Everything).
