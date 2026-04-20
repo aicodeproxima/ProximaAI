@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useReducer } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB, getStorageStats } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup } from "./lib/supabase.js";
 
 // ─── LOGIN SCREEN ───
@@ -118,13 +118,15 @@ const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
 
 // ─── FLOATING SAVE STATUS BUTTON ───
 // Always visible in bottom-left corner. Shows live sync status. Click to force-flush.
-function FloatingSaveButton({ saveStatus, onForceSave }) {
+function FloatingSaveButton({ saveStatus, onForceSave, failedCount = 0 }) {
+  // Honest status: if there are unreplayed failures, we're NEVER truly "saved"
+  const effective = failedCount > 0 && saveStatus !== "saving" ? "error" : saveStatus;
   const cfg = {
-    idle:   { icon: "✓", label: "Saved",      bg: "rgba(34,197,94,0.12)",  border: "rgba(34,197,94,0.35)",  color: "#22c55e", pulse: false },
-    saving: { icon: "⟳", label: "Saving…",    bg: "rgba(99,102,241,0.15)", border: "rgba(99,102,241,0.4)",  color: "#6366f1", pulse: true  },
-    saved:  { icon: "✓", label: "Saved!",     bg: "rgba(34,197,94,0.2)",   border: "rgba(34,197,94,0.5)",   color: "#22c55e", pulse: false },
-    error:  { icon: "⚠", label: "Retry",      bg: "rgba(239,68,68,0.15)",  border: "rgba(239,68,68,0.4)",   color: "#ef4444", pulse: false },
-  }[saveStatus] || { icon: "·", label: "Idle", bg: "rgba(30,41,59,0.3)", border: "rgba(99,102,241,0.2)", color: "#94a3b8", pulse: false };
+    idle:   { icon: "✓", label: "Saved",                              bg: "rgba(34,197,94,0.12)",  border: "rgba(34,197,94,0.35)",  color: "#22c55e", pulse: false },
+    saving: { icon: "⟳", label: "Saving…",                            bg: "rgba(99,102,241,0.15)", border: "rgba(99,102,241,0.4)",  color: "#6366f1", pulse: true  },
+    saved:  { icon: "✓", label: "Saved!",                             bg: "rgba(34,197,94,0.2)",   border: "rgba(34,197,94,0.5)",   color: "#22c55e", pulse: false },
+    error:  { icon: "⚠", label: failedCount > 0 ? `Retry (${failedCount})` : "Retry",  bg: "rgba(239,68,68,0.15)",  border: "rgba(239,68,68,0.4)",   color: "#ef4444", pulse: false },
+  }[effective] || { icon: "·", label: "Idle", bg: "rgba(30,41,59,0.3)", border: "rgba(99,102,241,0.2)", color: "#94a3b8", pulse: false };
 
   return (
     <button onClick={onForceSave} title="Click to save immediately"
@@ -827,6 +829,8 @@ export default function ProximaApp() {
   const apiKeyDebounceRef = useRef(null);
   const taskSyncQueueRef = useRef([]);
   const taskSyncTimerRef = useRef(null);
+  const bootstrapInProgress = useRef(false);
+  const [failedSyncCount, setFailedSyncCount] = useState(0);
 
   // ─── AUTH HANDLERS ───
   // Initialize Supabase early so verifyCredentials can run before login
@@ -892,8 +896,17 @@ export default function ProximaApp() {
       await initSupabase();
       if (cancelled || !isSupabaseConfigured()) return;
       try {
+        // Guard: flush any pending debounced writes BEFORE pulling cloud to avoid
+        // a stale pre-bootstrap write landing after we've loaded fresh cloud data.
+        bootstrapInProgress.current = true;
+        if (taskSyncTimerRef.current) {
+          clearTimeout(taskSyncTimerRef.current);
+          taskSyncTimerRef.current = null;
+          const queue = taskSyncQueueRef.current.splice(0);
+          if (queue.length > 0) { try { await syncTasksBatch(queue); } catch { for (const t of queue) addFailedSync({ kind: "task", id: t.id, data: t }); } }
+        }
         const remote = await pullAllRemoteData();
-        if (cancelled || !remote) return;
+        if (cancelled || !remote) { bootstrapInProgress.current = false; return; }
 
         // Merge tasks: add any cloud tasks not already in local
         if (remote.tasks?.length > 0) {
@@ -933,6 +946,31 @@ export default function ProximaApp() {
           if (!savedVidDur && remote.settings.defaultVideoDur) { setDefaultVideoDur(Number(remote.settings.defaultVideoDur)); setSetting("defaultVideoDur", remote.settings.defaultVideoDur); }
         }
       } catch {}
+      // Bootstrap complete — allow persistence effect to schedule writes again
+      bootstrapInProgress.current = false;
+      // Replay any failed syncs from previous sessions
+      if (!cancelled) {
+        const failed = getFailedSyncs();
+        setFailedSyncCount(failed.length);
+        if (failed.length > 0) {
+          const taskRetries = failed.filter(f => f.kind === "task").map(f => f.data).filter(Boolean);
+          if (taskRetries.length > 0) {
+            try {
+              await syncTasksBatch(taskRetries);
+              for (const t of taskRetries) removeFailedSync("task", t.id);
+            } catch {}
+          }
+          const historyRetries = failed.filter(f => f.kind === "history").map(f => f.data).filter(Boolean);
+          for (const entry of historyRetries) {
+            try { await syncHistoryEntry(entry); removeFailedSync("history", entry.id); } catch {}
+          }
+          const settingRetries = failed.filter(f => f.kind === "setting");
+          for (const s of settingRetries) {
+            try { await syncSetting(s.id, s.data); removeFailedSync("setting", s.id); } catch {}
+          }
+          setFailedSyncCount(getFailedSyncs().length);
+        }
+      }
       // Mark initial load complete so future apiKey changes debounce-sync to cloud
       if (!cancelled) initialLoadDone.current = true;
     })();
@@ -947,7 +985,12 @@ export default function ProximaApp() {
     if (apiKeyDebounceRef.current) clearTimeout(apiKeyDebounceRef.current);
     apiKeyDebounceRef.current = setTimeout(() => {
       setSetting("apiKey", apiKey);
-      trackedSync("apiKey", () => syncSetting("apiKey", apiKey)).catch(() => {});
+      // Preemptively queue as failed; remove on success. Guarantees no silent loss.
+      addFailedSync({ kind: "setting", id: "apiKey", data: apiKey });
+      setFailedSyncCount(getFailedSyncs().length);
+      trackedSync("apiKey", () => syncSetting("apiKey", apiKey))
+        .then(() => { removeFailedSync("setting", "apiKey"); setFailedSyncCount(getFailedSyncs().length); })
+        .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
       checkBalance(apiKey).then(r => { if (r.balance !== null) setBalance(r.balance); });
     }, 800);
     return () => { if (apiKeyDebounceRef.current) clearTimeout(apiKeyDebounceRef.current); };
@@ -960,7 +1003,11 @@ export default function ProximaApp() {
       if (latest?.id && !savedLogIds.current.has(latest.id)) {
         savedLogIds.current.add(latest.id);
         addHistoryEntry(latest);
-        trackedSync(`history-${latest.id}`, () => syncHistoryEntry(latest)).catch(() => {});
+        addFailedSync({ kind: "history", id: latest.id, data: latest });
+        setFailedSyncCount(getFailedSyncs().length);
+        trackedSync(`history-${latest.id}`, () => syncHistoryEntry(latest))
+          .then(() => { removeFailedSync("history", latest.id); setFailedSyncCount(getFailedSyncs().length); })
+          .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
       }
     }
   }, [logs]);
@@ -973,22 +1020,92 @@ export default function ProximaApp() {
 
   // Persist completed/failed tasks to IndexedDB + batch sync to Supabase
   useEffect(() => {
+    // Skip scheduling new writes during cloud bootstrap — prevents races with the pull
+    if (bootstrapInProgress.current) return;
     const toSave = tasks.filter(t =>
       (t.status === "completed" || t.status === "failed") && !savedTaskIds.current.has(t.id)
     );
     if (toSave.length === 0) return;
     for (const t of toSave) {
       savedTaskIds.current.add(t.id);
-      saveTask(t);
+      saveTask(t); // Local IndexedDB always succeeds first — cloud sync is separate
       taskSyncQueueRef.current.push(t);
+      // Also record in failed-queue preemptively so if the tab closes mid-debounce,
+      // the next session will replay it. Removed on successful cloud sync below.
+      addFailedSync({ kind: "task", id: t.id, data: t });
     }
+    setFailedSyncCount(getFailedSyncs().length);
     // Debounced batch upload to Supabase (flushes 300ms after last task)
     if (taskSyncTimerRef.current) clearTimeout(taskSyncTimerRef.current);
     taskSyncTimerRef.current = setTimeout(() => {
       const queue = taskSyncQueueRef.current.splice(0);
-      if (queue.length > 0) trackedSync(`tasks-batch-${Date.now()}`, () => syncTasksBatch(queue)).catch(() => {});
+      taskSyncTimerRef.current = null;
+      if (queue.length === 0) return;
+      trackedSync(`tasks-batch-${Date.now()}`, () => syncTasksBatch(queue))
+        .then(() => {
+          // Successful sync — clear the preemptive failure entries
+          for (const t of queue) removeFailedSync("task", t.id);
+          setFailedSyncCount(getFailedSyncs().length);
+        })
+        .catch(() => {
+          // Sync failed: entries already in failed-queue, nothing else to do.
+          // Next mount will replay them automatically.
+          setFailedSyncCount(getFailedSyncs().length);
+        });
     }, 300);
   }, [tasks]);
+
+  // Flush pending writes aggressively on page-hide / before-unload.
+  // This is the main defense against the race: tab-close mid-debounce used to drop
+  // the queued writes silently. Now we either (a) flush them immediately, or
+  // (b) warn the user and rely on the failed-sync queue to replay on next mount.
+  useEffect(() => {
+    const flushPending = () => {
+      // 1. Fire any pending task batch immediately
+      if (taskSyncTimerRef.current) {
+        clearTimeout(taskSyncTimerRef.current);
+        taskSyncTimerRef.current = null;
+        const queue = taskSyncQueueRef.current.splice(0);
+        if (queue.length > 0) {
+          // Fire-and-forget: we're mid-unload, can't await. The writes are already
+          // in addFailedSync() so if this doesn't complete, replay handles it.
+          syncTasksBatch(queue).then(() => {
+            for (const t of queue) removeFailedSync("task", t.id);
+          }).catch(() => {});
+        }
+      }
+      // 2. Fire any pending apiKey debounce
+      if (apiKeyDebounceRef.current) {
+        clearTimeout(apiKeyDebounceRef.current);
+        apiKeyDebounceRef.current = null;
+        if (apiKey) {
+          syncSetting("apiKey", apiKey).then(() => removeFailedSync("setting", "apiKey")).catch(() => {});
+        }
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flushPending();
+    };
+    const onBeforeUnload = (e) => {
+      flushPending();
+      // If there are still unsaved writes in the failed queue, warn the user
+      const failed = getFailedSyncs();
+      if (failed.length > 0 || taskSyncQueueRef.current.length > 0) {
+        e.preventDefault();
+        e.returnValue = "";
+        return "";
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("pagehide", flushPending);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", flushPending);
+    };
+  }, [apiKey]);
 
   // Cleanup polling timeouts on unmount
   useEffect(() => {
@@ -2383,15 +2500,33 @@ export default function ProximaApp() {
         </div>
 
         {/* Floating Save Status Button — always visible, bottom-left */}
-        <FloatingSaveButton saveStatus={saveStatus} onForceSave={async () => {
-          // Flush the task sync queue immediately
+        <FloatingSaveButton saveStatus={saveStatus} failedCount={failedSyncCount} onForceSave={async () => {
+          setSaveStatus("saving");
+          // 1. Flush pending task batch timer
           if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
           const queue = taskSyncQueueRef.current.splice(0);
-          if (queue.length > 0) await trackedSync("force-flush", () => syncTasksBatch(queue));
-          // Also flush any pending apiKey save
+          if (queue.length > 0) {
+            try { await syncTasksBatch(queue); for (const t of queue) removeFailedSync("task", t.id); } catch {}
+          }
+          // 2. Flush pending apiKey debounce
           if (apiKeyDebounceRef.current) { clearTimeout(apiKeyDebounceRef.current); apiKeyDebounceRef.current = null; }
-          if (apiKey) await trackedSync("force-apiKey", () => syncSetting("apiKey", apiKey));
-          setSaveStatus("saved"); setTimeout(() => setSaveStatus("idle"), 2000);
+          if (apiKey) { try { await syncSetting("apiKey", apiKey); removeFailedSync("setting", "apiKey"); } catch {} }
+          // 3. Replay any persisted failed syncs
+          const failed = getFailedSyncs();
+          const taskRetries = failed.filter(f => f.kind === "task").map(f => f.data).filter(Boolean);
+          if (taskRetries.length > 0) {
+            try { await syncTasksBatch(taskRetries); for (const t of taskRetries) removeFailedSync("task", t.id); } catch {}
+          }
+          for (const f of failed.filter(f => f.kind === "history")) {
+            try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id); } catch {}
+          }
+          for (const f of failed.filter(f => f.kind === "setting")) {
+            try { await syncSetting(f.id, f.data); removeFailedSync("setting", f.id); } catch {}
+          }
+          const remaining = getFailedSyncs().length;
+          setFailedSyncCount(remaining);
+          if (remaining === 0) { setSaveStatus("saved"); setTimeout(() => setSaveStatus("idle"), 2000); }
+          else setSaveStatus("error");
         }} />
 
         {/* Account Modal */}

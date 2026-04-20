@@ -367,3 +367,39 @@ export async function migrateFromLocalStorage() {
     // Migration failed silently — old data preserved as fallback
   }
 }
+
+// ─── Failed-sync retry queue ─────────────────────────────────────────────
+// Cloud writes that fail (network, rate-limit, tab-close mid-debounce) get
+// persisted here. On next mount, we replay them. Keeps us honest — failures
+// never vanish silently, and "saved" status never lies.
+const FAILED_KEY = "proximaai-failed-syncs";
+
+export function getFailedSyncs() {
+  try { return JSON.parse(localStorage.getItem(FAILED_KEY) || "[]"); }
+  catch { return []; }
+}
+
+export function addFailedSync(entry) {
+  try {
+    const list = getFailedSyncs();
+    // Dedupe by kind+id (don't pile up duplicates for the same task/log)
+    const existingIdx = list.findIndex(e => e.kind === entry.kind && e.id === entry.id);
+    const withMeta = { ...entry, ts: Date.now(), attempts: (entry.attempts || 0) + 1 };
+    if (existingIdx >= 0) list[existingIdx] = withMeta;
+    else list.push(withMeta);
+    // Cap at 200 entries to prevent unbounded growth
+    while (list.length > 200) list.shift();
+    localStorage.setItem(FAILED_KEY, JSON.stringify(list));
+  } catch {}
+}
+
+export function removeFailedSync(kind, id) {
+  try {
+    const list = getFailedSyncs().filter(e => !(e.kind === kind && e.id === id));
+    localStorage.setItem(FAILED_KEY, JSON.stringify(list));
+  } catch {}
+}
+
+export function clearFailedSyncs() {
+  try { localStorage.removeItem(FAILED_KEY); } catch {}
+}
