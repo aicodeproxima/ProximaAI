@@ -222,6 +222,9 @@ export async function saveTask(task) {
       sourceImageUrl: task.sourceImageUrl,
       sourceImageUrls: task.sourceImageUrls,
       numImages: task.numImages,
+      // Polling resumption fields — lets us continue in-flight generations after
+      // browser/tab close, refresh, or OS kill
+      pollUrl: task.pollUrl, taskId: task.taskId,
     };
     const store = await tx("tasks", "readwrite");
     await wrapRequest(store.put(slim));
@@ -230,6 +233,13 @@ export async function saveTask(task) {
 
 export async function saveTasks(taskList) {
   await batchPut("tasks", taskList);
+}
+
+export async function deleteTask(id) {
+  try {
+    const store = await tx("tasks", "readwrite");
+    await wrapRequest(store.delete(id));
+  } catch {}
 }
 
 export async function getCompletedTasks(limit = 200) {
@@ -245,6 +255,24 @@ export async function getCompletedTasks(limit = 200) {
       batchDelete("tasks", toDelete); // fire-and-forget
     }
     return limit ? terminal.slice(0, limit) : terminal;
+  } catch { return []; }
+}
+
+// Returns tasks still in-flight (pending/processing) so we can resume their polls
+// after page refresh, tab close, or OS killing the app. Stale tasks (>30 min old)
+// are auto-failed since WaveSpeed predictions expire.
+export async function getPendingTasks() {
+  try {
+    const store = await tx("tasks");
+    const all = await wrapRequest(store.getAll());
+    const STALE_MS = 30 * 60 * 1000;
+    const now = Date.now();
+    const pending = all.filter(t =>
+      (t.status === "pending" || t.status === "processing") &&
+      t.pollUrl && // must have pollUrl to resume
+      (now - (t.startTime || 0)) < STALE_MS
+    );
+    return pending;
   } catch { return []; }
 }
 

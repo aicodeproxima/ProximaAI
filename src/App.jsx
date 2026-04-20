@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useReducer } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup } from "./lib/supabase.js";
 
 // ─── LOGIN SCREEN ───
@@ -1112,6 +1112,103 @@ export default function ProximaApp() {
     return () => { Object.values(pollRefs.current).forEach(id => clearTimeout(id)); };
   }, []);
 
+  // ─── RESUME POLLING for in-flight tasks after refresh/close/OS-kill ───
+  // On mount (after auth), load any pending/processing tasks from IndexedDB
+  // with their saved pollUrl, inject them into state, and restart their polls.
+  // Without this, hitting refresh or being backgrounded kills the poll timer
+  // and the task stays "processing" forever.
+  useEffect(() => {
+    if (!isAuthed || !apiKey) return;
+    let cancelled = false;
+    (async () => {
+      const pending = await getPendingTasks();
+      if (cancelled || !pending?.length) return;
+      // Merge into state (de-duped by id)
+      setTasks(prev => {
+        const ids = new Set(prev.map(t => t.id));
+        const fresh = pending.filter(t => !ids.has(t.id));
+        return [...fresh, ...prev].sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+      });
+      // Restart polling for each
+      for (const task of pending) {
+        if (!task.pollUrl || pollRefs.current[task.id]) continue;
+        const pollInterval = (task.genType === "image" || task.genType === "i2i") ? 3000 : 15000;
+        const maxTimeout = (task.genType === "image" || task.genType === "i2i") ? 300000 : Infinity;
+        const pollUrl = task.pollUrl;
+        const poll = async () => {
+          if (maxTimeout !== Infinity && Date.now() - task.startTime > maxTimeout) {
+            setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "failed", error: "Timeout (resumed)", endTime: Date.now() } : t));
+            return;
+          }
+          try {
+            const result = await pollResult(apiKey, pollUrl);
+            const data = result?.data || result;
+            if (data.status === "completed" && data.outputs?.length > 0) {
+              const wallClock = Date.now() - task.startTime;
+              setTasks(prev => prev.map(t => t.id === task.id ? {
+                ...t, status: "completed", outputs: data.outputs,
+                endTime: Date.now(), wallClockMs: wallClock,
+                inferenceMs: data?.timings?.inference || wallClock,
+                nsfw: data?.has_nsfw_contents
+              } : t));
+            } else if (data.status === "failed") {
+              setTasks(prev => prev.map(t => t.id === task.id ? {
+                ...t, status: "failed", error: data.error || "Generation failed", endTime: Date.now()
+              } : t));
+            } else {
+              pollRefs.current[task.id] = setTimeout(poll, pollInterval);
+            }
+          } catch (e) {
+            if (e.code === 429) pollRefs.current[task.id] = setTimeout(poll, pollInterval * 2 + Math.random() * 2000);
+            else setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "failed", error: e.message || "Poll error (resumed)", endTime: Date.now() } : t));
+          }
+        };
+        // Start polling immediately (the task's been waiting)
+        pollRefs.current[task.id] = setTimeout(poll, 500);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAuthed, apiKey]);
+
+  // Clean up pollUrl from IndexedDB once a task reaches terminal state.
+  // Reuses the saveTask call that already runs in the persistence effect —
+  // at that point status is completed/failed so pollUrl is simply overwritten.
+  // Nothing extra to do; the field just becomes harmless metadata.
+
+  // ─── BACK-BUTTON TRAP (PWA / mobile browsers) ───
+  // Without this, Android back gesture or browser back button exits the PWA,
+  // killing in-flight polls. Trap popstate, require a second press within 2s
+  // to actually exit.
+  useEffect(() => {
+    if (!isAuthed) return;
+    // Seed two history entries so we have something to catch
+    try { window.history.pushState({ proximaTrap: 1 }, ""); } catch {}
+    let lastBackAt = 0;
+    let toastTimer = null;
+
+    const onPopState = () => {
+      const now = Date.now();
+      if (now - lastBackAt < 2000) {
+        // Second press within 2s — actually allow exit
+        window.removeEventListener("popstate", onPopState);
+        window.history.back();
+        return;
+      }
+      // First press — show toast, push state back
+      lastBackAt = now;
+      setAccountToast("Press back again to exit");
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => setAccountToast(""), 2000);
+      try { window.history.pushState({ proximaTrap: 1 }, ""); } catch {}
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      if (toastTimer) clearTimeout(toastTimer);
+    };
+  }, [isAuthed]);
+
   const models = MODELS[genType] || [];
   const estCost = selectedModels.reduce((sum, id) => {
     const m = models.find(x => x.id === id);
@@ -1266,7 +1363,9 @@ export default function ProximaApp() {
             return;
           }
 
-          setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "processing", taskId } : t));
+          // Persist pollUrl immediately so we can resume polling after tab close / refresh / OS kill
+          setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "processing", taskId, pollUrl } : t));
+          saveTask({ ...task, status: "processing", taskId, pollUrl });
 
           // Polling loop
           const pollInterval = (genType === "image" || genType === "i2i") ? 3000 : 15000;
