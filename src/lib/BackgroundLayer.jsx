@@ -2,30 +2,15 @@ import { useEffect, useMemo, useRef } from "react";
 
 /**
  * BackgroundLayer — animated app background for ProximaAI.
- *   type: 'void' | 'orbs' | 'stars' | 'matrix' | 'grid' | 'none'
+ *   type: 'orbs' | 'stars' | 'matrix' | 'grid' | 'none'
  *   accent: hex color used to tint each effect (e.g. theme accent)
  */
-export default function BackgroundLayer({ type = "void", accent = "#6366f1" }) {
+export default function BackgroundLayer({ type = "orbs", accent = "#6366f1" }) {
   if (type === "none") return null;
-  if (type === "void")   return <Void />;
   if (type === "stars")  return <Stars accent={accent} />;
   if (type === "matrix") return <Matrix accent={accent} />;
   if (type === "grid")   return <Grid accent={accent} />;
   return <Orbs accent={accent} />;
-}
-
-// ── Void: the original void.jpg background (ProximaAI default) ─────────────
-function Void() {
-  return (
-    <div style={{
-      ...BASE,
-      backgroundImage: "url('/void.jpg')",
-      backgroundPosition: "calc(50% + 0.24cm) center",
-      backgroundSize: "cover",
-      backgroundRepeat: "no-repeat",
-      backgroundAttachment: "fixed",
-    }} />
-  );
 }
 
 // ── Orbs: two floating radial-gradient blobs ───────────────────────────────

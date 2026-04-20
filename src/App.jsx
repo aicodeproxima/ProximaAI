@@ -468,7 +468,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 
 .proxima-app > * { position: relative; z-index: 1; }
 
-.sidebar { width: 56px; background: rgba(5,8,22,0.12); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 4px; flex-shrink: 0; }
+.sidebar { width: 56px; background: var(--nav-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 4px; flex-shrink: 0; }
 .sidebar-btn { width: 40px; height: 40px; border: none; background: transparent; color: var(--text-muted); border-radius: 10px; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.3s cubic-bezier(0.4,0,0.2,1); }
 .sidebar-btn:hover { background: rgba(99,102,241,0.1); color: var(--text-primary); transform: scale(1.1); }
 .sidebar-btn:active { transform: scale(0.95); }
@@ -476,7 +476,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .sidebar-logo { font-size: 22px; margin-bottom: 16px; cursor: default; }
 
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; position: relative; z-index: 1; }
-.topbar { height: 48px; border-bottom: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; flex-shrink: 0; background: rgba(5,8,22,0.1); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); position: relative; z-index: 10; }
+.topbar { height: 48px; border-bottom: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; flex-shrink: 0; background: var(--nav-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); position: relative; z-index: 10; }
 .topbar-title { font-family: ${font}; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; color: var(--text-secondary); }
 .balance-pill { font-family: ${font}; font-size: 12px; color: var(--success); background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.2); padding: 4px 10px; border-radius: 20px; }
 
@@ -497,14 +497,14 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
   .cockpit { grid-template-columns: 340px 1fr; gap: 20px; }
 }
 
-.card { background: rgba(8,12,25,0.45); border: 1px solid var(--glass-border); border-radius: 14px; padding: 16px; transition: border-color 0.3s, box-shadow 0.3s; }
+.card { background: var(--bg-card); border: 1px solid var(--glass-border); border-radius: 14px; padding: 16px; transition: border-color 0.3s, box-shadow 0.3s; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .card:hover { border-color: rgba(99,102,241,0.25); box-shadow: 0 4px 24px rgba(99,102,241,0.06); }
 .card-title { font-family: ${font}; font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 10px; }
 
 .type-tabs-wrap { position: relative; flex-shrink: 0; }
 .type-tabs-wrap::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 28px; pointer-events: none; background: linear-gradient(to right, transparent, rgba(5,8,22,0.6)); border-radius: 0 12px 12px 0; opacity: 0; transition: opacity 0.2s; }
 .type-tabs-wrap.has-overflow::after { opacity: 1; }
-.type-tabs { display: flex; gap: 4px; background: rgba(10,20,40,0.08); border: 1px solid var(--glass-border); border-radius: 12px; padding: 3px; overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+.type-tabs { display: flex; gap: 4px; background: var(--bg-input); border: 1px solid var(--glass-border); border-radius: 12px; padding: 3px; overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .type-tabs::-webkit-scrollbar { height: 4px; }
 .type-tabs::-webkit-scrollbar-track { background: transparent; }
 .type-tabs::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.25); border-radius: 2px; }
@@ -517,7 +517,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .type-tab:active { transform: scale(0.97); }
 .type-tab.active { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; box-shadow: 0 2px 12px rgba(99,102,241,0.3); }
 
-.prompt-area { width: 100%; min-height: 90px; background: rgba(8,12,25,0.4); border: 1px solid var(--glass-border); border-radius: 10px; padding: 12px; color: var(--text-primary); font-family: ${fontBody}; font-size: 14px; resize: vertical; outline: none; transition: border-color 0.3s, box-shadow 0.3s; }
+.prompt-area { width: 100%; min-height: 90px; background: var(--bg-input); border: 1px solid var(--glass-border); border-radius: 10px; padding: 12px; color: var(--text-primary); font-family: ${fontBody}; font-size: 14px; resize: vertical; outline: none; transition: border-color 0.3s, box-shadow 0.3s; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .prompt-area:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1), 0 0 20px rgba(99,102,241,0.08); }
 .prompt-area::placeholder { color: var(--text-muted); }
 
@@ -536,7 +536,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 
 .settings-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .settings-row label { font-size: 11px; color: var(--text-muted); font-weight: 500; }
-.settings-select, .settings-input { background: rgba(8,12,25,0.4); border: 1px solid var(--glass-border); border-radius: 6px; padding: 6px 8px; color: var(--text-primary); font-size: 12px; font-family: ${font}; outline: none; min-width: 70px; transition: border-color 0.3s, box-shadow 0.3s; }
+.settings-select, .settings-input { background: var(--bg-input); border: 1px solid var(--glass-border); border-radius: 6px; padding: 6px 8px; color: var(--text-primary); font-size: 12px; font-family: ${font}; outline: none; min-width: 70px; transition: border-color 0.3s, box-shadow 0.3s; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .settings-select:focus, .settings-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
 
 .action-panel { display: flex; flex-direction: column; gap: 10px; }
@@ -551,7 +551,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .cost-bar .cost-amount { font-family: ${font}; color: var(--amber); font-weight: 600; }
 
 /* Progress + Results */
-.task-card { background: rgba(8,12,25,0.45); border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px; margin-bottom: 12px; transition: border-color 0.3s; animation: fadeSlideIn 0.4s ease; }
+.task-card { background: var(--bg-card); border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px; margin-bottom: 12px; transition: border-color 0.3s; animation: fadeSlideIn 0.4s ease; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .task-card:hover { border-color: rgba(99,102,241,0.2); }
 @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 .task-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -569,7 +569,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 .result-img:hover { transform: scale(1.01); }
 .result-video { width: 100%; border-radius: 8px; margin-top: 10px; max-height: 300px; }
 .result-actions { display: flex; gap: 6px; margin-top: 8px; }
-.result-action-btn { padding: 5px 10px; font-size: 11px; border-radius: 6px; border: 1px solid var(--glass-border); background: rgba(8,12,25,0.4); color: var(--text-secondary); cursor: pointer; font-family: ${font}; transition: all 0.25s cubic-bezier(0.4,0,0.2,1); }
+.result-action-btn { padding: 5px 10px; font-size: 11px; border-radius: 6px; border: 1px solid var(--glass-border); background: var(--bg-input); color: var(--text-secondary); cursor: pointer; font-family: ${font}; transition: all 0.25s cubic-bezier(0.4,0,0.2,1); }
 .result-action-btn:hover { background: rgba(99,102,241,0.12); color: var(--text-primary); border-color: rgba(99,102,241,0.4); box-shadow: 0 2px 10px rgba(99,102,241,0.15); }
 .result-action-btn:active { transform: scale(0.96); }
 
@@ -592,7 +592,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 /* Settings */
 .setting-group { margin-bottom: 24px; }
 .setting-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
-.setting-input { width: 100%; background: rgba(8,12,25,0.4); border: 1px solid var(--glass-border); border-radius: 8px; padding: 10px 12px; color: var(--text-primary); font-family: ${font}; font-size: 13px; outline: none; transition: border-color 0.3s, box-shadow 0.3s; }
+.setting-input { width: 100%; background: var(--bg-input); border: 1px solid var(--glass-border); border-radius: 8px; padding: 10px 12px; color: var(--text-primary); font-family: ${font}; font-size: 13px; outline: none; transition: border-color 0.3s, box-shadow 0.3s; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .setting-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1), 0 0 20px rgba(99,102,241,0.06); }
 .setting-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 
@@ -798,7 +798,13 @@ export default function ProximaApp() {
   const [accountToast, setAccountToast] = useState("");
   // ── Theme + animated background settings ──
   const [theme, setThemeState] = useState(() => { try { return localStorage.getItem("proximaai-theme") || "default"; } catch { return "default"; } });
-  const [background, setBackgroundState] = useState(() => { try { return localStorage.getItem("proximaai-background") || "void"; } catch { return "void"; } });
+  const [background, setBackgroundState] = useState(() => {
+    try {
+      const v = localStorage.getItem("proximaai-background");
+      // Migrate legacy "void" preference to "orbs" since we removed the image bg
+      return (!v || v === "void") ? "orbs" : v;
+    } catch { return "orbs"; }
+  });
   const [lightMode, setLightModeState] = useState(() => { try { return localStorage.getItem("proximaai-lightMode") === "1"; } catch { return false; } });
   useTheme({ theme, lightMode });
 
@@ -922,7 +928,7 @@ export default function ProximaApp() {
       const savedTheme = await getSetting("theme");
       if (savedTheme && !cancelled) setThemeState(savedTheme);
       const savedBg = await getSetting("background");
-      if (savedBg && !cancelled) setBackgroundState(savedBg);
+      if (savedBg && !cancelled) setBackgroundState(savedBg === "void" ? "orbs" : savedBg);
       const savedLight = await getSetting("lightMode");
       if (savedLight != null && !cancelled) setLightModeState(savedLight === "1" || savedLight === "true");
 
@@ -2434,7 +2440,7 @@ export default function ProximaApp() {
                     <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Animated Background</div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: 6 }}>
                       {BACKGROUNDS.map(bg => {
-                        const labels = { void: "◈ Void", orbs: "◉ Orbs", stars: "✦ Stars", matrix: "⎔ Matrix", grid: "▦ Grid", none: "— None" };
+                        const labels = { orbs: "◉ Orbs", stars: "✦ Stars", matrix: "⎔ Matrix", grid: "▦ Grid", none: "— None" };
                         return (
                           <button key={bg} onClick={() => setBackground(bg)}
                             style={{
