@@ -15,6 +15,39 @@
  * @param {*}        defaultVal - The model's declared default
  * @returns {*} The best valid value to send
  */
+// Final defensive validation pass — runs AFTER buildPayload. Guarantees that
+// every field in the outgoing payload matches the model's schema, regardless
+// of how it got there. Blocks stale-bundle / race-condition bugs where a
+// "1k" label could leak into an API call that expects "1024*1024".
+export function validatePayload(payload, modelConfig) {
+  if (!modelConfig?.params) return payload;
+  const p = modelConfig.params;
+  const out = { ...payload };
+
+  if (p.resolution) {
+    const key = p.resolution.paramName;
+    const validValues = p.resolution.options.map(o => o.value);
+    if (out[key] !== undefined && !validValues.includes(out[key])) {
+      out[key] = p.resolution.default;
+    }
+  }
+  if (p.aspectRatio) {
+    const key = p.aspectRatio.paramName;
+    const validAR = p.aspectRatio.options.map(o => o.value);
+    if (out[key] !== undefined && !validAR.includes(out[key])) {
+      out[key] = p.aspectRatio.default;
+    }
+  }
+  if (p.duration && out.duration !== undefined) {
+    const validD = p.duration.options;
+    const numD = typeof out.duration === "number" ? out.duration : parseInt(out.duration);
+    if (!validD.includes(numD) && !validD.includes(String(numD))) {
+      out.duration = p.duration.default;
+    }
+  }
+  return out;
+}
+
 export function nearestValid(value, options, defaultVal) {
   // Nothing to match against — return the default
   if (!options || options.length === 0) return defaultVal;
@@ -184,5 +217,7 @@ export function buildPayload(model, userSettings, genType) {
     }
   }
 
-  return payload;
+  // Final belt-and-suspenders: validate every field against model schema
+  // (defensive against any code path that might write an invalid value)
+  return validatePayload(payload, model);
 }
