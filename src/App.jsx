@@ -3,7 +3,7 @@ import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/model
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, getCompletedTasks, clearTasks as clearTasksDB, getStorageStats } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup } from "./lib/supabase.js";
 
 // ─── LOGIN SCREEN ───
 function LoginScreen({ onLogin }) {
@@ -115,6 +115,36 @@ function LoginScreen({ onLogin }) {
 
 const font = `'JetBrains Mono', 'Fira Code', monospace`;
 const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
+
+// ─── FLOATING SAVE STATUS BUTTON ───
+// Always visible in bottom-left corner. Shows live sync status. Click to force-flush.
+function FloatingSaveButton({ saveStatus, onForceSave }) {
+  const cfg = {
+    idle:   { icon: "✓", label: "Saved",      bg: "rgba(34,197,94,0.12)",  border: "rgba(34,197,94,0.35)",  color: "#22c55e", pulse: false },
+    saving: { icon: "⟳", label: "Saving…",    bg: "rgba(99,102,241,0.15)", border: "rgba(99,102,241,0.4)",  color: "#6366f1", pulse: true  },
+    saved:  { icon: "✓", label: "Saved!",     bg: "rgba(34,197,94,0.2)",   border: "rgba(34,197,94,0.5)",   color: "#22c55e", pulse: false },
+    error:  { icon: "⚠", label: "Retry",      bg: "rgba(239,68,68,0.15)",  border: "rgba(239,68,68,0.4)",   color: "#ef4444", pulse: false },
+  }[saveStatus] || { icon: "·", label: "Idle", bg: "rgba(30,41,59,0.3)", border: "rgba(99,102,241,0.2)", color: "#94a3b8", pulse: false };
+
+  return (
+    <button onClick={onForceSave} title="Click to save immediately"
+      style={{
+        position: "fixed", left: "calc(14px + env(safe-area-inset-left))",
+        bottom: "calc(14px + env(safe-area-inset-bottom))",
+        zIndex: 1500, display: "flex", alignItems: "center", gap: 8,
+        padding: "8px 14px", borderRadius: 999,
+        background: cfg.bg, border: `1px solid ${cfg.border}`, color: cfg.color,
+        fontFamily: font, fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
+        backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.35)",
+        cursor: "pointer", transition: "all 0.25s cubic-bezier(0.4,0,0.2,1)",
+      }}>
+      <span style={{ fontSize: 14, display: "inline-block",
+        animation: cfg.pulse ? "spin 1.2s linear infinite" : "none" }}>{cfg.icon}</span>
+      <span>{cfg.label}</span>
+    </button>
+  );
+}
 
 // ─── ACCOUNT MANAGEMENT MODAL ───
 function AccountModal({ onClose, onSaved }) {
@@ -583,6 +613,7 @@ body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fo
 
 /* Animations */
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes glowPulse { 0%,100% { box-shadow: 0 0 12px rgba(99,102,241,0.15); } 50% { box-shadow: 0 0 24px rgba(99,102,241,0.3); } }
 .fade-in { animation: fadeIn 0.35s cubic-bezier(0.4,0,0.2,1); }
@@ -760,6 +791,31 @@ export default function ProximaApp() {
   const [storageStats, setStorageStats] = useState(null);
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [accountToast, setAccountToast] = useState("");
+  const [saveStatus, setSaveStatus] = useState("idle"); // "idle" | "saving" | "saved" | "error"
+  const pendingWritesRef = useRef(new Set());
+  const saveStatusTimerRef = useRef(null);
+  const [backups, setBackups] = useState([]);
+  const [showBackupsPanel, setShowBackupsPanel] = useState(false);
+
+  // Track any in-flight cloud write (lets the floating save button show live status)
+  const markWriteStart = useCallback((key) => {
+    pendingWritesRef.current.add(key);
+    setSaveStatus("saving");
+  }, []);
+  const markWriteEnd = useCallback((key, ok) => {
+    pendingWritesRef.current.delete(key);
+    if (!ok) { setSaveStatus("error"); return; }
+    if (pendingWritesRef.current.size === 0) {
+      setSaveStatus("saved");
+      if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
+    }
+  }, []);
+  const trackedSync = useCallback(async (key, fn) => {
+    markWriteStart(key);
+    try { const r = await fn(); markWriteEnd(key, true); return r; }
+    catch (e) { markWriteEnd(key, false); throw e; }
+  }, [markWriteStart, markWriteEnd]);
   const multiImageFileRef = useRef(null);
   const [activeCount, setActiveCount] = useState(0);
   const pollRefs = useRef({});
@@ -891,7 +947,7 @@ export default function ProximaApp() {
     if (apiKeyDebounceRef.current) clearTimeout(apiKeyDebounceRef.current);
     apiKeyDebounceRef.current = setTimeout(() => {
       setSetting("apiKey", apiKey);
-      syncSetting("apiKey", apiKey).catch(() => {});
+      trackedSync("apiKey", () => syncSetting("apiKey", apiKey)).catch(() => {});
       checkBalance(apiKey).then(r => { if (r.balance !== null) setBalance(r.balance); });
     }, 800);
     return () => { if (apiKeyDebounceRef.current) clearTimeout(apiKeyDebounceRef.current); };
@@ -904,7 +960,7 @@ export default function ProximaApp() {
       if (latest?.id && !savedLogIds.current.has(latest.id)) {
         savedLogIds.current.add(latest.id);
         addHistoryEntry(latest);
-        syncHistoryEntry(latest).catch(() => {});
+        trackedSync(`history-${latest.id}`, () => syncHistoryEntry(latest)).catch(() => {});
       }
     }
   }, [logs]);
@@ -930,7 +986,7 @@ export default function ProximaApp() {
     if (taskSyncTimerRef.current) clearTimeout(taskSyncTimerRef.current);
     taskSyncTimerRef.current = setTimeout(() => {
       const queue = taskSyncQueueRef.current.splice(0);
-      if (queue.length > 0) syncTasksBatch(queue).catch(() => {});
+      if (queue.length > 0) trackedSync(`tasks-batch-${Date.now()}`, () => syncTasksBatch(queue)).catch(() => {});
     }, 300);
   }, [tasks]);
 
@@ -2168,14 +2224,14 @@ export default function ProximaApp() {
                     <div>
                       <label style={{ fontSize: 11, color: "var(--text-muted)" }}>Image Resolution</label>
                       <select className="settings-select" style={{ display: "block", marginTop: 4 }}
-                        value={defaultImageRes} onChange={e => { setDefaultImageRes(e.target.value); setSetting("defaultImageRes", e.target.value); syncSetting("defaultImageRes", e.target.value).catch(() => {}); }}>
+                        value={defaultImageRes} onChange={e => { setDefaultImageRes(e.target.value); setSetting("defaultImageRes", e.target.value); trackedSync("defaultImageRes", () => syncSetting("defaultImageRes", e.target.value)).catch(() => {}); }}>
                         <option value="1k">1K</option><option value="2k">2K</option><option value="4k">4K</option>
                       </select>
                     </div>
                     <div>
                       <label style={{ fontSize: 11, color: "var(--text-muted)" }}>Video Duration</label>
                       <select className="settings-select" style={{ display: "block", marginTop: 4 }}
-                        value={defaultVideoDur} onChange={e => { setDefaultVideoDur(Number(e.target.value)); setSetting("defaultVideoDur", e.target.value); syncSetting("defaultVideoDur", e.target.value).catch(() => {}); }}>
+                        value={defaultVideoDur} onChange={e => { setDefaultVideoDur(Number(e.target.value)); setSetting("defaultVideoDur", e.target.value); trackedSync("defaultVideoDur", () => syncSetting("defaultVideoDur", e.target.value)).catch(() => {}); }}>
                         <option value={5}>5s</option><option value={10}>10s</option><option value={15}>15s</option>
                       </select>
                     </div>
@@ -2202,10 +2258,33 @@ export default function ProximaApp() {
                     </div>
                   )}
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all generation logs? (local + cloud)")) { setLogs([]); savedLogIds.current.clear(); clearHistory(); clearHistoryRemote().catch(() => {}); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Logs</button>
-                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={() => { if (confirm("Clear all saved outputs? (local + cloud)")) { setTasks([]); clearTasksDB(); clearTasksRemote().catch(() => {}); savedTaskIds.current.clear(); getStorageStats().then(s => setStorageStats(s)); } }}>Clear Outputs</button>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
-                      if (!confirm("Clear ALL data? This removes everything locally AND from the cloud.")) return;
+                      if (!confirm("Clear all generation logs? (local + cloud)\n\nA safety backup will be created first so you can restore it from the Backups panel.")) return;
+                      setSaveStatus("saving");
+                      await createBackup("pre-clear-logs", "Before Clear Logs");
+                      setLogs([]); savedLogIds.current.clear();
+                      await clearHistory();
+                      await clearHistoryRemote();
+                      getStorageStats().then(s => setStorageStats(s));
+                      setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
+                      setAccountToast("Logs cleared — safety backup saved");
+                      setTimeout(() => setAccountToast(""), 5000);
+                    }}>Clear Logs</button>
+                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
+                      if (!confirm("Clear all saved outputs? (local + cloud)\n\nA safety backup will be created first so you can restore it from the Backups panel.")) return;
+                      setSaveStatus("saving");
+                      await createBackup("pre-clear-outputs", "Before Clear Outputs");
+                      setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
+                      getStorageStats().then(s => setStorageStats(s));
+                      setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
+                      setAccountToast("Outputs cleared — safety backup saved");
+                      setTimeout(() => setAccountToast(""), 5000);
+                    }}>Clear Outputs</button>
+                    <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
+                      if (!confirm("Clear ALL data? This removes everything locally AND from the cloud.\n\nA full safety backup will be created first so you can restore it from the Backups panel.")) return;
+                      setSaveStatus("saving");
+                      // Full pre-destructive snapshot
+                      await createBackup("pre-reset", "Before Reset Everything");
                       // Clear local state
                       setLogs([]); setTasks([]);
                       savedLogIds.current.clear();
@@ -2227,13 +2306,93 @@ export default function ProximaApp() {
                       setApiKey("");
                       setBalance(null);
                       getStorageStats().then(s => setStorageStats(s));
+                      setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
+                      setAccountToast("Everything cleared — safety backup saved");
+                      setTimeout(() => setAccountToast(""), 5000);
                     }}>Reset Everything</button>
                   </div>
+                </div>
+
+                {/* Cloud Backups */}
+                <div className="setting-group">
+                  <div className="setting-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <span>Cloud Backups</span>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="api-test-btn" style={{ padding: "6px 12px", fontSize: 11 }} onClick={async () => {
+                        setSaveStatus("saving");
+                        const r = await createBackup("manual", "Manual snapshot");
+                        if (r.ok) { setSaveStatus("saved"); setTimeout(() => setSaveStatus("idle"), 2000); setAccountToast("Backup created"); setTimeout(() => setAccountToast(""), 4000); }
+                        else { setSaveStatus("error"); setAccountToast("Backup failed: " + (r.error || "unknown")); setTimeout(() => setAccountToast(""), 5000); }
+                        const list = await listBackups(20);
+                        setBackups(list);
+                      }}>+ Create Backup</button>
+                      <button className="api-test-btn" style={{ padding: "6px 12px", fontSize: 11, background: "rgba(30,41,59,0.5)", color: "var(--text-secondary)" }} onClick={async () => {
+                        if (!showBackupsPanel) { const list = await listBackups(20); setBackups(list); }
+                        setShowBackupsPanel(v => !v);
+                      }}>{showBackupsPanel ? "Hide" : "View"} ({backups.length || "·"})</button>
+                    </div>
+                  </div>
+                  <div className="setting-hint">Auto-backup runs every 2 days. Manual backups are saved immediately. Destructive actions (Clear / Reset) auto-create a backup first. Rolling retention: 30 auto + all manual.</div>
+                  {showBackupsPanel && (
+                    <div style={{ marginTop: 12, maxHeight: 360, overflowY: "auto", background: "rgba(8,12,25,0.4)", border: "1px solid var(--glass-border)", borderRadius: 10, padding: 6 }}>
+                      {backups.length === 0 ? (
+                        <div style={{ padding: 20, textAlign: "center", color: "var(--text-muted)", fontSize: 12 }}>No backups yet. Click "+ Create Backup" above to make one.</div>
+                      ) : backups.map(b => (
+                        <div key={b.id} style={{ padding: "10px 12px", borderBottom: "1px solid rgba(56,68,100,0.15)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 12, color: "var(--text-primary)", fontWeight: 600 }}>
+                              {b.backup_type === "manual" ? "📌 Manual" : b.backup_type === "auto-2day" ? "🔁 Auto (2-day)" : b.backup_type.startsWith("pre-") ? "🛡️ " + b.backup_type.replace("pre-", "Pre-") : b.backup_type}
+                              <span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 400, marginLeft: 8, fontFamily: font }}>
+                                {b.task_count} tasks · {b.history_count} logs
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 2, fontFamily: font }}>{formatTimestamp(b.created_at)}</div>
+                            {b.note && <div style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 2, fontStyle: "italic" }}>{b.note}</div>}
+                          </div>
+                          <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                            <button onClick={async () => {
+                              if (!confirm(`Restore this backup from ${formatTimestamp(b.created_at)}?\n\nThis replaces current data with the snapshot. A safety backup of your CURRENT state is taken first.`)) return;
+                              setSaveStatus("saving");
+                              const r = await restoreBackup(b.id);
+                              if (r.ok) {
+                                setAccountToast(`Restored ${r.tasks} tasks, ${r.history} logs. Refresh to see changes.`);
+                                setTimeout(() => setAccountToast(""), 6000);
+                                setSaveStatus("saved"); setTimeout(() => setSaveStatus("idle"), 2000);
+                                const list = await listBackups(20); setBackups(list);
+                                setTimeout(() => window.location.reload(), 1500);
+                              } else {
+                                setSaveStatus("error");
+                                setAccountToast("Restore failed: " + (r.error || "unknown"));
+                                setTimeout(() => setAccountToast(""), 5000);
+                              }
+                            }} style={{ padding: "5px 10px", fontSize: 10, background: "rgba(99,102,241,0.12)", color: "var(--accent)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 6, cursor: "pointer", fontFamily: font, fontWeight: 600 }}>Restore</button>
+                            <button onClick={async () => {
+                              if (!confirm("Delete this backup permanently?")) return;
+                              await deleteBackup(b.id);
+                              const list = await listBackups(20); setBackups(list);
+                            }} style={{ padding: "5px 9px", fontSize: 10, background: "transparent", color: "var(--error)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, cursor: "pointer", fontFamily: font }}>✕</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
           </div>
         </div>
+
+        {/* Floating Save Status Button — always visible, bottom-left */}
+        <FloatingSaveButton saveStatus={saveStatus} onForceSave={async () => {
+          // Flush the task sync queue immediately
+          if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
+          const queue = taskSyncQueueRef.current.splice(0);
+          if (queue.length > 0) await trackedSync("force-flush", () => syncTasksBatch(queue));
+          // Also flush any pending apiKey save
+          if (apiKeyDebounceRef.current) { clearTimeout(apiKeyDebounceRef.current); apiKeyDebounceRef.current = null; }
+          if (apiKey) await trackedSync("force-apiKey", () => syncSetting("apiKey", apiKey));
+          setSaveStatus("saved"); setTimeout(() => setSaveStatus("idle"), 2000);
+        }} />
 
         {/* Account Modal */}
         {showAccountModal && (

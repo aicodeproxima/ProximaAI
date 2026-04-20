@@ -344,6 +344,107 @@ export async function pullAllRemoteData() {
   };
 }
 
+// ─── Backups: rolling snapshots of a user's full data, manual or auto ───
+// Stored in data_backups table. Auto-backups run via pg_cron every 2 days.
+// Manual backups happen before destructive actions (Clear Outputs / Reset Everything).
+
+export async function createBackup(type = "manual", note = null) {
+  if (!supabase) return { ok: false, error: "Cloud not configured" };
+  const username = getDeviceId();
+  try {
+    // Pull current state to embed into the snapshot
+    const [tasksRes, historyRes, settingsRes, favoritesRes] = await Promise.allSettled([
+      supabase.from("tasks").select("*").eq("device_id", username).order("start_time", { ascending: false }).limit(500),
+      supabase.from("history").select("*").eq("device_id", username).order("timestamp", { ascending: false }).limit(1000),
+      supabase.from("settings").select("key,value").eq("device_id", username),
+      supabase.from("favorites").select("*").eq("device_id", username),
+    ]);
+    const tasks = tasksRes.status === "fulfilled" ? (tasksRes.value.data || []) : [];
+    const history = historyRes.status === "fulfilled" ? (historyRes.value.data || []) : [];
+    const settingsRows = settingsRes.status === "fulfilled" ? (settingsRes.value.data || []) : [];
+    const favorites = favoritesRes.status === "fulfilled" ? (favoritesRes.value.data || []) : [];
+    const settingsObj = {};
+    for (const row of settingsRows) settingsObj[row.key] = row.value;
+
+    const { data, error } = await supabase.from("data_backups").insert({
+      username, backup_type: type, note,
+      task_count: tasks.length, history_count: history.length,
+      tasks_snapshot: tasks, history_snapshot: history,
+      settings_snapshot: settingsObj, favorites_snapshot: favorites,
+    }).select("id,created_at").single();
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, id: data.id, createdAt: data.created_at };
+  } catch (e) { return { ok: false, error: e.message || "Backup failed" }; }
+}
+
+export async function listBackups(limit = 20) {
+  if (!supabase) return [];
+  const username = getDeviceId();
+  try {
+    const { data, error } = await supabase
+      .from("data_backups")
+      .select("id, backup_type, task_count, history_count, note, created_at")
+      .eq("username", username)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error) return [];
+    return data || [];
+  } catch { return []; }
+}
+
+export async function getBackup(id) {
+  if (!supabase) return null;
+  const username = getDeviceId();
+  try {
+    const { data, error } = await supabase
+      .from("data_backups").select("*")
+      .eq("id", id).eq("username", username).single();
+    if (error) return null;
+    return data;
+  } catch { return null; }
+}
+
+export async function restoreBackup(id) {
+  if (!supabase) return { ok: false, error: "Cloud not configured" };
+  const backup = await getBackup(id);
+  if (!backup) return { ok: false, error: "Backup not found" };
+  const username = getDeviceId();
+  try {
+    // Snapshot current state first (safety net) so restore is undoable
+    await createBackup("pre-restore", `Before restoring ${new Date(backup.created_at).toLocaleString()}`);
+
+    // Wipe current and replace from snapshot
+    await supabase.from("tasks").delete().eq("device_id", username);
+    await supabase.from("history").delete().eq("device_id", username);
+    await supabase.from("settings").delete().eq("device_id", username);
+    await supabase.from("favorites").delete().eq("device_id", username);
+
+    const tasks = backup.tasks_snapshot || [];
+    const history = backup.history_snapshot || [];
+    const settingsObj = backup.settings_snapshot || {};
+    const favorites = backup.favorites_snapshot || [];
+
+    if (tasks.length > 0) await supabase.from("tasks").upsert(tasks, { onConflict: "id" });
+    if (history.length > 0) await supabase.from("history").upsert(history, { onConflict: "id" });
+    const settingRows = Object.entries(settingsObj).map(([key, value]) => ({
+      device_id: username, key, value, updated_at: new Date().toISOString(),
+    }));
+    if (settingRows.length > 0) await supabase.from("settings").upsert(settingRows, { onConflict: "device_id,key" });
+    if (favorites.length > 0) await supabase.from("favorites").upsert(favorites, { onConflict: "id" });
+
+    return { ok: true, tasks: tasks.length, history: history.length };
+  } catch (e) { return { ok: false, error: e.message || "Restore failed" }; }
+}
+
+export async function deleteBackup(id) {
+  if (!supabase) return false;
+  const username = getDeviceId();
+  try {
+    const { error } = await supabase.from("data_backups").delete().eq("id", id).eq("username", username);
+    return !error;
+  } catch { return false; }
+}
+
 // ─── Account Credentials (globally stored, not device-scoped) ───
 // Stored in `settings` table with device_id="_account" so they sync across all devices
 
