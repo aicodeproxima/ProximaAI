@@ -461,10 +461,12 @@ const css = `
   --glass: rgba(10,15,30,0.07); --glass-border: rgba(99,102,241,0.08);
 }
 
-body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fontBody}; }
+html { background: var(--bg-deep); }
+body { background: transparent; color: var(--text-primary); font-family: ${fontBody}; }
 
-/* Void background */
-.proxima-app { display: flex; height: 100vh; overflow: hidden; position: relative; background-color: var(--bg-deep); }
+/* App shell — MUST be transparent so the fixed BackgroundLayer (z-index:0)
+   renders through. The body background acts as the base color fallback. */
+.proxima-app { display: flex; height: 100vh; overflow: hidden; position: relative; background: transparent; z-index: 1; }
 
 .proxima-app > * { position: relative; z-index: 1; }
 

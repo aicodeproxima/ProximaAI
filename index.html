@@ -12,7 +12,9 @@
     <link rel="apple-touch-icon" href="/icons/icon.svg" />
     <title>ProximaAI — Parallel AI Generation Cockpit</title>
     <style>
-      html, body, #root { margin: 0; padding: 0; height: 100%; background: #0a0e17; }
+      html, body { margin: 0; padding: 0; height: 100%; background: #020510; }
+      /* #root must be transparent so the fixed BackgroundLayer (z-index:0) shows through */
+      #root { height: 100%; background: transparent; }
       body { font-family: system-ui, sans-serif; }
     </style>
   </head>

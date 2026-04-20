@@ -13,13 +13,14 @@ export default function BackgroundLayer({ type = "orbs", accent = "#6366f1" }) {
   return <Orbs accent={accent} />;
 }
 
-// ── Orbs: two floating radial-gradient blobs ───────────────────────────────
+// ── Orbs: three floating radial-gradient blobs, accent-tinted ─────────────
 function Orbs({ accent }) {
   return (
     <div style={BASE}>
       <style>{KF_ORB_FLOAT}</style>
-      <div style={{ position:"absolute", width:"min(380px, 80vw)", height:"min(380px, 80vw)", borderRadius:"50%", top:-120, left:"min(-100px, -20vw)", background:`radial-gradient(circle, ${accent}30 0%, transparent 65%)`, animation:"orbFloat 9s ease-in-out infinite" }} />
-      <div style={{ position:"absolute", width:"min(260px, 60vw)", height:"min(260px, 60vw)", borderRadius:"50%", bottom:120, right:"min(-60px, -15vw)", background:`radial-gradient(circle, ${accent}26 0%, transparent 65%)`, animation:"orbFloat 13s ease-in-out infinite reverse" }} />
+      <div style={{ position:"absolute", width:"min(520px, 90vw)", height:"min(520px, 90vw)", borderRadius:"50%", top:"-15%", left:"-15%", background:`radial-gradient(circle, ${accent}66 0%, ${accent}22 40%, transparent 70%)`, animation:"orbFloat 9s ease-in-out infinite", filter:"blur(40px)" }} />
+      <div style={{ position:"absolute", width:"min(440px, 85vw)", height:"min(440px, 85vw)", borderRadius:"50%", bottom:"-10%", right:"-10%", background:`radial-gradient(circle, ${accent}55 0%, ${accent}20 40%, transparent 70%)`, animation:"orbFloat 13s ease-in-out infinite reverse", filter:"blur(50px)" }} />
+      <div style={{ position:"absolute", width:"min(360px, 70vw)", height:"min(360px, 70vw)", borderRadius:"50%", top:"35%", left:"30%", background:`radial-gradient(circle, ${accent}3c 0%, transparent 65%)`, animation:"orbFloat 17s ease-in-out infinite", filter:"blur(60px)" }} />
     </div>
   );
 }
