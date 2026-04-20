@@ -119,8 +119,68 @@ function LoginScreen({ onLogin }) {
 const font = `'JetBrains Mono', 'Fira Code', monospace`;
 const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
 
-// ─── FLOATING SAVE STATUS BUTTON ───
-// Always visible in bottom-left corner. Shows live sync status. Click to force-flush.
+// ─── SIDEBAR SAVE-STATUS BUTTON ───
+// Lives in the nav bar. Tap to force-flush pending cloud writes.
+// Long-press (600ms) to create a full manual cloud backup.
+function SidebarSaveButton({ saveStatus, failedCount, onForceSave, onBackup }) {
+  const effective = failedCount > 0 && saveStatus !== "saving" ? "error" : saveStatus;
+  const cfg = {
+    idle:   { icon: "✓", color: "#22c55e", bg: "transparent",             border: "transparent",                 pulse: false, label: "Saved · Long-press to backup" },
+    saving: { icon: "⟳", color: "#6366f1", bg: "rgba(99,102,241,0.12)",   border: "rgba(99,102,241,0.35)",       pulse: true,  label: "Saving…" },
+    saved:  { icon: "✓", color: "#22c55e", bg: "rgba(34,197,94,0.15)",    border: "rgba(34,197,94,0.4)",         pulse: false, label: "Saved!" },
+    error:  { icon: "⚠", color: "#ef4444", bg: "rgba(239,68,68,0.12)",    border: "rgba(239,68,68,0.35)",        pulse: false, label: failedCount > 0 ? `Retry (${failedCount})` : "Retry" },
+    backup: { icon: "☁", color: "#f59e0b", bg: "rgba(245,158,11,0.15)",   border: "rgba(245,158,11,0.4)",        pulse: true,  label: "Creating backup…" },
+  }[effective] || { icon: "·", color: "#94a3b8", bg: "transparent", border: "transparent", pulse: false, label: "Idle" };
+
+  const pressStartRef = useRef(0);
+  const longPressTimerRef = useRef(null);
+  const triggeredLongPressRef = useRef(false);
+
+  const startPress = (e) => {
+    e.preventDefault();
+    triggeredLongPressRef.current = false;
+    pressStartRef.current = Date.now();
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      triggeredLongPressRef.current = true;
+      if (navigator.vibrate) navigator.vibrate(40);
+      onBackup();
+    }, 600);
+  };
+  const endPress = () => {
+    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
+    if (!triggeredLongPressRef.current) {
+      // Short tap — force save
+      if (Date.now() - pressStartRef.current < 600) onForceSave();
+    }
+  };
+  const cancelPress = () => {
+    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
+  };
+
+  return (
+    <button
+      className="sidebar-btn"
+      title={cfg.label}
+      onMouseDown={startPress}
+      onMouseUp={endPress}
+      onMouseLeave={cancelPress}
+      onTouchStart={startPress}
+      onTouchEnd={endPress}
+      onTouchCancel={cancelPress}
+      onContextMenu={e => e.preventDefault()}
+      style={{
+        color: cfg.color,
+        background: cfg.bg,
+        border: cfg.border !== "transparent" ? `1px solid ${cfg.border}` : "none",
+        userSelect: "none", WebkitUserSelect: "none",
+      }}>
+      <span style={{ display: "inline-block", animation: cfg.pulse ? "spin 1.2s linear infinite" : "none" }}>{cfg.icon}</span>
+    </button>
+  );
+}
+
+// ─── FLOATING SAVE STATUS BUTTON (deprecated, replaced by SidebarSaveButton) ───
 function FloatingSaveButton({ saveStatus, onForceSave, failedCount = 0 }) {
   // Honest status: if there are unreplayed failures, we're NEVER truly "saved"
   const effective = failedCount > 0 && saveStatus !== "saving" ? "error" : saveStatus;
@@ -476,6 +536,12 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .sidebar-btn:active { transform: scale(0.95); }
 .sidebar-btn.active { background: rgba(99,102,241,0.15); color: var(--accent); border: 1px solid rgba(99,102,241,0.3); box-shadow: 0 0 12px rgba(99,102,241,0.2); }
 .sidebar-logo { font-size: 22px; margin-bottom: 16px; cursor: default; }
+/* Push save button to bottom of vertical sidebar on desktop */
+.sidebar-save-wrap { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--glass-border); width: 100%; display: flex; justify-content: center; }
+@media (max-width: 768px) {
+  /* On mobile (horizontal sidebar) don't push to an "end" — just sit inline */
+  .sidebar-save-wrap { margin-top: 0; margin-left: auto; padding-top: 0; border-top: none; border-left: 1px solid var(--glass-border); padding-left: 6px; margin-left: 6px; width: auto; }
+}
 
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; position: relative; z-index: 1; }
 .topbar { height: 48px; border-bottom: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; flex-shrink: 0; background: var(--nav-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); position: relative; z-index: 10; }
@@ -809,6 +875,46 @@ export default function ProximaApp() {
   });
   const [lightMode, setLightModeState] = useState(() => { try { return localStorage.getItem("proximaai-lightMode") === "1"; } catch { return false; } });
   useTheme({ theme, lightMode });
+
+  // Force-flush all pending cloud writes + replay any failed entries
+  const forceSaveAll = async () => {
+    setSaveStatus("saving");
+    if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
+    const queue = taskSyncQueueRef.current.splice(0);
+    if (queue.length > 0) {
+      try { await syncTasksBatch(queue); for (const t of queue) removeFailedSync("task", t.id); } catch {}
+    }
+    if (apiKeyDebounceRef.current) { clearTimeout(apiKeyDebounceRef.current); apiKeyDebounceRef.current = null; }
+    if (apiKey) { try { await syncSetting("apiKey", apiKey); removeFailedSync("setting", "apiKey"); } catch {} }
+    const failed = getFailedSyncs();
+    const taskRetries = failed.filter(f => f.kind === "task").map(f => f.data).filter(Boolean);
+    if (taskRetries.length > 0) { try { await syncTasksBatch(taskRetries); for (const t of taskRetries) removeFailedSync("task", t.id); } catch {} }
+    for (const f of failed.filter(f => f.kind === "history")) { try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id); } catch {} }
+    for (const f of failed.filter(f => f.kind === "setting")) { try { await syncSetting(f.id, f.data); removeFailedSync("setting", f.id); } catch {} }
+    const remaining = getFailedSyncs().length;
+    setFailedSyncCount(remaining);
+    if (remaining === 0) { setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000); }
+    else setSaveStatus("error");
+  };
+
+  // Long-press handler: full manual cloud backup (settings + tasks + history + favorites)
+  const triggerManualBackup = async () => {
+    setSaveStatus("saving");
+    // Flush everything first so the backup includes the very latest state
+    await forceSaveAll();
+    setSaveStatus("saving");
+    const r = await createBackup("manual", "Long-press save from nav");
+    if (r.ok) {
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2500);
+      setAccountToast("☁ Full backup saved to cloud");
+      setTimeout(() => setAccountToast(""), 4000);
+    } else {
+      setSaveStatus("error");
+      setAccountToast("Backup failed: " + (r.error || "unknown"));
+      setTimeout(() => setAccountToast(""), 5000);
+    }
+  };
 
   const setTheme = (v) => {
     setThemeState(v);
@@ -1665,6 +1771,10 @@ export default function ProximaApp() {
           <button className={`sidebar-btn ${page==="gallery"?"active":""}`} onClick={() => setPage("gallery")} title="Gallery">🖼</button>
           <button className={`sidebar-btn ${page==="logs"?"active":""}`} onClick={() => setPage("logs")} title="Logs">📋</button>
           <button className={`sidebar-btn ${page==="settings"?"active":""}`} onClick={() => { setPage("settings"); getStorageStats().then(s => setStorageStats(s)); }} title="Settings">⚙</button>
+          {/* Save status (tap=force-save, long-press=full backup) — pushed to bottom on desktop */}
+          <div className="sidebar-save-wrap">
+            <SidebarSaveButton saveStatus={saveStatus} failedCount={failedSyncCount} onForceSave={forceSaveAll} onBackup={triggerManualBackup} />
+          </div>
           {activeCount > 0 && (
             <div style={{ position: "absolute", top: 68, left: 36, background: "var(--accent)", color: "white", fontSize: 9, fontWeight: 700, width: 16, height: 16, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: font }} className="pulse">{activeCount}</div>
           )}
@@ -2710,35 +2820,6 @@ export default function ProximaApp() {
         </div>
 
         {/* Floating Save Status Button — always visible, bottom-left */}
-        <FloatingSaveButton saveStatus={saveStatus} failedCount={failedSyncCount} onForceSave={async () => {
-          setSaveStatus("saving");
-          // 1. Flush pending task batch timer
-          if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
-          const queue = taskSyncQueueRef.current.splice(0);
-          if (queue.length > 0) {
-            try { await syncTasksBatch(queue); for (const t of queue) removeFailedSync("task", t.id); } catch {}
-          }
-          // 2. Flush pending apiKey debounce
-          if (apiKeyDebounceRef.current) { clearTimeout(apiKeyDebounceRef.current); apiKeyDebounceRef.current = null; }
-          if (apiKey) { try { await syncSetting("apiKey", apiKey); removeFailedSync("setting", "apiKey"); } catch {} }
-          // 3. Replay any persisted failed syncs
-          const failed = getFailedSyncs();
-          const taskRetries = failed.filter(f => f.kind === "task").map(f => f.data).filter(Boolean);
-          if (taskRetries.length > 0) {
-            try { await syncTasksBatch(taskRetries); for (const t of taskRetries) removeFailedSync("task", t.id); } catch {}
-          }
-          for (const f of failed.filter(f => f.kind === "history")) {
-            try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id); } catch {}
-          }
-          for (const f of failed.filter(f => f.kind === "setting")) {
-            try { await syncSetting(f.id, f.data); removeFailedSync("setting", f.id); } catch {}
-          }
-          const remaining = getFailedSyncs().length;
-          setFailedSyncCount(remaining);
-          if (remaining === 0) { setSaveStatus("saved"); setTimeout(() => setSaveStatus("idle"), 2000); }
-          else setSaveStatus("error");
-        }} />
-
         {/* Account Modal */}
         {showAccountModal && (
           <AccountModal
