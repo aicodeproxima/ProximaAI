@@ -874,9 +874,7 @@ export default function ProximaApp() {
     } catch { return "orbs"; }
   });
   const [lightMode, setLightModeState] = useState(() => { try { return localStorage.getItem("proximaai-lightMode") === "1"; } catch { return false; } });
-  const [cloudArchive, setCloudArchiveState] = useState(() => { try { return localStorage.getItem("proximaai-cloudArchive") === "1"; } catch { return false; } });
   const [archiveStats, setArchiveStats] = useState({ bytes: 0, count: 0 });
-  const archivedTaskIds = useRef(new Set());
   useTheme({ theme, lightMode });
 
   // Force-flush all pending cloud writes + replay any failed entries
@@ -937,12 +935,7 @@ export default function ProximaApp() {
     setSetting("lightMode", v ? "1" : "0");
     syncSetting("lightMode", v ? "1" : "0").catch(() => {});
   };
-  const setCloudArchive = (v) => {
-    setCloudArchiveState(v);
-    try { localStorage.setItem("proximaai-cloudArchive", v ? "1" : "0"); } catch {}
-    setSetting("cloudArchive", v ? "1" : "0");
-    syncSetting("cloudArchive", v ? "1" : "0").catch(() => {});
-  };
+
   const [saveStatus, setSaveStatus] = useState("idle"); // "idle" | "saving" | "saved" | "error"
   const pendingWritesRef = useRef(new Set());
   const saveStatusTimerRef = useRef(null);
@@ -1048,8 +1041,7 @@ export default function ProximaApp() {
       if (savedBg && !cancelled) setBackgroundState(savedBg === "void" ? "orbs" : savedBg);
       const savedLight = await getSetting("lightMode");
       if (savedLight != null && !cancelled) setLightModeState(savedLight === "1" || savedLight === "true");
-      const savedArchive = await getSetting("cloudArchive");
-      if (savedArchive != null && !cancelled) setCloudArchiveState(savedArchive === "1" || savedArchive === "true");
+
 
       // Then pull cloud data and merge (fills any gaps from other devices / recovery)
       await initSupabase();
@@ -1192,26 +1184,6 @@ export default function ProximaApp() {
       // Also record in failed-queue preemptively so if the tab closes mid-debounce,
       // the next session will replay it. Removed on successful cloud sync below.
       addFailedSync({ kind: "task", id: t.id, data: t });
-      // Cloud-archive the actual image/video bytes if enabled (completed only, not failed)
-      if (cloudArchive && t.status === "completed" && t.outputs?.length > 0 && !archivedTaskIds.current.has(t.id)) {
-        archivedTaskIds.current.add(t.id);
-        (async () => {
-          const newUrls = [];
-          const paths = [];
-          for (let i = 0; i < t.outputs.length; i++) {
-            const r = await archiveUrl(t.outputs[i], { taskId: t.id, index: i });
-            if (r.ok) { newUrls.push(r.url); paths.push(r.path); }
-            else { newUrls.push(t.outputs[i]); } // Keep original URL on failure
-          }
-          // Swap task outputs to the permanent cloud URLs
-          setTasks(prev => prev.map(x => x.id === t.id
-            ? { ...x, outputs: newUrls, archivedOutputs: newUrls, archivedPaths: paths, isArchived: true }
-            : x));
-          const updated = { ...t, outputs: newUrls, archivedOutputs: newUrls, archivedPaths: paths, isArchived: true };
-          saveTask(updated);
-          syncTask(updated).catch(() => {});
-        })();
-      }
     }
     setFailedSyncCount(getFailedSyncs().length);
     // Debounced batch upload to Supabase (flushes 300ms after last task)
@@ -2313,7 +2285,7 @@ export default function ProximaApp() {
                               <button className="result-action-btn" style={{ color: "var(--accent)", borderColor: "rgba(99,102,241,0.3)" }}
                                 onClick={() => regenerateTask(task)}>🔄 Regenerate</button>
                               {task.status === "completed" && <>
-                                <button className="result-action-btn" onClick={async () => {
+                                <button className="result-action-btn" title="Download to device" onClick={async () => {
                                   try {
                                     const url = task.outputs?.[0];
                                     if (!url) return;
@@ -2325,12 +2297,43 @@ export default function ProximaApp() {
                                     const a = document.createElement("a");
                                     a.href = URL.createObjectURL(blob);
                                     a.download = fname;
+                                    a.style.display = "none";
                                     document.body.appendChild(a);
                                     a.click();
-                                    a.remove();
-                                    URL.revokeObjectURL(a.href);
+                                    setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 100);
                                   } catch (e) { console.log("Direct download blocked, opening in new tab"); window.open(task.outputs?.[0], "_blank"); }
-                                }}>↓ Save</button>
+                                }}>↓ Download</button>
+                                <button className="result-action-btn" title="Back up to cloud storage (permanent)"
+                                  disabled={task.isArchived}
+                                  style={task.isArchived ? { color: "var(--success)", borderColor: "rgba(34,197,94,0.3)" } : { color: "var(--amber)", borderColor: "rgba(245,158,11,0.3)" }}
+                                  onClick={async () => {
+                                    if (task.isArchived) return;
+                                    setTasks(prev => prev.map(x => x.id === task.id ? { ...x, archiving: true } : x));
+                                    const newUrls = [];
+                                    const paths = [];
+                                    let anyOk = false;
+                                    for (let i = 0; i < (task.outputs || []).length; i++) {
+                                      const r = await archiveUrl(task.outputs[i], { taskId: task.id, index: i });
+                                      if (r.ok) { newUrls.push(r.url); paths.push(r.path); anyOk = true; }
+                                      else { newUrls.push(task.outputs[i]); }
+                                    }
+                                    if (anyOk) {
+                                      setTasks(prev => prev.map(x => x.id === task.id
+                                        ? { ...x, outputs: newUrls, archivedOutputs: newUrls, archivedPaths: paths, isArchived: true, archiving: false }
+                                        : x));
+                                      const updated = { ...task, outputs: newUrls, archivedOutputs: newUrls, archivedPaths: paths, isArchived: true };
+                                      saveTask(updated);
+                                      syncTask(updated).catch(() => {});
+                                      setAccountToast("☁ Backed up to cloud");
+                                    } else {
+                                      setTasks(prev => prev.map(x => x.id === task.id ? { ...x, archiving: false } : x));
+                                      setAccountToast("Cloud backup failed");
+                                    }
+                                    setTimeout(() => setAccountToast(""), 4000);
+                                    getArchiveStats().then(s => setArchiveStats(s));
+                                  }}>
+                                  {task.archiving ? "☁ …" : task.isArchived ? "☁ Saved" : "☁ Cloud"}
+                                </button>
                                 <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(task.outputs?.[0] || ""); }}>📋 URL</button>
                                 {((task.genType || genType) === "image" || (task.genType || genType) === "i2i") && (
                                   <button className="result-action-btn" style={{ color: "#a78bfa", borderColor: "rgba(167,139,250,0.3)" }}
@@ -2618,33 +2621,14 @@ export default function ProximaApp() {
                   </div>
                 </div>
 
-                {/* Cloud Archive — saves actual image/video bytes (not just URLs) */}
+                {/* Cloud storage usage (per-generation manual backup via buttons on each result) */}
                 <div className="setting-group">
-                  <div className="setting-label">Cloud Archive</div>
-                  <div className="setting-hint" style={{ marginBottom: 12 }}>
-                    WaveSpeed output URLs expire after ~24h. Enable this to auto-upload each completed generation's actual bytes to your cloud storage — images and videos become permanent.
+                  <div className="setting-label">Cloud Storage</div>
+                  <div className="setting-hint" style={{ marginBottom: 10 }}>
+                    WaveSpeed output URLs expire after ~24h. To make a generation permanent, tap the <b>☁</b> button on that result card to back it up to cloud storage.
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: "rgba(8,12,25,0.4)", border: "1px solid var(--glass-border)", borderRadius: 10 }}>
-                    <div>
-                      <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 600 }}>Archive generations to cloud</div>
-                      <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: font, marginTop: 2 }}>
-                        Runs in background after each completion · Free tier: 1 GB total
-                      </div>
-                    </div>
-                    <button onClick={() => setCloudArchive(!cloudArchive)}
-                      style={{
-                        width: 48, height: 26, borderRadius: 14,
-                        background: cloudArchive ? "var(--accent)" : "rgba(30,41,59,0.5)",
-                        border: "1px solid var(--glass-border)", cursor: "pointer", position: "relative",
-                        transition: "background 0.25s",
-                      }}>
-                      <div style={{ position: "absolute", top: 2, left: cloudArchive ? 24 : 2, width: 20, height: 20, borderRadius: "50%", background: "white", transition: "left 0.25s", boxShadow: "0 1px 4px rgba(0,0,0,0.3)" }} />
-                    </button>
-                  </div>
-
-                  {/* Storage usage */}
-                  <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(8,12,25,0.3)", border: "1px solid var(--glass-border)", borderRadius: 10, fontSize: 11, color: "var(--text-secondary)", fontFamily: font, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span>☁ {archiveStats.count} file{archiveStats.count === 1 ? "" : "s"} · {(archiveStats.bytes / 1024 / 1024).toFixed(1)} MB</span>
+                  <div style={{ padding: "10px 14px", background: "rgba(8,12,25,0.3)", border: "1px solid var(--glass-border)", borderRadius: 10, fontSize: 11, color: "var(--text-secondary)", fontFamily: font, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>☁ {archiveStats.count} file{archiveStats.count === 1 ? "" : "s"} · {(archiveStats.bytes / 1024 / 1024).toFixed(1)} MB backed up</span>
                     <button onClick={async () => { const s = await getArchiveStats(); setArchiveStats(s); }}
                       style={{ padding: "4px 10px", fontSize: 10, background: "rgba(99,102,241,0.1)", color: "var(--accent)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 6, cursor: "pointer", fontFamily: font, fontWeight: 600 }}>Refresh</button>
                   </div>
