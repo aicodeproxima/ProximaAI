@@ -4,6 +4,9 @@ import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup } from "./lib/supabase.js";
+import { THEMES, BACKGROUNDS } from "./lib/themes.js";
+import useTheme from "./lib/useTheme.js";
+import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 
 // ─── LOGIN SCREEN ───
 function LoginScreen({ onLogin }) {
@@ -461,7 +464,7 @@ const css = `
 body { background: var(--bg-deep); color: var(--text-primary); font-family: ${fontBody}; }
 
 /* Void background */
-.proxima-app { display: flex; height: 100vh; overflow: hidden; position: relative; background: url('/void.jpg') calc(50% + 0.24cm) center / cover no-repeat fixed; background-color: #020510; }
+.proxima-app { display: flex; height: 100vh; overflow: hidden; position: relative; background-color: var(--bg-deep); }
 
 .proxima-app > * { position: relative; z-index: 1; }
 
@@ -793,6 +796,30 @@ export default function ProximaApp() {
   const [storageStats, setStorageStats] = useState(null);
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [accountToast, setAccountToast] = useState("");
+  // ── Theme + animated background settings ──
+  const [theme, setThemeState] = useState(() => { try { return localStorage.getItem("proximaai-theme") || "default"; } catch { return "default"; } });
+  const [background, setBackgroundState] = useState(() => { try { return localStorage.getItem("proximaai-background") || "void"; } catch { return "void"; } });
+  const [lightMode, setLightModeState] = useState(() => { try { return localStorage.getItem("proximaai-lightMode") === "1"; } catch { return false; } });
+  useTheme({ theme, lightMode });
+
+  const setTheme = (v) => {
+    setThemeState(v);
+    try { localStorage.setItem("proximaai-theme", v); } catch {}
+    setSetting("theme", v);
+    syncSetting("theme", v).catch(() => {});
+  };
+  const setBackground = (v) => {
+    setBackgroundState(v);
+    try { localStorage.setItem("proximaai-background", v); } catch {}
+    setSetting("background", v);
+    syncSetting("background", v).catch(() => {});
+  };
+  const setLightMode = (v) => {
+    setLightModeState(v);
+    try { localStorage.setItem("proximaai-lightMode", v ? "1" : "0"); } catch {}
+    setSetting("lightMode", v ? "1" : "0");
+    syncSetting("lightMode", v ? "1" : "0").catch(() => {});
+  };
   const [saveStatus, setSaveStatus] = useState("idle"); // "idle" | "saving" | "saved" | "error"
   const pendingWritesRef = useRef(new Set());
   const saveStatusTimerRef = useRef(null);
@@ -891,6 +918,13 @@ export default function ProximaApp() {
       if (savedImgRes && !cancelled) setDefaultImageRes(savedImgRes);
       const savedVidDur = await getSetting("defaultVideoDur");
       if (savedVidDur && !cancelled) setDefaultVideoDur(Number(savedVidDur));
+      // Theme + background settings (also synced to Supabase so they follow you across devices)
+      const savedTheme = await getSetting("theme");
+      if (savedTheme && !cancelled) setThemeState(savedTheme);
+      const savedBg = await getSetting("background");
+      if (savedBg && !cancelled) setBackgroundState(savedBg);
+      const savedLight = await getSetting("lightMode");
+      if (savedLight != null && !cancelled) setLightModeState(savedLight === "1" || savedLight === "true");
 
       // Then pull cloud data and merge (fills any gaps from other devices / recovery)
       await initSupabase();
@@ -1601,6 +1635,7 @@ export default function ProximaApp() {
     return (
       <>
         <style>{css}</style>
+        <BackgroundLayer type={background} accent={(THEMES[theme] || THEMES.default).accent} />
         <div className="proxima-app">
           <LoginScreen onLogin={handleLogin} />
         </div>
@@ -1608,9 +1643,12 @@ export default function ProximaApp() {
     );
   }
 
+  const activeAccent = (THEMES[theme] || THEMES.default).accent;
+
   return (
     <>
       <style>{css}</style>
+      <BackgroundLayer type={background} accent={activeAccent} />
       <div className="proxima-app">
         {/* Sidebar */}
         <div className="sidebar">
@@ -2365,6 +2403,71 @@ export default function ProximaApp() {
             {page === "settings" && (
               <div style={{ maxWidth: 500 }}>
                 <h2 style={{ fontFamily: font, fontSize: 16, marginBottom: 24, color: "var(--text-secondary)" }}>Settings</h2>
+
+                {/* Appearance */}
+                <div className="setting-group">
+                  <div className="setting-label">Appearance</div>
+                  <div className="setting-hint" style={{ marginBottom: 12 }}>Theme and animated backdrop are synced to the cloud — they follow you to every device.</div>
+
+                  {/* Theme picker — color swatches */}
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Color Theme</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
+                      {Object.entries(THEMES).map(([key, t]) => (
+                        <button key={key} onClick={() => setTheme(key)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                            background: theme === key ? "rgba(99,102,241,0.15)" : "rgba(8,12,25,0.4)",
+                            border: `1px solid ${theme === key ? t.accent : "var(--glass-border)"}`,
+                            borderRadius: 10, cursor: "pointer", transition: "all 0.2s",
+                            boxShadow: theme === key ? `0 0 16px ${t.accent}40` : "none",
+                          }}>
+                          <div style={{ width: 18, height: 18, borderRadius: "50%", background: t.accent, boxShadow: `0 0 8px ${t.accent}80`, flexShrink: 0 }} />
+                          <div style={{ fontSize: 12, color: "var(--text-primary)", fontFamily: fontBody, fontWeight: theme === key ? 600 : 500, textAlign: "left" }}>{t.name}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Background picker */}
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Animated Background</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: 6 }}>
+                      {BACKGROUNDS.map(bg => {
+                        const labels = { void: "◈ Void", orbs: "◉ Orbs", stars: "✦ Stars", matrix: "⎔ Matrix", grid: "▦ Grid", none: "— None" };
+                        return (
+                          <button key={bg} onClick={() => setBackground(bg)}
+                            style={{
+                              padding: "10px 8px",
+                              background: background === bg ? "rgba(99,102,241,0.15)" : "rgba(8,12,25,0.4)",
+                              border: `1px solid ${background === bg ? "var(--accent)" : "var(--glass-border)"}`,
+                              borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: font,
+                              color: background === bg ? "var(--accent)" : "var(--text-secondary)",
+                              fontWeight: background === bg ? 700 : 500, textAlign: "center",
+                              transition: "all 0.2s", textTransform: "capitalize",
+                            }}>{labels[bg] || bg}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Light mode toggle */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: "rgba(8,12,25,0.4)", border: "1px solid var(--glass-border)", borderRadius: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 600 }}>Light Mode</div>
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: font, marginTop: 2 }}>Flip to a bright palette. Accent color stays.</div>
+                    </div>
+                    <button onClick={() => setLightMode(!lightMode)}
+                      style={{
+                        width: 48, height: 26, borderRadius: 14,
+                        background: lightMode ? "var(--accent)" : "rgba(30,41,59,0.5)",
+                        border: "1px solid var(--glass-border)", cursor: "pointer", position: "relative",
+                        transition: "background 0.25s",
+                      }}>
+                      <div style={{ position: "absolute", top: 2, left: lightMode ? 24 : 2, width: 20, height: 20, borderRadius: "50%", background: "white", transition: "left 0.25s", boxShadow: "0 1px 4px rgba(0,0,0,0.3)" }} />
+                    </button>
+                  </div>
+                </div>
 
                 {/* Account */}
                 <div className="setting-group">
