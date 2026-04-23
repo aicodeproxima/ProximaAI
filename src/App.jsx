@@ -394,6 +394,17 @@ function AccountModal({ onClose, onSaved }) {
               <button disabled={busy} style={btn()} onClick={() => startAction("email")}>{creds?.email ? "Change Email" : "Set Email"}</button>
               <button style={{ ...btn(), marginTop: 8, background: "transparent" }} onClick={onClose}>Close</button>
             </div>
+            <div style={{ marginTop: 18, paddingTop: 12, borderTop: "1px solid rgba(148,163,184,0.15)", textAlign: "center", fontSize: 11, color: "#64748b", letterSpacing: 0.4 }}>
+              Built by{" "}
+              <a
+                href="https://accessoryseezin.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "#818cf8", textDecoration: "none", fontWeight: 600 }}
+              >
+                AccessorySeezin.com
+              </a>
+            </div>
           </>
         )}
 
