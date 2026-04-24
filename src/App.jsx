@@ -952,6 +952,7 @@ export default function ProximaApp() {
   const saveStatusTimerRef = useRef(null);
   const [backups, setBackups] = useState([]);
   const [showBackupsPanel, setShowBackupsPanel] = useState(false);
+  const [backupsReloading, setBackupsReloading] = useState(false);
 
   // Track any in-flight cloud write (lets the floating save button show live status)
   const markWriteStart = useCallback((key) => {
@@ -990,11 +991,41 @@ export default function ProximaApp() {
   // Initialize Supabase early so verifyCredentials can run before login
   useEffect(() => { if (isSupabaseConfigured()) initSupabase(); }, []);
 
+  // Reconcile cached session username with the canonical one in _account settings.
+  // Fixes a historical bug where login hardcoded "admin" in localStorage — after this
+  // runs once, `getDeviceId()` returns `user:<real-username>` so data + backups are
+  // correctly scoped and visible across devices.
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const cached = localStorage.getItem("proximaai-user");
+        if (!cached) return;
+        await initSupabase();
+        const stored = await getStoredCredentials();
+        if (cancelled) return;
+        if (stored?.username && stored.username !== cached) {
+          try { localStorage.setItem("proximaai-user", stored.username); } catch {}
+          resetDeviceIdCache();
+        }
+        // Auto-pull latest backup list so "Last backup" timestamp is live on load
+        const list = await listBackups(20);
+        if (!cancelled) setBackups(list);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [isAuthed]);
+
   async function handleLogin(username, password) {
     // Check Supabase-stored credentials first, falls back to admin/admin if none set
     const valid = await verifyCredentials(username, password);
     if (valid) {
-      try { localStorage.setItem("proximaai-user", "admin"); } catch {}
+      // Store the exact username the user typed (must match what verifyCredentials accepted,
+      // which is what's in the Supabase settings table under `_account` scope). This drives
+      // `getDeviceId() -> "user:<username>"` so data + backups are scoped per account and
+      // follow the user across devices.
+      try { localStorage.setItem("proximaai-user", username); } catch {}
       resetDeviceIdCache();
       setIsAuthed(true);
       return true;
@@ -2821,6 +2852,14 @@ export default function ProximaApp() {
                         const list = await listBackups(20);
                         setBackups(list);
                       }}>+ Create Backup</button>
+                      <button className="api-test-btn" title="Reload backups from cloud" style={{ padding: "6px 10px", fontSize: 11, background: "rgba(30,41,59,0.5)", color: "var(--text-secondary)" }} onClick={async () => {
+                        setBackupsReloading(true);
+                        const list = await listBackups(20);
+                        setBackups(list);
+                        setBackupsReloading(false);
+                        setAccountToast(`Reloaded · ${list.length} backups`);
+                        setTimeout(() => setAccountToast(""), 3000);
+                      }}>{backupsReloading ? "↻…" : "↻ Reload"}</button>
                       <button className="api-test-btn" style={{ padding: "6px 12px", fontSize: 11, background: "rgba(30,41,59,0.5)", color: "var(--text-secondary)" }} onClick={async () => {
                         if (!showBackupsPanel) { const list = await listBackups(20); setBackups(list); }
                         setShowBackupsPanel(v => !v);
