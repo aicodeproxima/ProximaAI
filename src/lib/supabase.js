@@ -60,12 +60,22 @@ export async function initSupabase() {
   }
 }
 
+// Record the timestamp of any successful cloud write. Used by Settings to display
+// "Last cloud sync". Throttled to avoid localStorage churn.
+let _lastSyncWrite = 0;
+export function touchSync() {
+  const now = Date.now();
+  if (now - _lastSyncWrite < 500) return;
+  _lastSyncWrite = now;
+  try { localStorage.setItem("proximaai_last_sync_at", String(now)); } catch {}
+}
+
 // ─── Task Sync ───
 
 export async function syncTask(task) {
   if (!supabase || !task?.id) return;
   try {
-    await supabase.from("tasks").upsert({
+    const r = await supabase.from("tasks").upsert({
       id: task.id,
       device_id: getDeviceId(),
       batch_id: task.batchId ?? null,
@@ -94,6 +104,7 @@ export async function syncTask(task) {
       nsfw: task.nsfw ?? null,
       task_id: task.taskId ?? null,
     }, { onConflict: "id" });
+    if (!r.error) touchSync();
   } catch {}
 }
 
@@ -131,7 +142,8 @@ export async function syncTasksBatch(tasks) {
       task_id: task.taskId ?? null,
     }));
     if (rows.length > 0) {
-      await supabase.from("tasks").upsert(rows, { onConflict: "id" });
+      const r = await supabase.from("tasks").upsert(rows, { onConflict: "id" });
+      if (!r.error) touchSync();
     }
   } catch {}
 }
@@ -196,7 +208,7 @@ export async function clearTasksRemote() {
 export async function syncHistoryEntry(entry) {
   if (!supabase || !entry?.id) return;
   try {
-    await supabase.from("history").upsert({
+    const r = await supabase.from("history").upsert({
       id: entry.id,
       device_id: getDeviceId(),
       timestamp: entry.timestamp ?? Date.now(),
@@ -214,6 +226,7 @@ export async function syncHistoryEntry(entry) {
       tasks: entry.tasks ?? [],
       total_cost: entry.totalCost ?? 0,
     }, { onConflict: "id" });
+    if (!r.error) touchSync();
   } catch {}
 }
 
@@ -272,12 +285,13 @@ export async function clearFavoritesRemote() {
 export async function syncSetting(key, value) {
   if (!supabase) return;
   try {
-    await supabase.from("settings").upsert({
+    const r = await supabase.from("settings").upsert({
       device_id: getDeviceId(),
       key,
       value,
       updated_at: new Date().toISOString(),
     });
+    if (!r.error) touchSync();
   } catch {}
 }
 

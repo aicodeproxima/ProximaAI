@@ -2827,6 +2827,59 @@ export default function ProximaApp() {
                       }}>{showBackupsPanel ? "Hide" : "View"} ({backups.length || "·"})</button>
                     </div>
                   </div>
+
+                  {/* Sync & Backup status strip */}
+                  {(() => {
+                    const fmtRel = (ts) => {
+                      if (!ts) return "never";
+                      const diff = Date.now() - ts;
+                      const s = Math.round(diff / 1000);
+                      if (s < 45) return "just now";
+                      const m = Math.round(s / 60); if (m < 60) return `${m} min ago`;
+                      const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
+                      const d = Math.round(h / 24); if (d < 30) return `${d}d ago`;
+                      return new Date(ts).toLocaleDateString();
+                    };
+                    const fmtAbs = (ts) => ts ? new Date(ts).toLocaleString() : "";
+                    const lastBackupTs = backups[0] ? new Date(backups[0].created_at).getTime() : null;
+                    const lastBackupType = backups[0]?.backup_type;
+                    const lastRestoreStr = localStorage.getItem("proximaai_last_restore_at");
+                    const lastRestoreTs = lastRestoreStr ? parseInt(lastRestoreStr, 10) : null;
+                    const lastSyncStr = localStorage.getItem("proximaai_last_sync_at");
+                    const lastSyncTs = lastSyncStr ? parseInt(lastSyncStr, 10) : null;
+                    return (
+                      <div style={{
+                        display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "6px 12px",
+                        padding: "10px 12px", marginTop: 10, marginBottom: 10,
+                        background: "rgba(8,12,25,0.4)", border: "1px solid var(--glass-border)",
+                        borderRadius: 10, fontSize: 11, alignItems: "center",
+                      }}>
+                        <span style={{ color: "#10b981", fontSize: 12 }}>●</span>
+                        <div>
+                          <div style={{ color: "var(--text-muted)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Last cloud sync</div>
+                          <div style={{ color: "var(--text-primary)", fontWeight: 600 }}>{fmtRel(lastSyncTs)}</div>
+                        </div>
+                        <span title={fmtAbs(lastSyncTs)} style={{ color: "var(--text-muted)", fontSize: 10, fontFamily: font }}>{fmtAbs(lastSyncTs)}</span>
+
+                        <span style={{ color: "#818cf8", fontSize: 12 }}>✦</span>
+                        <div>
+                          <div style={{ color: "var(--text-muted)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Last backup</div>
+                          <div style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+                            {lastBackupTs ? `${fmtRel(lastBackupTs)}${lastBackupType ? ` · ${lastBackupType}` : ""}` : "never"}
+                          </div>
+                        </div>
+                        <span title={fmtAbs(lastBackupTs)} style={{ color: "var(--text-muted)", fontSize: 10, fontFamily: font }}>{fmtAbs(lastBackupTs)}</span>
+
+                        <span style={{ color: "#f59e0b", fontSize: 12 }}>↻</span>
+                        <div>
+                          <div style={{ color: "var(--text-muted)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Last restore</div>
+                          <div style={{ color: "var(--text-primary)", fontWeight: 600 }}>{fmtRel(lastRestoreTs)}</div>
+                        </div>
+                        <span title={fmtAbs(lastRestoreTs)} style={{ color: "var(--text-muted)", fontSize: 10, fontFamily: font }}>{lastRestoreTs ? fmtAbs(lastRestoreTs) : ""}</span>
+                      </div>
+                    );
+                  })()}
+
                   <div className="setting-hint">Auto-backup runs every 2 days. Manual backups are saved immediately. Destructive actions (Clear / Reset) auto-create a backup first. Rolling retention: 30 auto + all manual.</div>
                   {showBackupsPanel && (
                     <div style={{ marginTop: 12, maxHeight: 360, overflowY: "auto", background: "rgba(8,12,25,0.4)", border: "1px solid var(--glass-border)", borderRadius: 10, padding: 6 }}>
@@ -2850,6 +2903,7 @@ export default function ProximaApp() {
                               setSaveStatus("saving");
                               const r = await restoreBackup(b.id);
                               if (r.ok) {
+                                try { localStorage.setItem("proximaai_last_restore_at", String(Date.now())); } catch {}
                                 setAccountToast(`Restored ${r.tasks} tasks, ${r.history} logs. Refresh to see changes.`);
                                 setTimeout(() => setAccountToast(""), 6000);
                                 setSaveStatus("saved"); setTimeout(() => setSaveStatus("idle"), 2000);
