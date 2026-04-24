@@ -486,13 +486,18 @@ export async function restoreBackup(id) {
     const settingsObj = backup.settings_snapshot || {};
     const favorites = backup.favorites_snapshot || [];
 
-    if (tasks.length > 0) await supabase.from("tasks").upsert(tasks, { onConflict: "id" });
-    if (history.length > 0) await supabase.from("history").upsert(history, { onConflict: "id" });
+    // Rescope every row to the CURRENT user's device_id. Backups made under an
+    // old username (e.g. "user:admin" before a rename) must be restored under
+    // the current username so the logged-in session can see them.
+    const rescoped = (rows) => rows.map((r) => ({ ...r, device_id: username }));
+
+    if (tasks.length > 0) await supabase.from("tasks").upsert(rescoped(tasks), { onConflict: "id" });
+    if (history.length > 0) await supabase.from("history").upsert(rescoped(history), { onConflict: "id" });
     const settingRows = Object.entries(settingsObj).map(([key, value]) => ({
       device_id: username, key, value, updated_at: new Date().toISOString(),
     }));
     if (settingRows.length > 0) await supabase.from("settings").upsert(settingRows, { onConflict: "device_id,key" });
-    if (favorites.length > 0) await supabase.from("favorites").upsert(favorites, { onConflict: "id" });
+    if (favorites.length > 0) await supabase.from("favorites").upsert(rescoped(favorites), { onConflict: "id" });
 
     return { ok: true, tasks: tasks.length, history: history.length };
   } catch (e) { return { ok: false, error: e.message || "Restore failed" }; }
