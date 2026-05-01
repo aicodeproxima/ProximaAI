@@ -114,11 +114,20 @@ export function buildPayload(model, userSettings, genType) {
   const p = model.params;
   if (!p) return { prompt: userSettings.prompt };
 
-  // Prompt — required for most types, optional for avatar
+  // Prompt — required for most types, optional for avatar and certain Bria utilities
+  // (Restore, Colorize, Relight, Reseason, Remove BG, Upscale, Expand, etc. — flagged with noPrompt)
   if (userSettings.prompt?.trim()) {
     payload.prompt = userSettings.prompt;
-  } else if (genType !== "avatar") {
+  } else if (genType !== "avatar" && !p.noPrompt) {
     payload.prompt = userSettings.prompt || "";
+  }
+
+  // Bria preset (single enum like style/season/light_type/desired_increase)
+  if (p.briaPreset) {
+    const userVal = userSettings.briaPresets?.[model.id];
+    const validValues = p.briaPreset.options.map(o => o.value);
+    const val = userVal !== undefined && validValues.includes(userVal) ? userVal : p.briaPreset.default;
+    payload[p.briaPreset.paramName] = val;
   }
 
   // Resolution/size — use model's own param name and value format
@@ -191,6 +200,23 @@ export function buildPayload(model, userSettings, genType) {
     payload.image = userSettings.sourceImageUrl;
   }
 
+  // Source image for i23d (Image-to-3D) — per-model imageParam name varies
+  // (input_image_url for Hunyuan, image_url for Meshy, images[] for Rodin/Tripo)
+  if (genType === "i23d" && userSettings.sourceImageUrl) {
+    const imageParam = p.imageParam || "image";
+    if (imageParam === "images") {
+      const all = [userSettings.sourceImageUrl.trim()];
+      if (userSettings.sourceImageUrls?.length) {
+        for (const u of userSettings.sourceImageUrls) {
+          if (u?.trim() && !all.includes(u.trim())) all.push(u.trim());
+        }
+      }
+      payload.images = all;
+    } else {
+      payload[imageParam] = userSettings.sourceImageUrl.trim();
+    }
+  }
+
   // Source image/audio for avatar
   if (genType === "avatar" && userSettings.sourceImageUrl) {
     payload.image = userSettings.sourceImageUrl;
@@ -200,6 +226,7 @@ export function buildPayload(model, userSettings, genType) {
   if ((genType === "image" || genType === "i2i") && p.outputFormat !== false) {
     payload.output_format = "png";
   }
+  // i23d models don't take output_format — they always return their natural mesh format
 
   // Batch num_images — for models that support generating multiple images per request
   if (userSettings.numImages && userSettings.numImages > 1 && (genType === "image" || genType === "i2i")) {

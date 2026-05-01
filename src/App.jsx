@@ -814,7 +814,7 @@ const MODEL_AVG_MS = {
   "wavespeed-ai/firered-image-v1.1-edit": 8000, "wavespeed-ai/step1x-edit": 8000,
   "alibaba/wan-2.7/image-edit": 18000,
 };
-const FALLBACK_MS = { image: 15000, i2i: 20000, t2v: 120000, i2v: 90000, avatar: 60000 };
+const FALLBACK_MS = { image: 15000, i2i: 20000, t2v: 120000, i2v: 90000, avatar: 60000, i23d: 240000 };
 function getExpectedMs(modelId, genType) {
   return MODEL_AVG_MS[modelId] || FALLBACK_MS[genType] || 30000;
 }
@@ -1325,8 +1325,9 @@ export default function ProximaApp() {
       // Restart polling for each
       for (const task of pending) {
         if (!task.pollUrl || pollRefs.current[task.id]) continue;
-        const pollInterval = (task.genType === "image" || task.genType === "i2i") ? 3000 : 15000;
-        const maxTimeout = (task.genType === "image" || task.genType === "i2i") ? 300000 : Infinity;
+        const tFast = task.genType === "image" || task.genType === "i2i";
+        const pollInterval = tFast ? 3000 : (task.genType === "i23d" ? 10000 : 15000);
+        const maxTimeout = tFast ? 300000 : Infinity;
         const pollUrl = task.pollUrl;
         const poll = async () => {
           if (maxTimeout !== Infinity && Date.now() - task.startTime > maxTimeout) {
@@ -1561,8 +1562,9 @@ export default function ProximaApp() {
           saveTask({ ...task, status: "processing", taskId, pollUrl });
 
           // Polling loop
-          const pollInterval = (genType === "image" || genType === "i2i") ? 3000 : 15000;
-          const maxTimeout = (genType === "image" || genType === "i2i") ? 300000 : Infinity;
+          const isFast = genType === "image" || genType === "i2i";
+          const pollInterval = isFast ? 3000 : (genType === "i23d" ? 10000 : 15000);
+          const maxTimeout = isFast ? 300000 : Infinity;
           const startPoll = Date.now();
 
           const poll = async () => {
@@ -1787,7 +1789,7 @@ export default function ProximaApp() {
   const completedTasks = tasks.filter(t => t.status === "completed");
   const activeTasks = tasks.filter(t => t.status === "pending" || t.status === "processing");
   // resOptions and arOptions are now computed dynamically in the settings panel based on selected models
-  const needsImage = genType === "i2i" || genType === "i2v" || genType === "avatar";
+  const needsImage = genType === "i2i" || genType === "i2v" || genType === "avatar" || genType === "i23d";
 
   // Show login screen if not authenticated
   if (!isAuthed) {
@@ -1871,7 +1873,7 @@ export default function ProximaApp() {
                           }}>
                           <span className="tab-icon">{TYPE_ICONS[key]}</span>
                           <span className="tab-label tab-label-full">{label}</span>
-                          <span className="tab-label tab-label-short">{({ image: "Image", i2i: "Edit", t2v: "T→V", i2v: "I→V", avatar: "Avatar" }[key] || label)}</span>
+                          <span className="tab-label tab-label-short">{({ image: "Image", i2i: "Edit", i23d: "3D", t2v: "T→V", i2v: "I→V", avatar: "Avatar" }[key] || label)}</span>
                         </button>
                       ))}
                     </div>
@@ -2313,7 +2315,20 @@ export default function ProximaApp() {
 
                           {task.status === "completed" && task.outputs?.map((url, i) => {
                             const tType = task.genType || genType;
-                            const isVideo = url.includes(".mp4") || url.includes("video") || tType === "t2v" || tType === "i2v" || tType === "avatar";
+                            const is3D = tType === "i23d" || /\.(glb|obj|fbx|usdz|stl)(\?|$)/i.test(url);
+                            const isVideo = !is3D && (url.includes(".mp4") || url.includes("video") || tType === "t2v" || tType === "i2v" || tType === "avatar");
+                            if (is3D) {
+                              return (
+                                <a key={i} href={url} target="_blank" rel="noopener" download
+                                  style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: 28, marginTop: 10, background: "var(--bg-input)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text-primary)", textDecoration: "none", transition: "border-color 0.2s" }}
+                                  onMouseOver={e => e.currentTarget.style.borderColor = "var(--accent)"}
+                                  onMouseOut={e => e.currentTarget.style.borderColor = "var(--glass-border)"}>
+                                  <div style={{ fontSize: 56 }}>🧊</div>
+                                  <div style={{ fontFamily: font, fontSize: 13, fontWeight: 600 }}>3D Mesh Ready</div>
+                                  <div style={{ fontFamily: font, fontSize: 10, color: "var(--text-muted)" }}>Tap to open / download · {url.split(".").pop().split("?")[0].toUpperCase()}</div>
+                                </a>
+                              );
+                            }
                             return isVideo ? (
                               <video key={i} className="result-video" src={url} controls autoPlay muted loop playsInline />
                             ) : (

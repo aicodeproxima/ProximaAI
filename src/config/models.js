@@ -160,6 +160,46 @@ const AR_STANDARD = {
   ],
   default: "16:9",
 };
+const AR_BRIA = {
+  paramName: "aspect_ratio",
+  options: [
+    { label: "1:1", value: "1:1" },
+    { label: "16:9", value: "16:9" },
+    { label: "9:16", value: "9:16" },
+    { label: "3:2", value: "3:2" },
+    { label: "2:3", value: "2:3" },
+    { label: "4:3", value: "4:3" },
+    { label: "3:4", value: "3:4" },
+    { label: "4:5", value: "4:5" },
+    { label: "5:4", value: "5:4" },
+  ],
+  default: "1:1",
+};
+const AR_GPT = {
+  paramName: "aspect_ratio",
+  options: [
+    { label: "1:1", value: "1:1" },
+    { label: "16:9", value: "16:9" },
+    { label: "9:16", value: "9:16" },
+    { label: "3:2", value: "3:2" },
+    { label: "2:3", value: "2:3" },
+    { label: "3:4", value: "3:4" },
+    { label: "4:3", value: "4:3" },
+    { label: "4:5", value: "4:5" },
+    { label: "5:4", value: "5:4" },
+    { label: "21:9", value: "21:9" },
+  ],
+  default: "1:1",
+};
+const QUALITY_GPT = {
+  paramName: "quality",
+  options: [
+    { label: "Low", value: "low" },
+    { label: "Medium", value: "medium" },
+    { label: "High", value: "high" },
+  ],
+  default: "low",
+};
 const AR_KLING = {
   paramName: "aspect_ratio",
   options: [
@@ -226,6 +266,17 @@ export const MODELS = {
     // Luma
     { id: "luma/photon", name: "Luma Photon", provider: "Luma", price: 0.03,
       params: { resolution: null, aspectRatio: AR_STANDARD, negativePrompt: false, seed: true, outputFormat: false } },
+
+    // OpenAI GPT Image 2.0
+    { id: "openai/gpt-image-2/text-to-image", name: "GPT Image 2.0", provider: "OpenAI", price: 0.01, hot: true,
+      params: { resolution: RES_NANO, aspectRatio: AR_GPT, negativePrompt: false, seed: false, outputFormat: false,
+        optional: { quality: { paramName: "quality", type: "enum", values: ["low", "medium", "high"], default: "low" } } } },
+
+    // Bria
+    { id: "bria/image-3.2", name: "Bria 3.2", provider: "Bria", price: 0.04,
+      params: { resolution: null, aspectRatio: AR_BRIA, negativePrompt: true, seed: true, outputFormat: false } },
+    { id: "bria/fibo", name: "Bria FIBO", provider: "Bria", price: 0.04,
+      params: { resolution: null, aspectRatio: AR_BRIA, negativePrompt: true, seed: true, outputFormat: false } },
   ],
 
   i2i: [
@@ -270,6 +321,74 @@ export const MODELS = {
       params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
     { id: "wavespeed-ai/step1x-edit", name: "Step1X Edit", provider: "WaveSpeed", price: 0.02,
       params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
+
+    // OpenAI GPT Image 2.0 Edit
+    { id: "openai/gpt-image-2/edit", name: "GPT Image 2.0 Edit", provider: "OpenAI", price: 0.03, hot: true,
+      params: { resolution: RES_NANO, aspectRatio: AR_GPT, negativePrompt: false, seed: false, outputFormat: false, maxImages: 4,
+        optional: { quality: { paramName: "quality", type: "enum", values: ["low", "medium", "high"], default: "low" } } } },
+
+    // Bria FIBO Edit + utility tools
+    { id: "bria/fibo/edit", name: "Bria FIBO Edit", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: true, seed: true, outputFormat: false, imageParam: "images", maxImages: 1 } },
+    { id: "bria/fibo/blend", name: "Bria Blend", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "images", maxImages: 4 } },
+    { id: "bria/fibo/restore", name: "Bria Restore", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true } },
+    { id: "bria/fibo/colorize", name: "Bria Colorize", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true,
+        briaPreset: { paramName: "style", default: "contemporary color",
+          options: [
+            { label: "Contemporary", value: "contemporary color" },
+            { label: "Vivid", value: "vivid color" },
+            { label: "B&W", value: "black and white colors" },
+            { label: "Sepia Vintage", value: "sepia vintage" },
+          ] } } },
+    { id: "bria/fibo/relight", name: "Bria Relight", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true,
+        briaPreset: { paramName: "light_type", default: "midday",
+          options: [
+            { label: "Midday", value: "midday" },
+            { label: "Sunrise", value: "sunrise light" },
+            { label: "Moonlight", value: "moonlight" },
+            { label: "Fog", value: "fog-diffused" },
+          ] } } },
+    { id: "bria/fibo/reseason", name: "Bria Reseason", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true,
+        briaPreset: { paramName: "season", default: "summer",
+          options: [
+            { label: "Spring", value: "spring" },
+            { label: "Summer", value: "summer" },
+            { label: "Autumn", value: "autumn" },
+            { label: "Winter", value: "winter" },
+          ] } } },
+    { id: "bria/expand", name: "Bria Expand", provider: "Bria", price: 0.04,
+      params: { resolution: null, aspectRatio: AR_BRIA, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true } },
+    { id: "bria/remove-background", name: "Bria Remove BG", provider: "Bria", price: 0.018,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true } },
+    { id: "bria/increase-resolution", name: "Bria Upscale", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true,
+        briaPreset: { paramName: "desired_increase", default: 2,
+          options: [
+            { label: "2x", value: 2 },
+            { label: "4x", value: 4 },
+          ] } } },
+    // Models requiring complex inputs (mask, products) — will need follow-up UI for full support
+    { id: "bria/eraser", name: "Bria Eraser", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true, requiresMask: true } },
+    { id: "bria/embed-product", name: "Bria Embed Product", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: true, outputFormat: false, imageParam: "image", noPrompt: true, requiresProducts: true } },
+  ],
+
+  i23d: [
+    // Image-to-3D models — input: source image, output: 3D mesh URL (.glb)
+    { id: "wavespeed-ai/hunyuan3d-v3/image-to-3d", name: "Hunyuan3D V3", provider: "Tencent", price: 0.225,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "input_image_url", noPrompt: true } },
+    { id: "hyper3d/rodin-v2/image-to-3d", name: "Hyper3D Rodin v2", provider: "Hyper3D", price: 0.40,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "images", maxImages: 4 } },
+    { id: "wavespeed-ai/meshy6/image-to-3d", name: "Meshy 6", provider: "Meshy", price: 0.20,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image_url", noPrompt: true } },
+    { id: "tripo3d/h3.1/image-to-3d", name: "Tripo3D H3.1", provider: "Tripo3D", price: 0.20,
+      params: { resolution: null, negativePrompt: false, seed: true, outputFormat: false, imageParam: "images", maxImages: 4 } },
   ],
 
   t2v: [
@@ -396,5 +515,5 @@ export const MODELS = {
   ],
 };
 
-export const TYPE_LABELS = { image: "Image", i2i: "Image Edit", t2v: "Text → Video", i2v: "Image → Video", avatar: "Avatar" };
-export const TYPE_ICONS = { image: "🖼️", i2i: "✏️", t2v: "🎬", i2v: "📸→🎬", avatar: "🧑‍🎤" };
+export const TYPE_LABELS = { image: "Image", i2i: "Image Edit", i23d: "Image → 3D", t2v: "Text → Video", i2v: "Image → Video", avatar: "Avatar" };
+export const TYPE_ICONS = { image: "🖼️", i2i: "✏️", i23d: "🧊", t2v: "🎬", i2v: "📸→🎬", avatar: "🧑‍🎤" };
