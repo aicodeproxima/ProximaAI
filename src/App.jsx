@@ -2300,6 +2300,11 @@ export default function ProximaApp() {
                              task.status === "failed" ? `✗ ${task.error}` :
                              <span className="pulse">⏱ {formatTime(task.wallClockMs)}</span>}
                             {task.status === "completed" && <span style={{ marginLeft: 8, color: "var(--amber)" }}>{formatCost(task.price)}</span>}
+                            {task.startTime && (
+                              <span style={{ marginLeft: 8, color: "var(--text-muted)", fontSize: 11 }}>
+                                · {formatTimestamp(task.startTime)} EST
+                              </span>
+                            )}
                           </div>
 
                           {(task.status === "pending" || task.status === "processing") && (

@@ -227,7 +227,7 @@ export const MODELS = {
     { id: "google/nano-banana-pro/text-to-image", name: "Nano Banana Pro", provider: "Google", price: 0.14, hot: true,
       params: { resolution: RES_NANO, negativePrompt: true, seed: true, optional: { webSearch: { paramName: "web_search", type: "boolean", default: false }, imgSearch: { paramName: "img_search", type: "boolean", default: false } } } },
     { id: "google/imagen4", name: "Imagen 4", provider: "Google", price: 0.08, hot: true,
-      params: { resolution: RES_NANO, negativePrompt: true, seed: true } },
+      params: { resolution: RES_NANO_12, negativePrompt: true, seed: true } },
 
     // Flux
     { id: "wavespeed-ai/flux-dev", name: "Flux Dev", provider: "WaveSpeed", price: 0.03,
@@ -254,7 +254,7 @@ export const MODELS = {
     // WaveSpeed / Alibaba
     { id: "wavespeed-ai/qwen-image-2.0-pro/text-to-image", name: "Qwen Image 2.0 Pro", provider: "Alibaba", price: 0.07, hot: true,
       params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
-    { id: "wavespeed-ai/qwen-image-text-to-image", name: "Qwen Image", provider: "Alibaba", price: 0.02,
+    { id: "wavespeed-ai/qwen-image/text-to-image", name: "Qwen Image", provider: "Alibaba", price: 0.02,
       params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/phota/text-to-image", name: "Phota", provider: "WaveSpeed", price: 0.03,
       params: { resolution: RES_FLUX, negativePrompt: true, seed: true } },
@@ -273,7 +273,7 @@ export const MODELS = {
         optional: { quality: { paramName: "quality", type: "enum", values: ["low", "medium", "high"], default: "low" } } } },
 
     // Bria
-    { id: "bria/image-3.2", name: "Bria 3.2", provider: "Bria", price: 0.04,
+    { id: "bria/text-to-image-3.2", name: "Bria 3.2", provider: "Bria", price: 0.04,
       params: { resolution: null, aspectRatio: AR_BRIA, negativePrompt: true, seed: true, outputFormat: false } },
     { id: "bria/fibo", name: "Bria FIBO", provider: "Bria", price: 0.04,
       params: { resolution: null, aspectRatio: AR_BRIA, negativePrompt: true, seed: true, outputFormat: false } },
@@ -296,7 +296,7 @@ export const MODELS = {
     { id: "bytedance/seedream-v4.5/edit", name: "Seedream 4.5 Edit", provider: "ByteDance", price: 0.04,
       params: { resolution: RES_SEEDREAM, negativePrompt: true, seed: true, maxImages: 10 } },
     { id: "bytedance/seededit-v3", name: "SeedEdit V3", provider: "ByteDance", price: 0.03,
-      params: { resolution: RES_SEEDREAM, negativePrompt: false, seed: true, maxImages: 5 } },
+      params: { resolution: RES_SEEDREAM, negativePrompt: false, seed: true, imageParam: "image" } },
 
     // Alibaba WAN Edit
     { id: "alibaba/wan-2.7/image-edit", name: "WAN 2.7 Edit", provider: "Alibaba", price: 0.03, hot: true,
@@ -313,12 +313,12 @@ export const MODELS = {
     // WaveSpeed
     { id: "wavespeed-ai/qwen-image-2.0-pro/edit", name: "Qwen Image 2.0 Pro Edit", provider: "Alibaba", price: 0.07, hot: true,
       params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true, maxImages: 6 } },
-    { id: "wavespeed-ai/qwen-image-edit", name: "Qwen Image Edit", provider: "Alibaba", price: 0.03,
+    { id: "wavespeed-ai/qwen-image/edit", name: "Qwen Image Edit", provider: "Alibaba", price: 0.03,
       params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
     { id: "wavespeed-ai/phota/edit", name: "Phota Edit", provider: "WaveSpeed", price: 0.03,
       params: { resolution: RES_FLUX, negativePrompt: true, seed: true, maxImages: 3 } },
-    { id: "wavespeed-ai/firered-image-v1.1-edit", name: "FireRed Edit", provider: "WaveSpeed", price: 0.02,
-      params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
+    { id: "wavespeed-ai/firered-image-v1.1/edit", name: "FireRed Edit", provider: "WaveSpeed", price: 0.02,
+      params: { resolution: null, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/step1x-edit", name: "Step1X Edit", provider: "WaveSpeed", price: 0.02,
       params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
 
