@@ -330,8 +330,8 @@ export const MODELS = {
     // Bria FIBO Edit + utility tools
     { id: "bria/fibo/edit", name: "Bria FIBO Edit", provider: "Bria", price: 0.04,
       params: { resolution: null, negativePrompt: true, seed: true, outputFormat: false, imageParam: "images", maxImages: 1 } },
-    { id: "bria/fibo/blend", name: "Bria Blend", provider: "Bria", price: 0.04,
-      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "images", maxImages: 4 } },
+    { id: "bria/fibo/image-blend", name: "Bria Blend", provider: "Bria", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image" } },
     { id: "bria/fibo/restore", name: "Bria Restore", provider: "Bria", price: 0.04,
       params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true } },
     { id: "bria/fibo/colorize", name: "Bria Colorize", provider: "Bria", price: 0.04,
@@ -382,13 +382,13 @@ export const MODELS = {
   i23d: [
     // Image-to-3D models — input: source image, output: 3D mesh URL (.glb)
     { id: "wavespeed-ai/hunyuan3d-v3/image-to-3d", name: "Hunyuan3D V3", provider: "Tencent", price: 0.225,
-      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "input_image_url", noPrompt: true } },
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true } },
     { id: "hyper3d/rodin-v2/image-to-3d", name: "Hyper3D Rodin v2", provider: "Hyper3D", price: 0.40,
       params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "images", maxImages: 4 } },
     { id: "wavespeed-ai/meshy6/image-to-3d", name: "Meshy 6", provider: "Meshy", price: 0.20,
-      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image_url", noPrompt: true } },
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true } },
     { id: "tripo3d/h3.1/image-to-3d", name: "Tripo3D H3.1", provider: "Tripo3D", price: 0.20,
-      params: { resolution: null, negativePrompt: false, seed: true, outputFormat: false, imageParam: "images", maxImages: 4 } },
+      params: { resolution: null, negativePrompt: false, seed: true, outputFormat: false, imageParam: "image", noPrompt: true } },
   ],
 
   t2v: [
