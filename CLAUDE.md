@@ -74,6 +74,25 @@ tests on the live URL. User's primary device is a 6.7" iPhone Pro Max (19.5:9).
 - Spawn multiple agents in parallel for research-heavy audits (respect rate limits)
 - Verify fixes with the actual API or a test harness before claiming success
 
+## Source-of-truth rule (CRITICAL — violated this once, won't again)
+**The deployed browser UX is the only acceptable proof.** Never claim a feature
+works based on:
+- Backend curl tests only
+- Local code review
+- "It builds successfully"
+- An agent's research output
+
+Every new model, payload, or UI change must be verified by clicking through
+the live deployed site via Playwright (or the user) and seeing the success
+state in the actual UI. Curl tests are useful for debugging WHICH slug/param
+to use, but they're not proof of working integration — the frontend payload
+construction, polling, output rendering, and state persistence all have to
+work together too.
+
+When tests show failures: troubleshoot the failure logs immediately, push
+fixes, re-test in the browser to confirm. Don't move on until the prod UI
+shows the success state.
+
 ## Key commits for reference
 - `8da8f95` Defensive fixes for debounced-sync races
 - `baf45c3` Back-button trap + resumable polling
