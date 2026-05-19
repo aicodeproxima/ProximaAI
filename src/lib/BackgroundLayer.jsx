@@ -4,29 +4,32 @@ import { useEffect, useMemo, useRef } from "react";
  * BackgroundLayer — animated app background for ProximaAI.
  *   type: 'orbs' | 'stars' | 'matrix' | 'grid' | 'none'
  *   accent: hex color used to tint each effect (e.g. theme accent)
+ *   paused: when true, pause all animations to free the main thread
+ *           (e.g. during batch generation). 2026-05-19 perf fix #5.
  */
-export default function BackgroundLayer({ type = "orbs", accent = "#6366f1" }) {
+export default function BackgroundLayer({ type = "orbs", accent = "#6366f1", paused = false }) {
   if (type === "none") return null;
-  if (type === "stars")  return <Stars accent={accent} />;
-  if (type === "matrix") return <Matrix accent={accent} />;
-  if (type === "grid")   return <Grid accent={accent} />;
-  return <Orbs accent={accent} />;
+  if (type === "stars")  return <Stars accent={accent} paused={paused} />;
+  if (type === "matrix") return <Matrix accent={accent} paused={paused} />;
+  if (type === "grid")   return <Grid accent={accent} paused={paused} />;
+  return <Orbs accent={accent} paused={paused} />;
 }
 
 // ── Orbs: three floating radial-gradient blobs, accent-tinted ─────────────
-function Orbs({ accent }) {
+function Orbs({ accent, paused }) {
+  const aps = paused ? "paused" : "running";
   return (
     <div style={BASE}>
       <style>{KF_ORB_FLOAT}</style>
-      <div style={{ position:"absolute", width:"min(520px, 90vw)", height:"min(520px, 90vw)", borderRadius:"50%", top:"-15%", left:"-15%", background:`radial-gradient(circle, ${accent}66 0%, ${accent}22 40%, transparent 70%)`, animation:"orbFloat 9s ease-in-out infinite", filter:"blur(40px)" }} />
-      <div style={{ position:"absolute", width:"min(440px, 85vw)", height:"min(440px, 85vw)", borderRadius:"50%", bottom:"-10%", right:"-10%", background:`radial-gradient(circle, ${accent}55 0%, ${accent}20 40%, transparent 70%)`, animation:"orbFloat 13s ease-in-out infinite reverse", filter:"blur(50px)" }} />
-      <div style={{ position:"absolute", width:"min(360px, 70vw)", height:"min(360px, 70vw)", borderRadius:"50%", top:"35%", left:"30%", background:`radial-gradient(circle, ${accent}3c 0%, transparent 65%)`, animation:"orbFloat 17s ease-in-out infinite", filter:"blur(60px)" }} />
+      <div style={{ position:"absolute", width:"min(520px, 90vw)", height:"min(520px, 90vw)", borderRadius:"50%", top:"-15%", left:"-15%", background:`radial-gradient(circle, ${accent}66 0%, ${accent}22 40%, transparent 70%)`, animation:"orbFloat 9s ease-in-out infinite", animationPlayState: aps, filter:"blur(40px)" }} />
+      <div style={{ position:"absolute", width:"min(440px, 85vw)", height:"min(440px, 85vw)", borderRadius:"50%", bottom:"-10%", right:"-10%", background:`radial-gradient(circle, ${accent}55 0%, ${accent}20 40%, transparent 70%)`, animation:"orbFloat 13s ease-in-out infinite reverse", animationPlayState: aps, filter:"blur(50px)" }} />
+      <div style={{ position:"absolute", width:"min(360px, 70vw)", height:"min(360px, 70vw)", borderRadius:"50%", top:"35%", left:"30%", background:`radial-gradient(circle, ${accent}3c 0%, transparent 65%)`, animation:"orbFloat 17s ease-in-out infinite", animationPlayState: aps, filter:"blur(60px)" }} />
     </div>
   );
 }
 
 // ── Stars: 70 random twinkling dots ────────────────────────────────────────
-function Stars({ accent }) {
+function Stars({ accent, paused }) {
   const stars = useMemo(() => Array.from({ length: 70 }, () => ({
     x: Math.random() * 100,
     y: Math.random() * 100,
@@ -35,6 +38,7 @@ function Stars({ accent }) {
     dur: 2 + Math.random() * 4,
     tiny: Math.random() > 0.7,
   })), []);
+  const aps = paused ? "paused" : "running";
   return (
     <div style={BASE}>
       <style>{`@keyframes starTwinkle{0%,100%{opacity:.15;transform:scale(1)}50%{opacity:1;transform:scale(1.25)}}`}</style>
@@ -49,6 +53,7 @@ function Stars({ accent }) {
           background: s.tiny ? "#ffffff" : accent,
           boxShadow: `0 0 ${s.size * 3}px ${s.tiny ? "#ffffff88" : accent + "aa"}`,
           animation: `starTwinkle ${s.dur}s ease-in-out ${s.delay}s infinite`,
+          animationPlayState: aps,
         }} />
       ))}
     </div>
@@ -56,8 +61,10 @@ function Stars({ accent }) {
 }
 
 // ── Matrix: falling katakana on a canvas ───────────────────────────────────
-function Matrix({ accent }) {
+function Matrix({ accent, paused }) {
   const canvasRef = useRef(null);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -78,6 +85,7 @@ function Matrix({ accent }) {
     window.addEventListener("resize", resize);
     let last = 0;
     const draw = (t) => {
+      if (pausedRef.current) { raf = requestAnimationFrame(draw); return; }
       if (t - last < 55) { raf = requestAnimationFrame(draw); return; }
       last = t;
       ctx.fillStyle = "rgba(0,0,0,0.09)";
@@ -99,13 +107,14 @@ function Matrix({ accent }) {
 }
 
 // ── Grid: pulsing radial-masked grid lines ─────────────────────────────────
-function Grid({ accent }) {
+function Grid({ accent, paused }) {
   return (
     <div style={{
       ...BASE,
       backgroundImage: `linear-gradient(${accent}33 1px, transparent 1px), linear-gradient(90deg, ${accent}33 1px, transparent 1px)`,
       backgroundSize: "36px 36px",
       animation: "gridPulse 6s ease-in-out infinite",
+      animationPlayState: paused ? "paused" : "running",
       maskImage: "radial-gradient(ellipse at center, black 35%, transparent 85%)",
       WebkitMaskImage: "radial-gradient(ellipse at center, black 35%, transparent 85%)",
     }}>

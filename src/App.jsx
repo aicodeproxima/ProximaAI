@@ -630,7 +630,7 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .cost-bar .cost-amount { font-family: ${font}; color: var(--amber); font-weight: 600; }
 
 /* Progress + Results */
-.task-card { background: var(--bg-card); border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px; margin-bottom: 12px; transition: border-color 0.3s; animation: fadeSlideIn 0.4s ease; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.task-card { background: var(--bg-card); border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px; margin-bottom: 12px; transition: border-color 0.3s; animation: fadeSlideIn 0.4s ease; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); content-visibility: auto; contain-intrinsic-size: auto 320px; }
 .task-card:hover { border-color: rgba(99,102,241,0.2); }
 @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 .task-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -1809,7 +1809,7 @@ export default function ProximaApp() {
   return (
     <>
       <style>{css}</style>
-      <BackgroundLayer type={background} accent={activeAccent} />
+      <BackgroundLayer type={background} accent={activeAccent} paused={activeCount > 0} />
       <div className="proxima-app">
         {/* Sidebar */}
         <div className="sidebar">
@@ -2338,7 +2338,7 @@ export default function ProximaApp() {
                               <video key={i} className="result-video" src={url} controls autoPlay muted loop playsInline />
                             ) : (
                               <img key={i} className="result-img" src={url} alt={task.modelName}
-                                onClick={() => setLightbox(url)} loading="lazy" />
+                                onClick={() => setLightbox(url)} loading="lazy" decoding="async" />
                             );
                           })}
 
@@ -2478,8 +2478,8 @@ export default function ProximaApp() {
                               onClick={() => setLightbox(url)}
                               onContextMenu={e => { e.preventDefault(); setLightbox({ url, task }); }}>
                               {isVideo
-                                ? <video src={url} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                                : <img src={url} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
+                                ? <video src={url} muted playsInline preload="none" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                                : <img src={url} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
                               {isVideo && <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: 24, color: "white", textShadow: "0 1px 4px rgba(0,0,0,0.6)", pointerEvents: "none" }}>▶</div>}
                               <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "16px 4px 3px", background: "linear-gradient(transparent, rgba(0,0,0,0.7))", fontSize: 8, color: "rgba(255,255,255,0.8)", fontFamily: font, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {task.modelName}
@@ -2503,8 +2503,8 @@ export default function ProximaApp() {
                             const gType = task.genType || "";
                             const isVideo = url.includes(".mp4") || url.includes("video") || gType === "t2v" || gType === "i2v" || gType === "avatar";
                             return isVideo
-                              ? <video key={i} className="result-video" src={url} controls muted playsInline onClick={() => setLightbox(url)} />
-                              : <img key={i} className="result-img" src={url} alt="" onClick={() => setLightbox(url)} />;
+                              ? <video key={i} className="result-video" src={url} controls muted playsInline preload="none" onClick={() => setLightbox(url)} />
+                              : <img key={i} className="result-img" src={url} alt="" loading="lazy" decoding="async" onClick={() => setLightbox(url)} />;
                           })}
                           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "var(--text-muted)", fontFamily: font }}>
                             <span>{task.provider}</span>
