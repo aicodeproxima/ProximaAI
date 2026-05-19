@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useReducer } from "react";
+import { useState, useEffect, useRef, useCallback, useReducer, memo } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
@@ -839,6 +839,119 @@ function formatTimestamp(ts) {
 }
 
 // ─── API SERVICE ───
+
+// ─── CockpitTaskCard ───
+// Memoized so each card only re-renders when its OWN task changes.
+// Before this extraction, every poll tick / keystroke / model toggle re-rendered all 500+ cards.
+// Live trace 2026-05-15 measured 13.9 FPS during typing because of this.
+const CockpitTaskCard = memo(function CockpitTaskCard({
+  task,
+  currentGenType,
+  onRegenerate,
+  onCancel,
+  onDownload,
+  onCloudArchive,
+  onCopyUrl,
+  onEdit,
+  onAnimate,
+  onLightbox,
+}) {
+  const tType = task.genType || currentGenType;
+  return (
+    <div className="task-card fade-in">
+      <div className="task-header">
+        <div>
+          <span className="task-model">{task.modelName}</span>
+          <span style={{ fontSize: 10, color: PROVIDER_COLORS[task.provider] || "#aaa", marginLeft: 6 }}>{task.provider}</span>
+        </div>
+        <span className={`task-status ${task.status}`}>
+          {task.status === "pending" ? "PENDING" : task.status === "processing" ? "PROCESSING" : task.status === "completed" ? "DONE" : "FAILED"}
+        </span>
+      </div>
+
+      <div className="task-timer">
+        {task.status === "completed" ? `✓ ${formatTime(task.wallClockMs)}` :
+         task.status === "failed" ? `✗ ${task.error}` :
+         <span className="pulse">⏱ {formatTime(task.wallClockMs)}</span>}
+        {task.status === "completed" && <span style={{ marginLeft: 8, color: "var(--amber)" }}>{formatCost(task.price)}</span>}
+        {task.startTime && (
+          <span style={{ marginLeft: 8, color: "var(--text-muted)", fontSize: 11 }}>
+            · {formatTimestamp(task.startTime)} EST
+          </span>
+        )}
+      </div>
+
+      {(task.status === "pending" || task.status === "processing") && (
+        <>
+          <div className="task-progress">
+            <div className="task-progress-fill" style={{
+              width: `${Math.min(95, (task.wallClockMs / getExpectedMs(task.modelId, tType)) * 100)}%`
+            }} />
+          </div>
+          <button className="result-action-btn" style={{ marginTop: 6, fontSize: 10 }} onClick={() => onCancel(task.id)}>✕ Cancel</button>
+        </>
+      )}
+
+      {task.status === "completed" && task.outputs?.map((url, i) => {
+        const is3D = tType === "i23d" || /\.(glb|obj|fbx|usdz|stl)(\?|$)/i.test(url);
+        const isVideo = !is3D && (url.includes(".mp4") || url.includes("video") || tType === "t2v" || tType === "i2v" || tType === "avatar");
+        if (is3D) {
+          return (
+            <a key={i} href={url} target="_blank" rel="noopener" download
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: 28, marginTop: 10, background: "var(--bg-input)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text-primary)", textDecoration: "none", transition: "border-color 0.2s" }}
+              onMouseOver={e => e.currentTarget.style.borderColor = "var(--accent)"}
+              onMouseOut={e => e.currentTarget.style.borderColor = "var(--glass-border)"}>
+              <div style={{ fontSize: 56 }}>🧊</div>
+              <div style={{ fontFamily: font, fontSize: 13, fontWeight: 600 }}>3D Mesh Ready</div>
+              <div style={{ fontFamily: font, fontSize: 10, color: "var(--text-muted)" }}>Tap to open / download · {url.split(".").pop().split("?")[0].toUpperCase()}</div>
+            </a>
+          );
+        }
+        return isVideo ? (
+          <video key={i} className="result-video" src={url} controls autoPlay muted loop playsInline />
+        ) : (
+          <img key={i} className="result-img" src={url} alt={task.modelName}
+            onClick={() => onLightbox(url)} loading="lazy" decoding="async" />
+        );
+      })}
+
+      {(task.status === "completed" || task.status === "failed") && (
+        <div className="result-actions">
+          <button className="result-action-btn" style={{ color: "var(--accent)", borderColor: "rgba(99,102,241,0.3)" }}
+            onClick={() => onRegenerate(task)}>🔄 Regenerate</button>
+          {task.status === "completed" && <>
+            <button className="result-action-btn" title="Download to device" onClick={() => onDownload(task)}>↓ Download</button>
+            <button className="result-action-btn" title="Back up to cloud storage (permanent)"
+              disabled={task.isArchived}
+              style={task.isArchived ? { color: "var(--success)", borderColor: "rgba(34,197,94,0.3)" } : { color: "var(--amber)", borderColor: "rgba(245,158,11,0.3)" }}
+              onClick={() => onCloudArchive(task)}>
+              {task.archiving ? "☁ …" : task.isArchived ? "☁ Saved" : "☁ Cloud"}
+            </button>
+            <button className="result-action-btn" onClick={() => onCopyUrl(task)}>📋 URL</button>
+            {(tType === "image" || tType === "i2i") && (
+              <button className="result-action-btn" style={{ color: "#a78bfa", borderColor: "rgba(167,139,250,0.3)" }}
+                onClick={() => onEdit(task)}>
+                ✏️ Edit
+              </button>
+            )}
+            {(tType === "image" || tType === "i2i") && (
+              <button className="result-action-btn" style={{ color: "var(--warning)", borderColor: "rgba(245,158,11,0.3)" }}
+                onClick={() => onAnimate(task)}>
+                🎬 Animate
+              </button>
+            )}
+          </>}
+        </div>
+      )}
+    </div>
+  );
+}, (prev, next) => {
+  // Custom equality: re-render only when this task's identity OR currentGenType changes.
+  // Handler refs are assumed stable (parent useCallback). If parent re-renders for an
+  // unrelated reason (typing in the prompt, switching pages), unchanged tasks skip render.
+  return prev.task === next.task && prev.currentGenType === next.currentGenType;
+});
+
 // ─── MAIN APP ───
 export default function ProximaApp() {
   const [isAuthed, setIsAuthed] = useState(() => {
@@ -1652,13 +1765,14 @@ export default function ProximaApp() {
     }, 500);
   }
 
-  function cancelTask(taskId) {
+  const cancelTask = useCallback((taskId) => {
     if (pollRefs.current[taskId]) clearTimeout(pollRefs.current[taskId]);
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: "failed", error: "Cancelled", endTime: Date.now() } : t));
-  }
+  }, []);
 
   // Regenerate — re-submit the same task with a new ID, without disrupting existing results
-  function regenerateTask(originalTask) {
+  // Wrapped in useCallback so CockpitTaskCard memo equality holds. Deps: apiKey (used inside).
+  const regenerateTask = useCallback(function regenerateTask(originalTask) {
     if (!apiKey) return;
     const newTask = {
       ...originalTask,
@@ -1765,7 +1879,7 @@ export default function ProximaApp() {
         } : t));
       }
     })();
-  }
+  }, [apiKey]);
 
   function replayLog(log) {
     setPrompt(log.prompt);
@@ -1784,6 +1898,78 @@ export default function ProximaApp() {
     setPerModelRes({});
     setPage("cockpit");
   }
+
+  // ─── Stable handlers for CockpitTaskCard (perf fix #1: React.memo) ───
+  const onDownloadTask = useCallback(async (task) => {
+    try {
+      const url = task.outputs?.[0];
+      if (!url) return;
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      const tgt = task.genType || "image";
+      const ext = (tgt === "t2v" || tgt === "i2v" || tgt === "avatar" || blob.type.startsWith("video")) ? "mp4" : "png";
+      const fname = `${task.modelName.replace(/\s+/g, "_")}_${Date.now()}.${ext}`;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 100);
+    } catch (e) { console.log("Direct download blocked, opening in new tab"); window.open(task.outputs?.[0], "_blank"); }
+  }, []);
+
+  const onCloudArchiveTask = useCallback(async (task) => {
+    if (task.isArchived) return;
+    setTasks(prev => prev.map(x => x.id === task.id ? { ...x, archiving: true } : x));
+    const newUrls = [];
+    const paths = [];
+    let anyOk = false;
+    for (let i = 0; i < (task.outputs || []).length; i++) {
+      const r = await archiveUrl(task.outputs[i], { taskId: task.id, index: i });
+      if (r.ok) { newUrls.push(r.url); paths.push(r.path); anyOk = true; }
+      else { newUrls.push(task.outputs[i]); }
+    }
+    if (anyOk) {
+      setTasks(prev => prev.map(x => x.id === task.id
+        ? { ...x, outputs: newUrls, archivedOutputs: newUrls, archivedPaths: paths, isArchived: true, archiving: false }
+        : x));
+      const updated = { ...task, outputs: newUrls, archivedOutputs: newUrls, archivedPaths: paths, isArchived: true };
+      saveTask(updated);
+      syncTask(updated).catch(() => {});
+      setAccountToast("☁ Backed up to cloud");
+    } else {
+      setTasks(prev => prev.map(x => x.id === task.id ? { ...x, archiving: false } : x));
+      setAccountToast("Cloud backup failed");
+    }
+    setTimeout(() => setAccountToast(""), 4000);
+    getArchiveStats().then(s => setArchiveStats(s));
+  }, []);
+
+  const onCopyUrlTask = useCallback((task) => {
+    navigator.clipboard?.writeText(task.outputs?.[0] || "");
+  }, []);
+
+  const onEditTask = useCallback((task) => {
+    setSourceImageUrl(task.outputs?.[0] || "");
+    setSourcePreview(task.outputs?.[0] || "");
+    setUploadStatus("done");
+    setGenType("i2i");
+    setPrompt(task.prompt || "");
+    const editModels = MODELS["i2i"] || [];
+    const sameProviderEdit = editModels.find(m => m.provider === task.provider);
+    setSelectedModels(sameProviderEdit ? [sameProviderEdit.id] : []);
+    setPage("cockpit");
+  }, []);
+
+  const onAnimateTask = useCallback((task) => {
+    setSourceImageUrl(task.outputs?.[0] || "");
+    setSourcePreview(task.outputs?.[0] || "");
+    setUploadStatus("done");
+    setGenType("i2v");
+    setSelectedModels([]);
+    setPrompt("");
+  }, []);
 
   // ─── RENDER ───
   const completedTasks = tasks.filter(t => t.status === "completed");
@@ -2284,143 +2470,19 @@ export default function ProximaApp() {
                   ) : (
                     <div className="results-grid">
                       {tasks.map(task => (
-                        <div key={task.id} className="task-card fade-in">
-                          <div className="task-header">
-                            <div>
-                              <span className="task-model">{task.modelName}</span>
-                              <span style={{ fontSize: 10, color: PROVIDER_COLORS[task.provider] || "#aaa", marginLeft: 6 }}>{task.provider}</span>
-                            </div>
-                            <span className={`task-status ${task.status}`}>
-                              {task.status === "pending" ? "PENDING" : task.status === "processing" ? "PROCESSING" : task.status === "completed" ? "DONE" : "FAILED"}
-                            </span>
-                          </div>
-
-                          <div className="task-timer">
-                            {task.status === "completed" ? `✓ ${formatTime(task.wallClockMs)}` :
-                             task.status === "failed" ? `✗ ${task.error}` :
-                             <span className="pulse">⏱ {formatTime(task.wallClockMs)}</span>}
-                            {task.status === "completed" && <span style={{ marginLeft: 8, color: "var(--amber)" }}>{formatCost(task.price)}</span>}
-                            {task.startTime && (
-                              <span style={{ marginLeft: 8, color: "var(--text-muted)", fontSize: 11 }}>
-                                · {formatTimestamp(task.startTime)} EST
-                              </span>
-                            )}
-                          </div>
-
-                          {(task.status === "pending" || task.status === "processing") && (
-                            <>
-                              <div className="task-progress">
-                                <div className="task-progress-fill" style={{
-                                  width: `${Math.min(95, (task.wallClockMs / getExpectedMs(task.modelId, task.genType || genType)) * 100)}%`
-                                }} />
-                              </div>
-                              <button className="result-action-btn" style={{ marginTop: 6, fontSize: 10 }} onClick={() => cancelTask(task.id)}>✕ Cancel</button>
-                            </>
-                          )}
-
-                          {task.status === "completed" && task.outputs?.map((url, i) => {
-                            const tType = task.genType || genType;
-                            const is3D = tType === "i23d" || /\.(glb|obj|fbx|usdz|stl)(\?|$)/i.test(url);
-                            const isVideo = !is3D && (url.includes(".mp4") || url.includes("video") || tType === "t2v" || tType === "i2v" || tType === "avatar");
-                            if (is3D) {
-                              return (
-                                <a key={i} href={url} target="_blank" rel="noopener" download
-                                  style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: 28, marginTop: 10, background: "var(--bg-input)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text-primary)", textDecoration: "none", transition: "border-color 0.2s" }}
-                                  onMouseOver={e => e.currentTarget.style.borderColor = "var(--accent)"}
-                                  onMouseOut={e => e.currentTarget.style.borderColor = "var(--glass-border)"}>
-                                  <div style={{ fontSize: 56 }}>🧊</div>
-                                  <div style={{ fontFamily: font, fontSize: 13, fontWeight: 600 }}>3D Mesh Ready</div>
-                                  <div style={{ fontFamily: font, fontSize: 10, color: "var(--text-muted)" }}>Tap to open / download · {url.split(".").pop().split("?")[0].toUpperCase()}</div>
-                                </a>
-                              );
-                            }
-                            return isVideo ? (
-                              <video key={i} className="result-video" src={url} controls autoPlay muted loop playsInline />
-                            ) : (
-                              <img key={i} className="result-img" src={url} alt={task.modelName}
-                                onClick={() => setLightbox(url)} loading="lazy" decoding="async" />
-                            );
-                          })}
-
-                          {(task.status === "completed" || task.status === "failed") && (
-                            <div className="result-actions">
-                              <button className="result-action-btn" style={{ color: "var(--accent)", borderColor: "rgba(99,102,241,0.3)" }}
-                                onClick={() => regenerateTask(task)}>🔄 Regenerate</button>
-                              {task.status === "completed" && <>
-                                <button className="result-action-btn" title="Download to device" onClick={async () => {
-                                  try {
-                                    const url = task.outputs?.[0];
-                                    if (!url) return;
-                                    const resp = await fetch(url);
-                                    const blob = await resp.blob();
-                                    const tgt = task.genType || genType;
-                                    const ext = (tgt === "t2v" || tgt === "i2v" || tgt === "avatar" || blob.type.startsWith("video")) ? "mp4" : "png";
-                                    const fname = `${task.modelName.replace(/\s+/g, "_")}_${Date.now()}.${ext}`;
-                                    const a = document.createElement("a");
-                                    a.href = URL.createObjectURL(blob);
-                                    a.download = fname;
-                                    a.style.display = "none";
-                                    document.body.appendChild(a);
-                                    a.click();
-                                    setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 100);
-                                  } catch (e) { console.log("Direct download blocked, opening in new tab"); window.open(task.outputs?.[0], "_blank"); }
-                                }}>↓ Download</button>
-                                <button className="result-action-btn" title="Back up to cloud storage (permanent)"
-                                  disabled={task.isArchived}
-                                  style={task.isArchived ? { color: "var(--success)", borderColor: "rgba(34,197,94,0.3)" } : { color: "var(--amber)", borderColor: "rgba(245,158,11,0.3)" }}
-                                  onClick={async () => {
-                                    if (task.isArchived) return;
-                                    setTasks(prev => prev.map(x => x.id === task.id ? { ...x, archiving: true } : x));
-                                    const newUrls = [];
-                                    const paths = [];
-                                    let anyOk = false;
-                                    for (let i = 0; i < (task.outputs || []).length; i++) {
-                                      const r = await archiveUrl(task.outputs[i], { taskId: task.id, index: i });
-                                      if (r.ok) { newUrls.push(r.url); paths.push(r.path); anyOk = true; }
-                                      else { newUrls.push(task.outputs[i]); }
-                                    }
-                                    if (anyOk) {
-                                      setTasks(prev => prev.map(x => x.id === task.id
-                                        ? { ...x, outputs: newUrls, archivedOutputs: newUrls, archivedPaths: paths, isArchived: true, archiving: false }
-                                        : x));
-                                      const updated = { ...task, outputs: newUrls, archivedOutputs: newUrls, archivedPaths: paths, isArchived: true };
-                                      saveTask(updated);
-                                      syncTask(updated).catch(() => {});
-                                      setAccountToast("☁ Backed up to cloud");
-                                    } else {
-                                      setTasks(prev => prev.map(x => x.id === task.id ? { ...x, archiving: false } : x));
-                                      setAccountToast("Cloud backup failed");
-                                    }
-                                    setTimeout(() => setAccountToast(""), 4000);
-                                    getArchiveStats().then(s => setArchiveStats(s));
-                                  }}>
-                                  {task.archiving ? "☁ …" : task.isArchived ? "☁ Saved" : "☁ Cloud"}
-                                </button>
-                                <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(task.outputs?.[0] || ""); }}>📋 URL</button>
-                                {((task.genType || genType) === "image" || (task.genType || genType) === "i2i") && (
-                                  <button className="result-action-btn" style={{ color: "#a78bfa", borderColor: "rgba(167,139,250,0.3)" }}
-                                    onClick={() => {
-                                      setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done");
-                                      setGenType("i2i"); setPrompt(task.prompt || "");
-                                      // Auto-select the edit variant of the same model if available
-                                      const editModels = MODELS["i2i"] || [];
-                                      const sameProviderEdit = editModels.find(m => m.provider === task.provider);
-                                      setSelectedModels(sameProviderEdit ? [sameProviderEdit.id] : []);
-                                      setPage("cockpit");
-                                    }}>
-                                    ✏️ Edit
-                                  </button>
-                                )}
-                                {((task.genType || genType) === "image" || (task.genType || genType) === "i2i") && (
-                                  <button className="result-action-btn" style={{ color: "var(--warning)", borderColor: "rgba(245,158,11,0.3)" }}
-                                    onClick={() => { setSourceImageUrl(task.outputs?.[0] || ""); setSourcePreview(task.outputs?.[0] || ""); setUploadStatus("done"); setGenType("i2v"); setSelectedModels([]); setPrompt(""); }}>
-                                    🎬 Animate
-                                  </button>
-                                )}
-                              </>}
-                            </div>
-                          )}
-                        </div>
+                        <CockpitTaskCard
+                          key={task.id}
+                          task={task}
+                          currentGenType={genType}
+                          onRegenerate={regenerateTask}
+                          onCancel={cancelTask}
+                          onDownload={onDownloadTask}
+                          onCloudArchive={onCloudArchiveTask}
+                          onCopyUrl={onCopyUrlTask}
+                          onEdit={onEditTask}
+                          onAnimate={onAnimateTask}
+                          onLightbox={setLightbox}
+                        />
                       ))}
                     </div>
                   )}
