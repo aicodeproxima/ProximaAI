@@ -215,10 +215,19 @@ export default async function handler(req: Request): Promise<Response> {
     });
   }
 
-  // 4. Build the upstream URL. Strip the /api/wavespeed-v2/ prefix; keep the rest + query.
+  // 4. Build the upstream URL. The vercel.json rewrite delivers the WaveSpeed
+  //    path as ?p=<path> (Vercel's filesystem catch-all [...path] only matches a
+  //    single segment in non-Next projects, so we route via a :path* rewrite into
+  //    this single function instead). Fall back to stripping the prefix if the
+  //    original URL passed through unrewritten.
   const reqUrl = new URL(req.url);
-  const path = reqUrl.pathname.replace(/^\/api\/wavespeed-v2\/?/, '');
-  const upstreamUrl = `${WAVESPEED_BASE}/${path}${reqUrl.search}`;
+  let path = reqUrl.searchParams.get('p') || reqUrl.pathname.replace(/^\/api\/(wavespeed-v2|ws-proxy)\/?/, '');
+  path = path.replace(/^\/+/, '');
+  // Preserve any genuine upstream query params (everything except our internal 'p').
+  const passthrough = new URLSearchParams(reqUrl.search);
+  passthrough.delete('p');
+  const qs = passthrough.toString();
+  const upstreamUrl = `${WAVESPEED_BASE}/${path}${qs ? `?${qs}` : ''}`;
 
   // 5. Forward headers: copy Content-Type, REPLACE Authorization with server key,
   //    drop hop-by-hop and identifying headers.
