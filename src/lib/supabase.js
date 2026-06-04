@@ -12,6 +12,19 @@ const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 let supabase = null;
 let deviceId = null;
 
+// ─── Logging helper — rate-limited per site (F.6.1) ────────────────────────
+// Cooldown of 60s per call-site so a flapping path doesn't flood the console.
+// Phase 4 Order 12 routes these to Sentry; for now console only.
+const _warnedRecently = new Map();
+function warnOnce(siteKey, err) {
+  const now = Date.now();
+  const last = _warnedRecently.get(siteKey) || 0;
+  if (now - last < 60000) return;
+  _warnedRecently.set(siteKey, now);
+  const msg = err?.message || err?.error?.message || String(err);
+  console.warn(`[supabase:${siteKey}] ${msg}`);
+}
+
 export function isSupabaseConfigured() {
   return !!(SUPABASE_URL && SUPABASE_KEY);
 }
@@ -21,7 +34,7 @@ export function getDeviceId() {
   try {
     const user = localStorage.getItem("proximaai-user");
     if (user) return `user:${user}`;
-  } catch {}
+  } catch {}  // intentional: SSR/privacy mode — fall through to device-id path
   // Fallback: random device ID for anonymous/pre-login sessions
   if (deviceId) return deviceId;
   try {
@@ -67,7 +80,7 @@ export function touchSync() {
   const now = Date.now();
   if (now - _lastSyncWrite < 500) return;
   _lastSyncWrite = now;
-  try { localStorage.setItem("proximaai_last_sync_at", String(now)); } catch {}
+  try { localStorage.setItem("proximaai_last_sync_at", String(now)); } catch {}  // intentional: quota errors handled by failed-sync queue
 }
 
 // ─── Task Sync ───
@@ -105,7 +118,7 @@ export async function syncTask(task) {
       task_id: task.taskId ?? null,
     }, { onConflict: "id" });
     if (!r.error) touchSync();
-  } catch {}
+  } catch (err) { warnOnce("syncTask", err); }
 }
 
 // Batch version — single upsert for multiple tasks at once
@@ -145,7 +158,7 @@ export async function syncTasksBatch(tasks) {
       const r = await supabase.from("tasks").upsert(rows, { onConflict: "id" });
       if (!r.error) touchSync();
     }
-  } catch {}
+  } catch (err) { warnOnce("syncTasksBatch", err); }
 }
 
 export async function pullTasks(limit = 500) {
@@ -186,21 +199,21 @@ export async function pullTasks(limit = 500) {
       nsfw: row.nsfw ?? null,
       taskId: row.task_id ?? null,
     }));
-  } catch { return []; }
+  } catch (err) { warnOnce("pullTasks", err); return []; }
 }
 
 export async function deleteTaskRemote(id) {
   if (!supabase) return;
   try {
     await supabase.from("tasks").delete().eq("id", id).eq("device_id", getDeviceId());
-  } catch {}
+  } catch (err) { warnOnce("deleteTaskRemote", err); }
 }
 
 export async function clearTasksRemote() {
   if (!supabase) return;
   try {
     await supabase.from("tasks").delete().eq("device_id", getDeviceId());
-  } catch {}
+  } catch (err) { warnOnce("clearTasksRemote", err); }
 }
 
 // ─── History Sync ───
@@ -227,7 +240,7 @@ export async function syncHistoryEntry(entry) {
       total_cost: entry.totalCost ?? 0,
     }, { onConflict: "id" });
     if (!r.error) touchSync();
-  } catch {}
+  } catch (err) { warnOnce("syncHistoryEntry", err); }
 }
 
 export async function pullHistory(limit = 500) {
@@ -256,28 +269,28 @@ export async function pullHistory(limit = 500) {
       tasks: row.tasks || [],
       totalCost: row.total_cost,
     }));
-  } catch { return []; }
+  } catch (err) { warnOnce("pullHistory", err); return []; }
 }
 
 export async function clearHistoryRemote() {
   if (!supabase) return;
   try {
     await supabase.from("history").delete().eq("device_id", getDeviceId());
-  } catch {}
+  } catch (err) { warnOnce("clearHistoryRemote", err); }
 }
 
 export async function clearSettingsRemote() {
   if (!supabase) return;
   try {
     await supabase.from("settings").delete().eq("device_id", getDeviceId());
-  } catch {}
+  } catch (err) { warnOnce("clearSettingsRemote", err); }
 }
 
 export async function clearFavoritesRemote() {
   if (!supabase) return;
   try {
     await supabase.from("favorites").delete().eq("device_id", getDeviceId());
-  } catch {}
+  } catch (err) { warnOnce("clearFavoritesRemote", err); }
 }
 
 // ─── Settings Sync ───
@@ -292,7 +305,7 @@ export async function syncSetting(key, value) {
       updated_at: new Date().toISOString(),
     });
     if (!r.error) touchSync();
-  } catch {}
+  } catch (err) { warnOnce("syncSetting", err); }
 }
 
 export async function pullSettings() {
@@ -305,7 +318,7 @@ export async function pullSettings() {
     const map = {};
     for (const row of data || []) map[row.key] = row.value;
     return map;
-  } catch { return {}; }
+  } catch (err) { warnOnce("pullSettings", err); return {}; }
 }
 
 // ─── Favorites Sync ───
@@ -319,7 +332,7 @@ export async function syncFavorite(fav) {
       prompt: fav.prompt || null,
       tags: fav.tags || [],
     });
-  } catch {}
+  } catch (err) { warnOnce("syncFavorite", err); }
 }
 
 export async function pullFavorites() {
@@ -336,7 +349,7 @@ export async function pullFavorites() {
       tags: row.tags || [],
       createdAt: row.created_at,
     }));
-  } catch { return []; }
+  } catch (err) { warnOnce("pullFavorites", err); return []; }
 }
 
 // ─── Bulk Pull (for initial sync on login) ───
@@ -583,7 +596,7 @@ export async function verifyEmailOtp(email, token) {
     const { error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
     if (error) return { ok: false, error: error.message };
     // Immediately sign out from Supabase Auth — we use our own auth system
-    try { await supabase.auth.signOut(); } catch {}
+    try { await supabase.auth.signOut(); } catch {}  // intentional: we use our own auth; signOut failure is benign
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message || "Verification failed" }; }
 }
