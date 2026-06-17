@@ -165,6 +165,20 @@ export async function clearHistory() {
   }
 }
 
+// Bulk-delete a list of history (generation-log) ids from IndexedDB. Also scrubs the
+// localStorage fallback array (used when IndexedDB is unavailable) so deletes stick.
+export async function deleteHistoryEntries(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return;
+  await batchDelete("history", ids);
+  try {
+    const idSet = new Set(ids);
+    const logs = JSON.parse(localStorage.getItem("proximaai-logs") || "[]");
+    if (Array.isArray(logs) && logs.length) {
+      localStorage.setItem("proximaai-logs", JSON.stringify(logs.filter(l => !idSet.has(l.id))));
+    }
+  } catch {}
+}
+
 // ─── Favorites ───
 
 export async function addFavorite(entry) {

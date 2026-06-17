@@ -289,6 +289,22 @@ export async function pullHistory(limit = 500) {
   } catch (err) { warnOnce("pullHistory", err); return []; }
 }
 
+// Bulk-delete specific history (log) ids from the cloud, scoped to this device/user.
+export async function deleteHistoryRemote(ids) {
+  if (!supabase) return { ok: false };
+  const list = (ids || []).filter(Boolean);
+  if (list.length === 0) return { ok: true };
+  try {
+    const { error } = await supabase
+      .from("history")
+      .delete()
+      .in("id", list)
+      .eq("device_id", getDeviceId());
+    if (error) { warnOnce("deleteHistoryRemote", error); return { ok: false, error: error.message }; }
+    return { ok: true };
+  } catch (err) { warnOnce("deleteHistoryRemote", err); return { ok: false, error: err?.message }; }
+}
+
 export async function clearHistoryRemote() {
   if (!supabase) return;
   try {

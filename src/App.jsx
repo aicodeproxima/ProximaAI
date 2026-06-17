@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback, useReducer, memo } from "reac
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
@@ -638,6 +638,9 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .select-check.on { background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: #6366f1; box-shadow: 0 0 10px rgba(99,102,241,0.5); }
 /* In select mode, push card content right so the top-left checkbox never overlaps the model name. */
 .task-card.selecting-card .task-header { padding-left: 38px; }
+/* Log-row selection: smaller, vertically-centered checkbox + selected-row highlight. */
+.select-check.log-check { top: 50%; transform: translateY(-50%); left: 12px; width: 20px; height: 20px; font-size: 12px; border-radius: 5px; }
+.log-row.log-row-selected { background: rgba(99,102,241,0.14); }
 /* ── Bulk-select toolbar ── */
 .sel-bar-launch { display: flex; justify-content: flex-end; margin-bottom: 10px; }
 .sel-bar { margin-bottom: 10px; padding: 10px; background: rgba(8,12,25,0.5); border: 1px solid var(--glass-border); border-radius: 10px; }
@@ -1036,6 +1039,10 @@ export default function ProximaApp() {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  // ── Bulk-select / delete generation LOGS (separate from generations above) ──
+  const [logSelectMode, setLogSelectMode] = useState(false);
+  const [logSelectedIds, setLogSelectedIds] = useState(() => new Set());
+  const [bulkDeletingLogs, setBulkDeletingLogs] = useState(false);
   const [numImages, setNumImages] = useState(1);
   const [storageStats, setStorageStats] = useState(null);
   const [showAccountModal, setShowAccountModal] = useState(false);
@@ -1067,11 +1074,13 @@ export default function ProximaApp() {
     // Deletes win over upserts: never re-upsert a task that's queued for deletion.
     const taskRetries = failed.filter(f => f.kind === "task" && !deletingIds.current.has(f.id)).map(f => f.data).filter(Boolean);
     if (taskRetries.length > 0) { try { await syncTasksBatch(taskRetries); for (const t of taskRetries) removeFailedSync("task", t.id); } catch {} }
-    for (const f of failed.filter(f => f.kind === "history")) { try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id); } catch {} }
+    for (const f of failed.filter(f => f.kind === "history" && !deletingLogIds.current.has(f.id))) { try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id); } catch {} }
     for (const f of failed.filter(f => f.kind === "setting")) { try { await syncSetting(f.id, f.data); removeFailedSync("setting", f.id); } catch {} }
     // Replay any cloud deletes that didn't confirm (bulk-delete dropped mid-flight).
     const delRetries = failed.filter(f => f.kind === "task-delete").map(f => f.id);
     if (delRetries.length > 0) { const dr = await deleteTasksRemote(delRetries); if (dr.ok) { await deleteTasks(delRetries); for (const id of delRetries) removeFailedSync("task-delete", id); } }
+    const logDelRetries = failed.filter(f => f.kind === "history-delete").map(f => f.id);
+    if (logDelRetries.length > 0) { const hr = await deleteHistoryRemote(logDelRetries); if (hr.ok) { await deleteHistoryEntries(logDelRetries); for (const id of logDelRetries) removeFailedSync("history-delete", id); } }
     const remaining = getFailedSyncs().length;
     setFailedSyncCount(remaining);
     if (remaining === 0) { setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000); }
@@ -1160,6 +1169,9 @@ export default function ProximaApp() {
   // generation the user just deleted. Persisted for the whole session (never cleared)
   // because the cost of keeping a deleted id here is nil but a stray re-upsert is data loss.
   const deletingIds = useRef(new Set());
+  // Same guard for generation logs: any path that would re-upsert a history row skips
+  // ids in here, so a just-deleted log can't be resurrected by an in-flight sync.
+  const deletingLogIds = useRef(new Set());
   const [failedSyncCount, setFailedSyncCount] = useState(0);
 
   // ─── AUTH HANDLERS ───
@@ -1276,11 +1288,20 @@ export default function ProximaApp() {
         const remote = await pullAllRemoteData();
         if (cancelled || !remote) { bootstrapInProgress.current = false; return; }
 
-        // Merge tasks: add any cloud tasks not already in local
+        // Pre-load pending bulk-delete intents into the deleting-guards BEFORE merging the
+        // cloud pull, so rows the user already deleted (whose cloud delete hasn't confirmed
+        // yet) are NOT re-seeded into local state/IndexedDB. The replay block below still
+        // runs the actual cloud delete and clears the intents on success.
+        for (const f of getFailedSyncs()) {
+          if (f.kind === "task-delete") deletingIds.current.add(f.id);
+          else if (f.kind === "history-delete") deletingLogIds.current.add(f.id);
+        }
+
+        // Merge tasks: add any cloud tasks not already in local (and not pending-delete)
         if (remote.tasks?.length > 0) {
           setTasks(prev => {
             const existingIds = new Set(prev.map(t => t.id));
-            const newOnes = remote.tasks.filter(t => !existingIds.has(t.id));
+            const newOnes = remote.tasks.filter(t => !existingIds.has(t.id) && !deletingIds.current.has(t.id));
             // Save new cloud tasks to local IndexedDB
             for (const t of newOnes) {
               savedTaskIds.current.add(t.id);
@@ -1290,11 +1311,11 @@ export default function ProximaApp() {
           });
         }
 
-        // Merge history: add any cloud logs not already in local
+        // Merge history: add any cloud logs not already in local (and not pending-delete)
         if (remote.history?.length > 0) {
           setLogs(prev => {
             const existingIds = new Set(prev.map(l => l.id));
-            const newOnes = remote.history.filter(l => !existingIds.has(l.id));
+            const newOnes = remote.history.filter(l => !existingIds.has(l.id) && !deletingLogIds.current.has(l.id));
             for (const l of newOnes) {
               savedLogIds.current.add(l.id);
               addHistoryEntry(l);
@@ -1327,6 +1348,9 @@ export default function ProximaApp() {
           const delRetries = failed.filter(f => f.kind === "task-delete").map(f => f.id).filter(Boolean);
           const delSet = new Set(delRetries);
           for (const id of delRetries) deletingIds.current.add(id);
+          const logDelRetries = failed.filter(f => f.kind === "history-delete").map(f => f.id).filter(Boolean);
+          const logDelSet = new Set(logDelRetries);
+          for (const id of logDelRetries) deletingLogIds.current.add(id);
           const taskRetries = failed.filter(f => f.kind === "task" && !delSet.has(f.id)).map(f => f.data).filter(Boolean);
           if (taskRetries.length > 0) {
             try {
@@ -1334,7 +1358,7 @@ export default function ProximaApp() {
               for (const t of taskRetries) removeFailedSync("task", t.id);
             } catch {}
           }
-          const historyRetries = failed.filter(f => f.kind === "history").map(f => f.data).filter(Boolean);
+          const historyRetries = failed.filter(f => f.kind === "history" && !logDelSet.has(f.id)).map(f => f.data).filter(Boolean);
           for (const entry of historyRetries) {
             try { await syncHistoryEntry(entry); removeFailedSync("history", entry.id); } catch {}
           }
@@ -1351,6 +1375,14 @@ export default function ProximaApp() {
               setTasks(prev => prev.filter(t => !delSet.has(t.id)));
               await deleteTasks(delRetries);
               for (const id of delRetries) { removeFailedSync("task-delete", id); savedTaskIds.current.delete(id); }
+            }
+          }
+          if (logDelRetries.length > 0) {
+            const hr = await deleteHistoryRemote(logDelRetries);
+            if (hr.ok) {
+              setLogs(prev => prev.filter(l => !logDelSet.has(l.id)));
+              await deleteHistoryEntries(logDelRetries);
+              for (const id of logDelRetries) { removeFailedSync("history-delete", id); savedLogIds.current.delete(id); }
             }
           }
           setFailedSyncCount(getFailedSyncs().length);
@@ -1385,7 +1417,7 @@ export default function ProximaApp() {
   useEffect(() => {
     if (logs.length > 0) {
       const latest = logs[0];
-      if (latest?.id && !savedLogIds.current.has(latest.id)) {
+      if (latest?.id && !savedLogIds.current.has(latest.id) && !deletingLogIds.current.has(latest.id)) {
         savedLogIds.current.add(latest.id);
         addHistoryEntry(latest);
         addFailedSync({ kind: "history", id: latest.id, data: latest });
@@ -2173,6 +2205,102 @@ export default function ProximaApp() {
     );
   };
 
+  // ─── Bulk-select / delete handlers for generation LOGS ───
+  const toggleSelectLog = (id) => {
+    setLogSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const exitLogSelectMode = () => { setLogSelectMode(false); setLogSelectedIds(new Set()); };
+
+  // Delete every selected generation log. Mirrors deleteSelectedTasks: snapshot first
+  // (abort if it fails), deletingLogIds guard, "history-delete" replay intent, honest status.
+  const deleteSelectedLogs = async () => {
+    if (bulkDeletingLogs) return;
+    const idSet = new Set(logSelectedIds);
+    const targets = logs.filter(l => idSet.has(l.id));
+    if (targets.length === 0) { exitLogSelectMode(); return; }
+    const n = targets.length;
+    const noun = n === 1 ? "1 log entry" : `${n} log entries`;
+    if (!confirm(`Delete ${noun}? This removes ${n === 1 ? "it" : "them"} from this device and the cloud.\n\nA safety backup is taken first, so you can restore from Settings → Cloud Backups.`)) return;
+    const ids = targets.map(l => l.id);
+    setBulkDeletingLogs(true);
+    setSaveStatus("saving");
+    // 0. Guard against any in-flight history upsert resurrecting these ids.
+    for (const id of ids) deletingLogIds.current.add(id);
+    // 1. Pre-destructive snapshot (HARD RULE) — abort if it can't be confirmed.
+    const bk = await createBackup("pre-bulk-delete-logs", `Before deleting ${noun}`);
+    if (!bk?.ok) {
+      for (const id of ids) deletingLogIds.current.delete(id);
+      setBulkDeletingLogs(false);
+      setSaveStatus("error");
+      setAccountToast(`Couldn't create the safety backup (${bk?.error || "unknown error"}) — nothing was deleted.`);
+      setTimeout(() => setAccountToast(""), 6000);
+      return;
+    }
+    // 2. Drop stale "history" upsert intents for these ids.
+    for (const id of ids) { savedLogIds.current.delete(id); removeFailedSync("history", id); }
+    // 3. Enqueue cloud-delete intents BEFORE firing.
+    for (const id of ids) addFailedSync({ kind: "history-delete", id, data: id });
+    // 4. Optimistic local removal.
+    setLogs(prev => prev.filter(l => !idSet.has(l.id)));
+    // 5. Local IndexedDB delete (awaited).
+    await deleteHistoryEntries(ids);
+    // 6. Cloud delete (batched, device-scoped).
+    const r = await deleteHistoryRemote(ids);
+    if (r.ok) for (const id of ids) removeFailedSync("history-delete", id);
+    // 7. Refresh counters + status (honest).
+    setFailedSyncCount(getFailedSyncs().length);
+    getStorageStats().then(s => setStorageStats(s));
+    setBulkDeletingLogs(false);
+    exitLogSelectMode();
+    if (r.ok) {
+      setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
+      setAccountToast(`Deleted ${noun} — safety backup saved`);
+    } else {
+      setSaveStatus("error");
+      setAccountToast(`Removed ${noun} locally — the cloud delete will finish on your next save or reload`);
+    }
+    setTimeout(() => setAccountToast(""), 5000);
+  };
+
+  // Selection toolbar for the generation-log list.
+  const renderLogSelectBar = () => {
+    const selCount = logs.reduce((acc, l) => acc + (logSelectedIds.has(l.id) ? 1 : 0), 0);
+    const allSelected = logs.length > 0 && selCount === logs.length;
+    const now = Date.now();
+    const expiredCount = logs.filter(l => (now - (l.timestamp || 0)) > SEVEN_DAYS_MS).length;
+    if (!logSelectMode) {
+      return (
+        <div className="sel-bar-launch">
+          <button className="sel-launch" onClick={() => setLogSelectMode(true)}>☑ Select</button>
+        </div>
+      );
+    }
+    return (
+      <div className="sel-bar">
+        <div className="sel-bar-top">
+          <span className="sel-count">{selCount} selected</span>
+          <div className="sel-actions">
+            <button className="sel-del" onClick={deleteSelectedLogs} disabled={selCount === 0 || bulkDeletingLogs}>
+              {bulkDeletingLogs ? "Deleting…" : `🗑 Delete${selCount > 0 ? ` (${selCount})` : ""}`}
+            </button>
+            <button className="sel-cancel" onClick={exitLogSelectMode}>Cancel</button>
+          </div>
+        </div>
+        <div className="sel-chips">
+          <button className="sel-chip" onClick={() => allSelected ? setLogSelectedIds(new Set()) : setLogSelectedIds(new Set(logs.map(l => l.id)))}>{allSelected ? "Deselect all" : `Select all (${logs.length})`}</button>
+          {expiredCount > 0 && (
+            <button className="sel-chip sel-chip-amber" onClick={() => setLogSelectedIds(new Set(logs.filter(l => (Date.now() - (l.timestamp || 0)) > SEVEN_DAYS_MS).map(l => l.id)))}
+              title="Select logs older than 7 days">⏳ Older than 7 days ({expiredCount})</button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // ─── RENDER ───
   const completedTasks = tasks.filter(t => t.status === "completed");
   const activeTasks = tasks.filter(t => t.status === "pending" || t.status === "processing");
@@ -2876,21 +3004,32 @@ export default function ProximaApp() {
                 {logs.length === 0 ? (
                   <div className="empty-state"><div className="emoji">📋</div><div className="msg">Your generation history will appear here. Each entry can be replayed with one click.</div></div>
                 ) : (
-                  <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
-                    <div className="log-row log-header">
-                      <span>Time</span><span>Prompt</span><span>Models</span><span>Type</span><span>Cost</span><span></span>
-                    </div>
-                    {logs.map(log => (
-                      <div key={log.id} className="log-row" onClick={() => replayLog(log)}>
-                        <span style={{ fontFamily: font, fontSize: 11, color: "var(--text-muted)" }}>{timeAgo(log.timestamp)}</span>
-                        <span className="log-prompt">{log.prompt}</span>
-                        <span className="log-models">{log.models.length} model{log.models.length > 1 ? "s" : ""}</span>
-                        <span style={{ fontSize: 11 }}>{TYPE_ICONS[log.genType]}</span>
-                        <span className="log-cost">{formatCost(log.totalCost)}</span>
-                        <button className="log-replay" onClick={e => { e.stopPropagation(); replayLog(log); }}>▶</button>
+                  <>
+                    {renderLogSelectBar()}
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+                      <div className="log-row log-header" style={logSelectMode ? { paddingLeft: 40 } : undefined}>
+                        <span>Time</span><span>Prompt</span><span>Models</span><span>Type</span><span>Cost</span><span></span>
                       </div>
-                    ))}
-                  </div>
+                      {logs.map(log => {
+                        const sel = logSelectMode && logSelectedIds.has(log.id);
+                        return (
+                          <div key={log.id} className={`log-row${sel ? " log-row-selected" : ""}`}
+                            onClick={logSelectMode ? () => toggleSelectLog(log.id) : () => replayLog(log)}
+                            style={logSelectMode ? { position: "relative", paddingLeft: 40 } : undefined}>
+                            {logSelectMode && <div aria-hidden="true" className={`select-check log-check${sel ? " on" : ""}`}>{sel ? "✓" : ""}</div>}
+                            <span style={{ fontFamily: font, fontSize: 11, color: "var(--text-muted)" }}>{timeAgo(log.timestamp)}</span>
+                            <span className="log-prompt">{log.prompt}</span>
+                            <span className="log-models">{log.models.length} model{log.models.length > 1 ? "s" : ""}</span>
+                            <span style={{ fontSize: 11 }}>{TYPE_ICONS[log.genType]}</span>
+                            <span className="log-cost">{formatCost(log.totalCost)}</span>
+                            {logSelectMode
+                              ? <span />
+                              : <button className="log-replay" onClick={e => { e.stopPropagation(); replayLog(log); }}>▶</button>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
               </div>
             )}
