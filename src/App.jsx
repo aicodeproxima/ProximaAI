@@ -634,8 +634,10 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .task-card:hover { border-color: rgba(99,102,241,0.2); }
 .task-card.card-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(99,102,241,0.25); }
 .task-card.card-unselectable { opacity: 0.55; }
-.select-check { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--accent); background: rgba(99,102,241,0.22); color: white; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; z-index: 5; pointer-events: none; box-shadow: 0 1px 6px rgba(0,0,0,0.35); }
+.select-check { position: absolute; top: 10px; left: 10px; width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--accent); background: rgba(99,102,241,0.22); color: white; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; z-index: 5; pointer-events: none; box-shadow: 0 1px 6px rgba(0,0,0,0.35); }
 .select-check.on { background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: #6366f1; box-shadow: 0 0 10px rgba(99,102,241,0.5); }
+/* In select mode, push card content right so the top-left checkbox never overlaps the model name. */
+.task-card.selecting-card .task-header { padding-left: 38px; }
 /* ── Bulk-select toolbar ── */
 .sel-bar-launch { display: flex; justify-content: flex-end; margin-bottom: 10px; }
 .sel-bar { margin-bottom: 10px; padding: 10px; background: rgba(8,12,25,0.5); border: 1px solid var(--glass-border); border-radius: 10px; }
@@ -889,7 +891,7 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
   const selecting = selectMode && deletable;
   const toggle = () => onToggleSelect && onToggleSelect(task.id);
   return (
-    <div className={`task-card fade-in${selected ? " card-selected" : ""}${selectMode && !deletable ? " card-unselectable" : ""}`}
+    <div className={`task-card fade-in${selected ? " card-selected" : ""}${selecting ? " selecting-card" : ""}${selectMode && !deletable ? " card-unselectable" : ""}`}
       onClick={selecting ? toggle : undefined}
       role={selecting ? "checkbox" : undefined}
       aria-checked={selecting ? selected : undefined}
@@ -2765,7 +2767,7 @@ export default function ProximaApp() {
                     /* Vertical list — full-width previews with detailed info */
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       {galleryCompleted.map(task => (
-                        <div key={task.id} className={`task-card${selectMode && selectedIds.has(task.id) ? " card-selected" : ""}`}
+                        <div key={task.id} className={`task-card${selectMode ? " selecting-card" : ""}${selectMode && selectedIds.has(task.id) ? " card-selected" : ""}`}
                           onClick={selectMode ? () => toggleSelect(task.id) : undefined}
                           style={selectMode ? { cursor: "pointer", position: "relative" } : undefined}>
                           {selectMode && <div aria-hidden="true" className={`select-check${selectedIds.has(task.id) ? " on" : ""}`}>{selectedIds.has(task.id) ? "✓" : ""}</div>}
@@ -2830,7 +2832,7 @@ export default function ProximaApp() {
                   ) : (
                     <div className="results-grid">
                       {galleryFailed.map(task => (
-                        <div key={task.id} className={`task-card${selectMode && selectedIds.has(task.id) ? " card-selected" : ""}`}
+                        <div key={task.id} className={`task-card${selectMode ? " selecting-card" : ""}${selectMode && selectedIds.has(task.id) ? " card-selected" : ""}`}
                           onClick={selectMode ? () => toggleSelect(task.id) : undefined}
                           style={{ borderColor: "rgba(239,68,68,0.2)", ...(selectMode ? { cursor: "pointer", position: "relative" } : {}) }}>
                           {selectMode && <div aria-hidden="true" className={`select-check${selectedIds.has(task.id) ? " on" : ""}`}>{selectedIds.has(task.id) ? "✓" : ""}</div>}
