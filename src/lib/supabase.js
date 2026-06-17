@@ -209,6 +209,23 @@ export async function deleteTaskRemote(id) {
   } catch (err) { warnOnce("deleteTaskRemote", err); }
 }
 
+// Bulk-delete specific task ids from the cloud, scoped to this device/user.
+// Returns { ok } so callers can keep the failed-sync replay queue honest.
+export async function deleteTasksRemote(ids) {
+  if (!supabase) return { ok: false };
+  const list = (ids || []).filter(Boolean);
+  if (list.length === 0) return { ok: true };
+  try {
+    const { error } = await supabase
+      .from("tasks")
+      .delete()
+      .in("id", list)
+      .eq("device_id", getDeviceId());
+    if (error) { warnOnce("deleteTasksRemote", error); return { ok: false, error: error.message }; }
+    return { ok: true };
+  } catch (err) { warnOnce("deleteTasksRemote", err); return { ok: false, error: err?.message }; }
+}
+
 export async function clearTasksRemote() {
   if (!supabase) return;
   try {

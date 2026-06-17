@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback, useReducer, memo } from "reac
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
@@ -632,6 +632,29 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 /* Progress + Results */
 .task-card { background: var(--bg-card); border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px; margin-bottom: 12px; transition: border-color 0.3s; animation: fadeSlideIn 0.4s ease; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .task-card:hover { border-color: rgba(99,102,241,0.2); }
+.task-card.card-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(99,102,241,0.25); }
+.task-card.card-unselectable { opacity: 0.55; }
+.select-check { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--accent); background: rgba(99,102,241,0.22); color: white; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; z-index: 5; pointer-events: none; box-shadow: 0 1px 6px rgba(0,0,0,0.35); }
+.select-check.on { background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: #6366f1; box-shadow: 0 0 10px rgba(99,102,241,0.5); }
+/* ── Bulk-select toolbar ── */
+.sel-bar-launch { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.sel-bar { margin-bottom: 10px; padding: 10px; background: rgba(8,12,25,0.5); border: 1px solid var(--glass-border); border-radius: 10px; }
+.sel-bar-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.sel-count { font-family: ${font}; font-size: 13px; color: var(--text-primary); font-weight: 700; }
+.sel-actions { display: flex; gap: 6px; }
+.sel-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.sel-chip, .sel-del, .sel-cancel, .sel-launch { font-family: ${font}; font-size: 11px; font-weight: 600; border-radius: 8px; padding: 7px 11px; border: 1px solid var(--glass-border); background: var(--bg-input); color: var(--text-secondary); cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+.sel-chip:hover, .sel-cancel:hover, .sel-launch:hover { background: rgba(99,102,241,0.12); color: var(--text-primary); }
+.sel-launch { color: var(--accent); border-color: rgba(99,102,241,0.3); }
+.sel-chip-amber { color: var(--amber); border-color: rgba(245,158,11,0.3); }
+.sel-del { color: #fff; background: var(--error); border-color: var(--error); }
+.sel-del:disabled { background: rgba(239,68,68,0.35); cursor: default; opacity: 0.7; }
+@media (max-width: 768px) {
+  .sel-actions { width: 100%; }
+  .sel-del { flex: 1; min-height: 44px; padding: 11px 14px; font-size: 13px; }
+  .sel-cancel { min-height: 44px; padding: 11px 16px; font-size: 13px; }
+  .sel-chip, .sel-launch { min-height: 42px; padding: 10px 13px; font-size: 12px; }
+}
 @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 .task-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .task-model { font-size: 13px; font-weight: 600; }
@@ -855,10 +878,28 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
   onEdit,
   onAnimate,
   onLightbox,
+  selectMode = false,
+  selected = false,
+  onToggleSelect,
 }) {
   const tType = task.genType || currentGenType;
+  // Only terminal generations are selectable — deleting an in-flight task would race
+  // its still-running poll loop (which calls saveTask/syncTask) and resurrect it.
+  const deletable = task.status === "completed" || task.status === "failed";
+  const selecting = selectMode && deletable;
+  const toggle = () => onToggleSelect && onToggleSelect(task.id);
   return (
-    <div className="task-card fade-in">
+    <div className={`task-card fade-in${selected ? " card-selected" : ""}${selectMode && !deletable ? " card-unselectable" : ""}`}
+      onClick={selecting ? toggle : undefined}
+      role={selecting ? "checkbox" : undefined}
+      aria-checked={selecting ? selected : undefined}
+      aria-label={selecting ? `Select ${task.modelName} generation` : undefined}
+      tabIndex={selecting ? 0 : undefined}
+      onKeyDown={selecting ? (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); } } : undefined}
+      style={selecting ? { cursor: "pointer", position: "relative" } : (selectMode ? { position: "relative" } : undefined)}>
+      {selecting && (
+        <div aria-hidden="true" className={`select-check${selected ? " on" : ""}`}>{selected ? "✓" : ""}</div>
+      )}
       <div className="task-header">
         <div>
           <span className="task-model">{task.modelName}</span>
@@ -898,7 +939,7 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
         if (is3D) {
           return (
             <a key={i} href={url} target="_blank" rel="noopener" download
-              style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: 28, marginTop: 10, background: "var(--bg-input)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text-primary)", textDecoration: "none", transition: "border-color 0.2s" }}
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: 28, marginTop: 10, background: "var(--bg-input)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text-primary)", textDecoration: "none", transition: "border-color 0.2s", pointerEvents: selecting ? "none" : undefined }}
               onMouseOver={e => e.currentTarget.style.borderColor = "var(--accent)"}
               onMouseOut={e => e.currentTarget.style.borderColor = "var(--glass-border)"}>
               <div style={{ fontSize: 56 }}>🧊</div>
@@ -908,14 +949,15 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
           );
         }
         return isVideo ? (
-          <video key={i} className="result-video" src={url} controls autoPlay muted loop playsInline />
+          <video key={i} className="result-video" src={url} controls autoPlay muted loop playsInline style={{ pointerEvents: selecting ? "none" : undefined }} />
         ) : (
           <img key={i} className="result-img" src={url} alt={task.modelName}
-            onClick={() => onLightbox(url)} loading="lazy" decoding="async" />
+            onClick={selecting ? undefined : () => onLightbox(url)} loading="lazy" decoding="async"
+            style={{ pointerEvents: selecting ? "none" : undefined }} />
         );
       })}
 
-      {(task.status === "completed" || task.status === "failed") && (
+      {!selectMode && (task.status === "completed" || task.status === "failed") && (
         <div className="result-actions">
           <button className="result-action-btn" style={{ color: "var(--accent)", borderColor: "rgba(99,102,241,0.3)" }}
             onClick={() => onRegenerate(task)}>🔄 Regenerate</button>
@@ -946,10 +988,14 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
     </div>
   );
 }, (prev, next) => {
-  // Custom equality: re-render only when this task's identity OR currentGenType changes.
+  // Custom equality: re-render only when this task's identity OR currentGenType changes,
+  // OR this card's selection state / select-mode changes (so checkboxes update live).
   // Handler refs are assumed stable (parent useCallback). If parent re-renders for an
   // unrelated reason (typing in the prompt, switching pages), unchanged tasks skip render.
-  return prev.task === next.task && prev.currentGenType === next.currentGenType;
+  return prev.task === next.task
+    && prev.currentGenType === next.currentGenType
+    && prev.selectMode === next.selectMode
+    && prev.selected === next.selected;
 });
 
 // ─── MAIN APP ───
@@ -984,6 +1030,10 @@ export default function ProximaApp() {
   const [defaultVideoDur, setDefaultVideoDur] = useState(5);
   const [galleryTabState, setGalleryTabState] = useState("completed");
   const [galleryView, setGalleryView] = useState("masonry");
+  // ── Bulk-select / delete generations ──
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [numImages, setNumImages] = useState(1);
   const [storageStats, setStorageStats] = useState(null);
   const [showAccountModal, setShowAccountModal] = useState(false);
@@ -1005,17 +1055,21 @@ export default function ProximaApp() {
   const forceSaveAll = async () => {
     setSaveStatus("saving");
     if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
-    const queue = taskSyncQueueRef.current.splice(0);
+    const queue = taskSyncQueueRef.current.splice(0).filter(t => !deletingIds.current.has(t.id));
     if (queue.length > 0) {
       try { await syncTasksBatch(queue); for (const t of queue) removeFailedSync("task", t.id); } catch {}
     }
     if (apiKeyDebounceRef.current) { clearTimeout(apiKeyDebounceRef.current); apiKeyDebounceRef.current = null; }
     if (apiKey) { try { await syncSetting("apiKey", apiKey); removeFailedSync("setting", "apiKey"); } catch {} }
     const failed = getFailedSyncs();
-    const taskRetries = failed.filter(f => f.kind === "task").map(f => f.data).filter(Boolean);
+    // Deletes win over upserts: never re-upsert a task that's queued for deletion.
+    const taskRetries = failed.filter(f => f.kind === "task" && !deletingIds.current.has(f.id)).map(f => f.data).filter(Boolean);
     if (taskRetries.length > 0) { try { await syncTasksBatch(taskRetries); for (const t of taskRetries) removeFailedSync("task", t.id); } catch {} }
     for (const f of failed.filter(f => f.kind === "history")) { try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id); } catch {} }
     for (const f of failed.filter(f => f.kind === "setting")) { try { await syncSetting(f.id, f.data); removeFailedSync("setting", f.id); } catch {} }
+    // Replay any cloud deletes that didn't confirm (bulk-delete dropped mid-flight).
+    const delRetries = failed.filter(f => f.kind === "task-delete").map(f => f.id);
+    if (delRetries.length > 0) { const dr = await deleteTasksRemote(delRetries); if (dr.ok) { await deleteTasks(delRetries); for (const id of delRetries) removeFailedSync("task-delete", id); } }
     const remaining = getFailedSyncs().length;
     setFailedSyncCount(remaining);
     if (remaining === 0) { setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000); }
@@ -1098,6 +1152,12 @@ export default function ProximaApp() {
   const taskSyncQueueRef = useRef([]);
   const taskSyncTimerRef = useRef(null);
   const bootstrapInProgress = useRef(false);
+  // Ids being bulk-deleted this session. Every place that would UPSERT a task to the
+  // cloud (the debounced persistence effect, the unload flush, forceSaveAll, the mount
+  // replay) skips ids in this set, so an in-flight/queued save can never resurrect a
+  // generation the user just deleted. Persisted for the whole session (never cleared)
+  // because the cost of keeping a deleted id here is nil but a stray re-upsert is data loss.
+  const deletingIds = useRef(new Set());
   const [failedSyncCount, setFailedSyncCount] = useState(0);
 
   // ─── AUTH HANDLERS ───
@@ -1259,7 +1319,13 @@ export default function ProximaApp() {
         const failed = getFailedSyncs();
         setFailedSyncCount(failed.length);
         if (failed.length > 0) {
-          const taskRetries = failed.filter(f => f.kind === "task").map(f => f.data).filter(Boolean);
+          // Resolve deletes vs upserts up front: a task with BOTH a pending upsert and a
+          // pending delete must end up DELETED. Mark these ids as deleting so neither this
+          // replay nor the session's persistence effect re-uploads them.
+          const delRetries = failed.filter(f => f.kind === "task-delete").map(f => f.id).filter(Boolean);
+          const delSet = new Set(delRetries);
+          for (const id of delRetries) deletingIds.current.add(id);
+          const taskRetries = failed.filter(f => f.kind === "task" && !delSet.has(f.id)).map(f => f.data).filter(Boolean);
           if (taskRetries.length > 0) {
             try {
               await syncTasksBatch(taskRetries);
@@ -1273,6 +1339,17 @@ export default function ProximaApp() {
           const settingRetries = failed.filter(f => f.kind === "setting");
           for (const s of settingRetries) {
             try { await syncSetting(s.id, s.data); removeFailedSync("setting", s.id); } catch {}
+          }
+          // Replay deferred bulk-deletes. The bootstrap pull above may have re-fetched
+          // these rows from the cloud, so on a confirmed remote delete we also scrub them
+          // back out of local state + IndexedDB (awaited) to prevent zombie rows.
+          if (delRetries.length > 0) {
+            const dr = await deleteTasksRemote(delRetries);
+            if (dr.ok) {
+              setTasks(prev => prev.filter(t => !delSet.has(t.id)));
+              await deleteTasks(delRetries);
+              for (const id of delRetries) { removeFailedSync("task-delete", id); savedTaskIds.current.delete(id); }
+            }
           }
           setFailedSyncCount(getFailedSyncs().length);
         }
@@ -1329,7 +1406,9 @@ export default function ProximaApp() {
     // Skip scheduling new writes during cloud bootstrap — prevents races with the pull
     if (bootstrapInProgress.current) return;
     const toSave = tasks.filter(t =>
-      (t.status === "completed" || t.status === "failed") && !savedTaskIds.current.has(t.id)
+      (t.status === "completed" || t.status === "failed") &&
+      !savedTaskIds.current.has(t.id) &&
+      !deletingIds.current.has(t.id) // never re-upsert a task being deleted
     );
     if (toSave.length === 0) return;
     for (const t of toSave) {
@@ -1344,7 +1423,8 @@ export default function ProximaApp() {
     // Debounced batch upload to Supabase (flushes 300ms after last task)
     if (taskSyncTimerRef.current) clearTimeout(taskSyncTimerRef.current);
     taskSyncTimerRef.current = setTimeout(() => {
-      const queue = taskSyncQueueRef.current.splice(0);
+      // Drop any ids the user deleted between queueing and this flush.
+      const queue = taskSyncQueueRef.current.splice(0).filter(t => !deletingIds.current.has(t.id));
       taskSyncTimerRef.current = null;
       if (queue.length === 0) return;
       trackedSync(`tasks-batch-${Date.now()}`, () => syncTasksBatch(queue))
@@ -1371,7 +1451,7 @@ export default function ProximaApp() {
       if (taskSyncTimerRef.current) {
         clearTimeout(taskSyncTimerRef.current);
         taskSyncTimerRef.current = null;
-        const queue = taskSyncQueueRef.current.splice(0);
+        const queue = taskSyncQueueRef.current.splice(0).filter(t => !deletingIds.current.has(t.id));
         if (queue.length > 0) {
           // Fire-and-forget: we're mid-unload, can't await. The writes are already
           // in addFailedSync() so if this doesn't complete, replay handles it.
@@ -1971,6 +2051,126 @@ export default function ProximaApp() {
     setPrompt("");
   }, []);
 
+  // ─── Bulk-select / delete handlers ───
+  // toggleSelect is passed to the memoized CockpitTaskCard, so it MUST be stable
+  // (empty deps + functional setState) or the memo equality check breaks.
+  const toggleSelect = useCallback((id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+  const exitSelectMode = useCallback(() => { setSelectMode(false); setSelectedIds(new Set()); }, []);
+
+  // Delete every task whose id is currently selected. Mirrors the existing
+  // "Clear Outputs" safety pattern (snapshot first) but scoped to a chosen set,
+  // and uses the preemptive failed-sync queue so a dropped cloud delete self-heals.
+  const deleteSelectedTasks = async () => {
+    if (bulkDeleting) return;
+    const idSet = new Set(selectedIds);
+    const targets = tasks.filter(t => idSet.has(t.id));
+    if (targets.length === 0) { exitSelectMode(); return; }
+    const n = targets.length;
+    const noun = n === 1 ? "1 generation" : `${n} generations`;
+    if (!confirm(`Delete ${noun}? This removes ${n === 1 ? "it" : "them"} from this device and the cloud.\n\nA safety backup is taken first, so you can restore from Settings → Cloud Backups.`)) return;
+    const ids = targets.map(t => t.id);
+    setBulkDeleting(true);
+    setSaveStatus("saving");
+    // 0. Mark these ids as deleting BEFORE any await, so the debounced persistence effect,
+    //    the unload flush, forceSaveAll and the mount replay all refuse to re-upload them.
+    for (const id of ids) deletingIds.current.add(id);
+    // 1. Pre-destructive snapshot (HARD RULE). If the backup can't be confirmed, abort the
+    //    delete entirely — never destroy data without a recovery point, and never claim one.
+    const bk = await createBackup("pre-bulk-delete", `Before deleting ${noun}`);
+    if (!bk?.ok) {
+      for (const id of ids) deletingIds.current.delete(id);
+      setBulkDeleting(false);
+      setSaveStatus("error");
+      setAccountToast(`Couldn't create the safety backup (${bk?.error || "unknown error"}) — nothing was deleted.`);
+      setTimeout(() => setAccountToast(""), 6000);
+      return;
+    }
+    // 2. Stop any in-flight/queued upsert for these ids and drop their stale "task" intents,
+    //    so a pending save can't recreate the cloud row after we delete it.
+    if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
+    taskSyncQueueRef.current = taskSyncQueueRef.current.filter(t => !idSet.has(t.id));
+    for (const id of ids) { savedTaskIds.current.delete(id); removeFailedSync("task", id); }
+    // 3. Enqueue cloud-delete intents BEFORE firing, so a tab-close/network drop replays them.
+    for (const id of ids) addFailedSync({ kind: "task-delete", id, data: id });
+    // 4. Optimistic local removal from React state.
+    setTasks(prev => prev.filter(t => !idSet.has(t.id)));
+    // 5. Local IndexedDB delete (single transaction, awaited).
+    await deleteTasks(ids);
+    // 6. Cloud delete (batched, device-scoped). On success, clear the replay intents.
+    const r = await deleteTasksRemote(ids);
+    if (r.ok) for (const id of ids) removeFailedSync("task-delete", id);
+    // 7. Best-effort cleanup of any cloud-archived storage objects these tasks owned.
+    const paths = targets.flatMap(t => t.archivedPaths || []).filter(Boolean);
+    if (paths.length) {
+      Promise.allSettled(paths.map(p => deleteArchivedPath(p)))
+        .then(() => getArchiveStats().then(s => setArchiveStats(s)));
+    }
+    // 8. Refresh counters + status (honest: only say "done" when the cloud delete confirmed).
+    setFailedSyncCount(getFailedSyncs().length);
+    getStorageStats().then(s => setStorageStats(s));
+    setBulkDeleting(false);
+    exitSelectMode();
+    if (r.ok) {
+      setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
+      setAccountToast(`Deleted ${noun} — safety backup saved`);
+    } else {
+      setSaveStatus("error");
+      setAccountToast(`Removed ${noun} locally — the cloud delete will finish on your next save or reload`);
+    }
+    setTimeout(() => setAccountToast(""), 5000);
+  };
+
+  // Renders the selection toolbar for a given surface's candidate tasks.
+  // `candidates` = the task list visible in that surface (cockpit grid, gallery tab).
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const renderSelectBar = (rawCandidates) => {
+    // Only terminal (completed/failed) generations are deletable — in-flight tasks are
+    // excluded from counts and bulk selection.
+    const candidates = rawCandidates.filter(t => t.status === "completed" || t.status === "failed");
+    const selCount = candidates.reduce((acc, t) => acc + (selectedIds.has(t.id) ? 1 : 0), 0);
+    const allSelected = candidates.length > 0 && selCount === candidates.length;
+    const pickExactly = (list) => setSelectedIds(new Set(list.map(t => t.id)));
+    const now = Date.now();
+    const expiredCount = candidates.filter(t => (now - (t.startTime || t.endTime || 0)) > SEVEN_DAYS_MS).length;
+    const failedCount = candidates.filter(t => t.status === "failed").length;
+    if (!selectMode) {
+      return (
+        <div className="sel-bar-launch">
+          <button className="sel-launch" onClick={() => setSelectMode(true)}>☑ Select</button>
+        </div>
+      );
+    }
+    return (
+      <div className="sel-bar">
+        <div className="sel-bar-top">
+          <span className="sel-count">{selCount} selected</span>
+          <div className="sel-actions">
+            <button className="sel-del" onClick={deleteSelectedTasks} disabled={selCount === 0 || bulkDeleting}>
+              {bulkDeleting ? "Deleting…" : `🗑 Delete${selCount > 0 ? ` (${selCount})` : ""}`}
+            </button>
+            <button className="sel-cancel" onClick={exitSelectMode}>Cancel</button>
+          </div>
+        </div>
+        <div className="sel-chips">
+          <button className="sel-chip" onClick={() => allSelected ? setSelectedIds(new Set()) : pickExactly(candidates)}>{allSelected ? "Deselect all" : `Select all (${candidates.length})`}</button>
+          {expiredCount > 0 && (
+            <button className="sel-chip sel-chip-amber" onClick={() => pickExactly(candidates.filter(t => (Date.now() - (t.startTime || t.endTime || 0)) > SEVEN_DAYS_MS))}
+              title="Select generations older than 7 days — WaveSpeed deletes their media after a week">⏳ Older than 7 days ({expiredCount})</button>
+          )}
+          {failedCount > 0 && (
+            <button className="sel-chip" onClick={() => pickExactly(candidates.filter(t => t.status === "failed"))}>Failed ({failedCount})</button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // ─── RENDER ───
   const completedTasks = tasks.filter(t => t.status === "completed");
   const activeTasks = tasks.filter(t => t.status === "pending" || t.status === "processing");
@@ -2468,23 +2668,29 @@ export default function ProximaApp() {
                       <div className="msg">Select models, write a prompt, and hit Generate to fire parallel requests across all selected models simultaneously.</div>
                     </div>
                   ) : (
-                    <div className="results-grid">
-                      {tasks.map(task => (
-                        <CockpitTaskCard
-                          key={task.id}
-                          task={task}
-                          currentGenType={genType}
-                          onRegenerate={regenerateTask}
-                          onCancel={cancelTask}
-                          onDownload={onDownloadTask}
-                          onCloudArchive={onCloudArchiveTask}
-                          onCopyUrl={onCopyUrlTask}
-                          onEdit={onEditTask}
-                          onAnimate={onAnimateTask}
-                          onLightbox={setLightbox}
-                        />
-                      ))}
-                    </div>
+                    <>
+                      {renderSelectBar(tasks)}
+                      <div className="results-grid">
+                        {tasks.map(task => (
+                          <CockpitTaskCard
+                            key={task.id}
+                            task={task}
+                            currentGenType={genType}
+                            onRegenerate={regenerateTask}
+                            onCancel={cancelTask}
+                            onDownload={onDownloadTask}
+                            onCloudArchive={onCloudArchiveTask}
+                            onCopyUrl={onCopyUrlTask}
+                            onEdit={onEditTask}
+                            onAnimate={onAnimateTask}
+                            onLightbox={setLightbox}
+                            selectMode={selectMode}
+                            selected={selectedIds.has(task.id)}
+                            onToggleSelect={toggleSelect}
+                          />
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
@@ -2512,8 +2718,12 @@ export default function ProximaApp() {
                   ))}
                 </div>
 
-                {/* View Toggle — only for completed tab */}
-                {galleryTab === "completed" && galleryCompleted.length > 0 && (
+                {/* Bulk-select bar — completed + failed tabs (in-flight tasks aren't deletable) */}
+                {(galleryTab === "completed" ? galleryCompleted : galleryTab === "failed" ? galleryFailed : []).length > 0 &&
+                  renderSelectBar(galleryTab === "completed" ? galleryCompleted : galleryFailed)}
+
+                {/* View Toggle — only for completed tab (hidden while selecting; selection forces list view) */}
+                {galleryTab === "completed" && galleryCompleted.length > 0 && !selectMode && (
                   <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10, gap: 4 }}>
                     <button onClick={() => setGalleryView("masonry")}
                       style={{ padding: "6px 10px", border: "1px solid var(--glass-border)", borderRadius: 6, cursor: "pointer", fontSize: 14, background: galleryView === "masonry" ? "rgba(99,102,241,0.15)" : "transparent", color: galleryView === "masonry" ? "var(--accent)" : "var(--text-muted)" }}
@@ -2528,7 +2738,7 @@ export default function ProximaApp() {
                 {galleryTab === "completed" && (
                   galleryCompleted.length === 0 ? (
                     <div className="empty-state"><div className="emoji">🖼️</div><div className="msg">Completed outputs will appear here.</div></div>
-                  ) : galleryView === "masonry" ? (
+                  ) : (!selectMode && galleryView === "masonry") ? (
                     /* 3-column thumbnail grid — tap to lightbox, long-press for info */
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4 }}>
                       {galleryCompleted.flatMap(task =>
@@ -2555,7 +2765,10 @@ export default function ProximaApp() {
                     /* Vertical list — full-width previews with detailed info */
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       {galleryCompleted.map(task => (
-                        <div key={task.id} className="task-card">
+                        <div key={task.id} className={`task-card${selectMode && selectedIds.has(task.id) ? " card-selected" : ""}`}
+                          onClick={selectMode ? () => toggleSelect(task.id) : undefined}
+                          style={selectMode ? { cursor: "pointer", position: "relative" } : undefined}>
+                          {selectMode && <div aria-hidden="true" className={`select-check${selectedIds.has(task.id) ? " on" : ""}`}>{selectedIds.has(task.id) ? "✓" : ""}</div>}
                           <div className="task-header">
                             <span className="task-model">{task.modelName}</span>
                             <span className="task-status completed">COMPLETED</span>
@@ -2565,8 +2778,8 @@ export default function ProximaApp() {
                             const gType = task.genType || "";
                             const isVideo = url.includes(".mp4") || url.includes("video") || gType === "t2v" || gType === "i2v" || gType === "avatar";
                             return isVideo
-                              ? <video key={i} className="result-video" src={url} controls muted playsInline preload="none" onClick={() => setLightbox(url)} />
-                              : <img key={i} className="result-img" src={url} alt="" loading="lazy" decoding="async" onClick={() => setLightbox(url)} />;
+                              ? <video key={i} className="result-video" src={url} controls muted playsInline preload="none" onClick={selectMode ? undefined : () => setLightbox(url)} style={selectMode ? { pointerEvents: "none" } : undefined} />
+                              : <img key={i} className="result-img" src={url} alt="" loading="lazy" decoding="async" onClick={selectMode ? undefined : () => setLightbox(url)} style={selectMode ? { pointerEvents: "none" } : undefined} />;
                           })}
                           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "var(--text-muted)", fontFamily: font }}>
                             <span>{task.provider}</span>
@@ -2617,7 +2830,10 @@ export default function ProximaApp() {
                   ) : (
                     <div className="results-grid">
                       {galleryFailed.map(task => (
-                        <div key={task.id} className="task-card" style={{ borderColor: "rgba(239,68,68,0.2)" }}>
+                        <div key={task.id} className={`task-card${selectMode && selectedIds.has(task.id) ? " card-selected" : ""}`}
+                          onClick={selectMode ? () => toggleSelect(task.id) : undefined}
+                          style={{ borderColor: "rgba(239,68,68,0.2)", ...(selectMode ? { cursor: "pointer", position: "relative" } : {}) }}>
+                          {selectMode && <div aria-hidden="true" className={`select-check${selectedIds.has(task.id) ? " on" : ""}`}>{selectedIds.has(task.id) ? "✓" : ""}</div>}
                           <div className="task-header">
                             <span className="task-model">{task.modelName}</span>
                             <span className="task-status failed">FAILED</span>
@@ -2636,10 +2852,12 @@ export default function ProximaApp() {
                             <div><strong>Prompt:</strong> <span style={{ color: "var(--text-secondary)" }}>{task.prompt?.slice(0, 120)}</span></div>
                             <div><strong>Time:</strong> {task.startTime ? formatTimestamp(task.startTime) : "unknown"}</div>
                           </div>
+                          {!selectMode && (
                           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                             <button className="result-action-btn" style={{ color: "var(--accent)" }} onClick={() => regenerateTask(task)}>🔄 Retry</button>
                             <button className="result-action-btn" onClick={() => { navigator.clipboard?.writeText(JSON.stringify({ modelId: task.modelId, error: task.error, prompt: task.prompt, resolution: task.resolution, duration: task.duration, seed: task.seed, genType: task.genType }, null, 2)); }}>📋 Copy Debug</button>
                           </div>
+                          )}
                         </div>
                       ))}
                     </div>

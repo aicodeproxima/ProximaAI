@@ -222,6 +222,9 @@ export async function saveTask(task) {
       sourceImageUrl: task.sourceImageUrl,
       sourceImageUrls: task.sourceImageUrls,
       numImages: task.numImages,
+      // Cloud-archive metadata — persisted so a bulk-delete after reload can still
+      // clean up the storage-bucket objects this task owns (else they orphan).
+      isArchived: task.isArchived, archivedOutputs: task.archivedOutputs, archivedPaths: task.archivedPaths,
       // Polling resumption fields — lets us continue in-flight generations after
       // browser/tab close, refresh, or OS kill
       pollUrl: task.pollUrl, taskId: task.taskId,
@@ -240,6 +243,12 @@ export async function deleteTask(id) {
     const store = await tx("tasks", "readwrite");
     await wrapRequest(store.delete(id));
   } catch {}
+}
+
+// Bulk-delete a list of task ids from IndexedDB in a single transaction.
+export async function deleteTasks(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return;
+  await batchDelete("tasks", ids);
 }
 
 export async function getCompletedTasks(limit = 200) {
