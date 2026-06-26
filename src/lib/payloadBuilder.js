@@ -195,9 +195,28 @@ export function buildPayload(model, userSettings, genType) {
     }
   }
 
-  // Source image for i2v
-  if (genType === "i2v" && userSettings.sourceImageUrl) {
-    payload.image = userSettings.sourceImageUrl;
+  // Source image / start+end frames / references for i2v (C2)
+  if (genType === "i2v") {
+    const imgs = [];
+    if (userSettings.sourceImageUrl?.trim()) imgs.push(userSettings.sourceImageUrl.trim());
+    (userSettings.sourceImageUrls || []).forEach(u => {
+      if (u?.trim() && !imgs.includes(u.trim())) imgs.push(u.trim());
+    });
+    if (p.referenceImages) {
+      // reference-to-video models take the image(s) as an array under their own field
+      // (e.g. veo3.1-fast/reference-to-video -> "images")
+      if (imgs.length) payload[p.referenceImages] = imgs;
+    } else if (imgs.length) {
+      payload.image = imgs[0]; // standard i2v: single source/start image
+    }
+    // optional end frame — field name varies per model (last_image vs end_image)
+    if (p.endFrame && userSettings.endFrameUrl?.trim()) {
+      payload[p.endFrame] = userSettings.endFrameUrl.trim();
+    }
+    // required reference video(s) (e.g. wan-2.7/reference-to-video -> "videos")
+    if (p.referenceVideos && userSettings.refVideoUrl?.trim()) {
+      payload[p.referenceVideos] = [userSettings.refVideoUrl.trim()];
+    }
   }
 
   // Source image for i23d (Image-to-3D) — per-model imageParam name varies

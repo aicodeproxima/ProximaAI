@@ -1026,9 +1026,15 @@ export default function ProximaApp() {
   const [sourceImageUrl, setSourceImageUrl] = useState("");
   const [sourceImageUrls, setSourceImageUrls] = useState([]); // multi-image support
   const [sourcePreview, setSourcePreview] = useState("");
+  // C2: extra i2v inputs (end frame image, reference video) — shown per model capability flag
+  const [endFrameUrl, setEndFrameUrl] = useState("");
+  const [endFramePreview, setEndFramePreview] = useState("");
+  const [endFrameStatus, setEndFrameStatus] = useState("");
+  const [refVideoUrl, setRefVideoUrl] = useState("");
   const [uploadStatus, setUploadStatus] = useState(""); // "" | "uploading" | "done" | "error"
   const [testStatus, setTestStatus] = useState(null); // null | "testing" | {ok, msg}
   const fileInputRef = useRef(null);
+  const endFrameInputRef = useRef(null);
   const multiImageInputRef = useRef(null);
   const [tasks, setTasks] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -1705,6 +1711,22 @@ export default function ProximaApp() {
     if (multiImageFileRef.current) multiImageFileRef.current.value = "";
   }
 
+  // C2: end-frame image upload (last_image / end_image) — single image, reuses downscale+upload
+  async function handleEndFrameSelect(e) {
+    const file = (e.target.files || [])[0];
+    if (!file || !apiKey) return;
+    const reader = new FileReader();
+    reader.onload = ev => setEndFramePreview(ev.target.result);
+    reader.readAsDataURL(file);
+    setEndFrameStatus("uploading");
+    try {
+      const url = await uploadSingleFile(file);
+      if (url) { setEndFrameUrl(url); setEndFrameStatus("done"); }
+      else setEndFrameStatus("error");
+    } catch (err) { console.warn("[endframe]", err?.message || err); setEndFrameStatus("error"); }
+    if (endFrameInputRef.current) endFrameInputRef.current.value = "";
+  }
+
   function clearSourceImage() {
     setSourceImageUrl("");
     setSourceImageUrls([]);
@@ -1743,7 +1765,7 @@ export default function ProximaApp() {
         wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
         genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl,
         sourceImageUrls: sourceImageUrls.length > 0 ? sourceImageUrls : (sourceImageUrl ? [sourceImageUrl] : []),
-        perModelResolution: perModelRes, numImages, optionalParams, briaPresets
+        perModelResolution: perModelRes, numImages, optionalParams, briaPresets, endFrameUrl, refVideoUrl
       };
     });
 
@@ -1765,6 +1787,7 @@ export default function ProximaApp() {
             numImages: task.numImages || 1,
             ...(task.optionalParams || {}),
             briaPresets: task.briaPresets || {},
+            endFrameUrl: task.endFrameUrl, refVideoUrl: task.refVideoUrl,
           };
           const payload = modelConfig?.params
             ? buildPayload(modelConfig, userSettings, task.genType || genType)
@@ -1928,6 +1951,7 @@ export default function ProximaApp() {
           numImages: newTask.numImages || 1,
           ...(newTask.optionalParams || {}),
           briaPresets: newTask.briaPresets || {},
+          endFrameUrl: newTask.endFrameUrl, refVideoUrl: newTask.refVideoUrl,
         };
         const payload = modelConfig?.params
           ? buildPayload(modelConfig, userSettings, taskGenType)
@@ -2543,6 +2567,60 @@ export default function ProximaApp() {
                       )}
                     </div>
                   )}
+
+                  {/* C2: End Frame — for i2v models that declare params.endFrame (last_image / end_image) */}
+                  {genType === "i2v" && (() => {
+                    const ef = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.params?.endFrame);
+                    if (ef.length === 0) return null;
+                    return (
+                      <div className="card">
+                        <div className="card-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span>End Frame</span>
+                          {endFrameStatus === "done" && <span style={{ color: "var(--success)", fontSize: 10, fontWeight: 400 }}>✓ Uploaded</span>}
+                          {endFrameStatus === "uploading" && <span className="pulse" style={{ color: "var(--accent)", fontSize: 10, fontWeight: 400 }}>⏳ Uploading...</span>}
+                          {endFrameStatus === "error" && <span style={{ color: "var(--error)", fontSize: 10, fontWeight: 400 }}>✗ Upload failed — try URL</span>}
+                        </div>
+                        <input type="file" ref={endFrameInputRef} accept="image/*" style={{ display: "none" }} onChange={handleEndFrameSelect} />
+                        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                          <button onClick={() => endFrameInputRef.current?.click()}
+                            style={{ flex: 1, padding: "10px 8px", background: "var(--bg-input)", border: "2px dashed var(--border)", borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer", fontSize: 12, fontFamily: fontBody }}>📁 Upload end frame</button>
+                        </div>
+                        <input type="text" className="prompt-area" style={{ minHeight: "auto", fontSize: 12, padding: 10 }}
+                          placeholder="Or paste end-frame image URL..." value={endFrameUrl}
+                          onChange={e => { setEndFrameUrl(e.target.value); setEndFramePreview(e.target.value); setEndFrameStatus(e.target.value ? "done" : ""); }} />
+                        {(endFramePreview || endFrameUrl) && (
+                          <div style={{ marginTop: 10, position: "relative" }}>
+                            <img src={endFramePreview || endFrameUrl} alt="End frame" style={{ width: "100%", maxHeight: 160, objectFit: "contain", borderRadius: 8, border: "1px solid var(--border)", background: "#000" }} onError={e => { e.target.style.display = "none"; }} />
+                            <button onClick={() => { setEndFrameUrl(""); setEndFramePreview(""); setEndFrameStatus(""); }}
+                              style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,0.8)", color: "white", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, width: 26, height: 26, cursor: "pointer", fontSize: 13 }}>✕</button>
+                          </div>
+                        )}
+                        <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.4 }}>
+                          Optional last frame — the video interpolates from the source image to this frame. ({ef.map(m => m.name).join(", ")})
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* C2: Reference Video — for i2v models that declare params.referenceVideos (videos[]) */}
+                  {genType === "i2v" && (() => {
+                    const rv = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.params?.referenceVideos);
+                    if (rv.length === 0) return null;
+                    return (
+                      <div className="card">
+                        <div className="card-title"><span>Reference Video *</span></div>
+                        <input type="text" className="prompt-area" style={{ minHeight: "auto", fontSize: 12, padding: 10 }}
+                          placeholder="Paste reference video URL (mp4)..." value={refVideoUrl}
+                          onChange={e => setRefVideoUrl(e.target.value)} />
+                        {refVideoUrl && (
+                          <video src={refVideoUrl} style={{ width: "100%", maxHeight: 160, marginTop: 10, borderRadius: 8, border: "1px solid var(--border)", background: "#000" }} controls muted />
+                        )}
+                        <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.4 }}>
+                          Required reference video URL. ({rv.map(m => m.name).join(", ")})
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* Model Selector */}
                   <div className="card">
