@@ -910,6 +910,11 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
         <div>
           <span className="task-model">{task.modelName}</span>
           <span style={{ fontSize: 10, color: PROVIDER_COLORS[task.provider] || "#aaa", marginLeft: 6 }}>{task.provider}</span>
+          {(task.actualRes || task.actualDur) && (
+            <span style={{ fontSize: 9, color: "var(--text-muted)", marginLeft: 6 }}>
+              {[task.actualRes, task.actualDur ? task.actualDur + "s" : null].filter(Boolean).join(" · ")}
+            </span>
+          )}
         </div>
         <span className={`task-status ${task.status}`}>
           {task.status === "pending" ? "PENDING" : task.status === "processing" ? "PROCESSING" : task.status === "completed" ? "DONE" : "FAILED"}
@@ -1031,10 +1036,17 @@ export default function ProximaApp() {
   const [endFramePreview, setEndFramePreview] = useState("");
   const [endFrameStatus, setEndFrameStatus] = useState("");
   const [refVideoUrl, setRefVideoUrl] = useState("");
+  // C3: avatar audio + driving-video inputs
+  const [sourceAudioUrl, setSourceAudioUrl] = useState("");
+  const [sourceAudioStatus, setSourceAudioStatus] = useState("");
+  const [sourceVideoUrl, setSourceVideoUrl] = useState("");
+  const [sourceVideoStatus, setSourceVideoStatus] = useState("");
   const [uploadStatus, setUploadStatus] = useState(""); // "" | "uploading" | "done" | "error"
   const [testStatus, setTestStatus] = useState(null); // null | "testing" | {ok, msg}
   const fileInputRef = useRef(null);
   const endFrameInputRef = useRef(null);
+  const audioInputRef = useRef(null);
+  const videoInputRef = useRef(null);
   const multiImageInputRef = useRef(null);
   const [tasks, setTasks] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -1727,6 +1739,24 @@ export default function ProximaApp() {
     if (endFrameInputRef.current) endFrameInputRef.current.value = "";
   }
 
+  // C3: avatar audio / driving-video upload (URL paste also supported in the cards)
+  async function handleAudioSelect(e) {
+    const file = (e.target.files || [])[0];
+    if (!file || !apiKey) return;
+    setSourceAudioStatus("uploading");
+    try { const url = await uploadSingleFile(file); if (url) { setSourceAudioUrl(url); setSourceAudioStatus("done"); } else setSourceAudioStatus("error"); }
+    catch (err) { console.warn("[avatar-audio]", err?.message || err); setSourceAudioStatus("error"); }
+    if (audioInputRef.current) audioInputRef.current.value = "";
+  }
+  async function handleAvatarVideoSelect(e) {
+    const file = (e.target.files || [])[0];
+    if (!file || !apiKey) return;
+    setSourceVideoStatus("uploading");
+    try { const url = await uploadSingleFile(file); if (url) { setSourceVideoUrl(url); setSourceVideoStatus("done"); } else setSourceVideoStatus("error"); }
+    catch (err) { console.warn("[avatar-video]", err?.message || err); setSourceVideoStatus("error"); }
+    if (videoInputRef.current) videoInputRef.current.value = "";
+  }
+
   function clearSourceImage() {
     setSourceImageUrl("");
     setSourceImageUrls([]);
@@ -1751,6 +1781,11 @@ export default function ProximaApp() {
       alert("Please provide a source image URL for " + (genType === "i2i" ? "image editing" : "image-to-video"));
       return;
     }
+    if (genType === "avatar") {
+      const av = selectedModels.map(id => models.find(m => m.id === id)).filter(Boolean);
+      if (av.some(m => m.requiresAudio) && !sourceAudioUrl.trim()) { alert("This avatar model needs a source audio file — upload or paste a URL in the Source Audio box."); return; }
+      if (av.some(m => m.requiresVideo) && !sourceVideoUrl.trim()) { alert("This avatar model needs a driving video — upload or paste a URL in the Driving Video box."); return; }
+    }
     isGeneratingRef.current = true;
     setIsGenerating(true);
     setPage("cockpit");
@@ -1758,6 +1793,12 @@ export default function ProximaApp() {
     const batchId = genId();
     const newTasks = selectedModels.map(modelId => {
       const model = models.find(m => m.id === modelId);
+      // C4: coercion-aware resolution/duration this model will ACTUALLY receive (for the card)
+      const rp = model?.params?.resolution;
+      const chosenR = rp ? (perModelRes[modelId] || resolution || rp.default) : null;
+      const actualResOpt = rp ? (rp.options.find(o => o.value === chosenR) || rp.options.find(o => o.value === rp.default)) : null;
+      const dp = model?.params?.duration;
+      const actualDur = dp ? (dp.options.includes(Number(duration)) ? Number(duration) : dp.default) : null;
       return {
         id: genId(), batchId, modelId, modelName: model?.name || modelId,
         provider: model?.provider || "Unknown", price: model?.price || 0,
@@ -1765,7 +1806,8 @@ export default function ProximaApp() {
         wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
         genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl,
         sourceImageUrls: sourceImageUrls.length > 0 ? sourceImageUrls : (sourceImageUrl ? [sourceImageUrl] : []),
-        perModelResolution: perModelRes, numImages, optionalParams, briaPresets, endFrameUrl, refVideoUrl
+        perModelResolution: perModelRes, numImages, optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl,
+        actualRes: actualResOpt?.label || null, actualDur
       };
     });
 
@@ -1788,6 +1830,7 @@ export default function ProximaApp() {
             ...(task.optionalParams || {}),
             briaPresets: task.briaPresets || {},
             endFrameUrl: task.endFrameUrl, refVideoUrl: task.refVideoUrl,
+            sourceAudioUrl: task.sourceAudioUrl, sourceVideoUrl: task.sourceVideoUrl,
           };
           const payload = modelConfig?.params
             ? buildPayload(modelConfig, userSettings, task.genType || genType)
@@ -1952,6 +1995,7 @@ export default function ProximaApp() {
           ...(newTask.optionalParams || {}),
           briaPresets: newTask.briaPresets || {},
           endFrameUrl: newTask.endFrameUrl, refVideoUrl: newTask.refVideoUrl,
+          sourceAudioUrl: newTask.sourceAudioUrl, sourceVideoUrl: newTask.sourceVideoUrl,
         };
         const payload = modelConfig?.params
           ? buildPayload(modelConfig, userSettings, taskGenType)
@@ -2622,6 +2666,62 @@ export default function ProximaApp() {
                     );
                   })()}
 
+                  {/* C3: Avatar source audio — for avatar models that require audio */}
+                  {genType === "avatar" && (() => {
+                    const am = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.requiresAudio);
+                    if (am.length === 0) return null;
+                    return (
+                      <div className="card">
+                        <div className="card-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span>Source Audio *</span>
+                          {sourceAudioStatus === "done" && <span style={{ color: "var(--success)", fontSize: 10, fontWeight: 400 }}>✓ Uploaded</span>}
+                          {sourceAudioStatus === "uploading" && <span className="pulse" style={{ color: "var(--accent)", fontSize: 10, fontWeight: 400 }}>⏳ Uploading...</span>}
+                          {sourceAudioStatus === "error" && <span style={{ color: "var(--error)", fontSize: 10, fontWeight: 400 }}>✗ Upload failed — try URL</span>}
+                        </div>
+                        <input type="file" ref={audioInputRef} accept="audio/*" style={{ display: "none" }} onChange={handleAudioSelect} />
+                        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                          <button onClick={() => audioInputRef.current?.click()}
+                            style={{ flex: 1, padding: "10px 8px", background: "var(--bg-input)", border: "2px dashed var(--border)", borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer", fontSize: 12, fontFamily: fontBody }}>🎙️ Upload audio</button>
+                        </div>
+                        <input type="text" className="prompt-area" style={{ minHeight: "auto", fontSize: 12, padding: 10 }}
+                          placeholder="Or paste audio URL (mp3/wav)..." value={sourceAudioUrl}
+                          onChange={e => { setSourceAudioUrl(e.target.value); setSourceAudioStatus(e.target.value ? "done" : ""); }} />
+                        {sourceAudioUrl && <audio src={sourceAudioUrl} controls style={{ width: "100%", marginTop: 10 }} />}
+                        <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.4 }}>
+                          Voice/speech audio the avatar lip-syncs to. ({am.map(m => m.name).join(", ")})
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* C3: Avatar driving video — for avatar models that require video */}
+                  {genType === "avatar" && (() => {
+                    const vm = selectedModels.map(id => models.find(m => m.id === id)).filter(m => m?.requiresVideo);
+                    if (vm.length === 0) return null;
+                    return (
+                      <div className="card">
+                        <div className="card-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span>Driving Video *</span>
+                          {sourceVideoStatus === "done" && <span style={{ color: "var(--success)", fontSize: 10, fontWeight: 400 }}>✓ Uploaded</span>}
+                          {sourceVideoStatus === "uploading" && <span className="pulse" style={{ color: "var(--accent)", fontSize: 10, fontWeight: 400 }}>⏳ Uploading...</span>}
+                          {sourceVideoStatus === "error" && <span style={{ color: "var(--error)", fontSize: 10, fontWeight: 400 }}>✗ Upload failed — try URL</span>}
+                        </div>
+                        <input type="file" ref={videoInputRef} accept="video/*" style={{ display: "none" }} onChange={handleAvatarVideoSelect} />
+                        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                          <button onClick={() => videoInputRef.current?.click()}
+                            style={{ flex: 1, padding: "10px 8px", background: "var(--bg-input)", border: "2px dashed var(--border)", borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer", fontSize: 12, fontFamily: fontBody }}>🎬 Upload video</button>
+                        </div>
+                        <input type="text" className="prompt-area" style={{ minHeight: "auto", fontSize: 12, padding: 10 }}
+                          placeholder="Or paste driving video URL (mp4)..." value={sourceVideoUrl}
+                          onChange={e => { setSourceVideoUrl(e.target.value); setSourceVideoStatus(e.target.value ? "done" : ""); }} />
+                        {sourceVideoUrl && <video src={sourceVideoUrl} controls muted style={{ width: "100%", maxHeight: 160, marginTop: 10, borderRadius: 8, border: "1px solid var(--border)", background: "#000" }} />}
+                        <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.4 }}>
+                          Driving/reference video for body motion. ({vm.map(m => m.name).join(", ")})
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* Model Selector */}
                   <div className="card">
                     <div className="card-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -2832,14 +2932,19 @@ export default function ProximaApp() {
                           );
                         })()}
 
-                        {(genType === "image" || genType === "i2i") && (
-                          <div className="settings-row">
-                            <label>Batch</label>
-                            <select className="settings-select" value={numImages} onChange={e => setNumImages(Number(e.target.value))}>
-                              {[1,2,3,4,8,12,16].map(n => <option key={n} value={n}>{n} image{n > 1 ? "s" : ""}</option>)}
-                            </select>
-                          </div>
-                        )}
+                        {(genType === "image" || genType === "i2i") && (() => {
+                          // C4: cap the batch options to each selected model's actual max (maxBatchImages||4)
+                          const maxBatch = Math.min(16, ...selectedModels.map(id => { const m = models.find(x => x.id === id); return (m?.params?.maxBatchImages) || 4; }));
+                          const opts = [1, 2, 3, 4, 8, 12, 16].filter(n => n <= maxBatch);
+                          return (
+                            <div className="settings-row">
+                              <label>Batch</label>
+                              <select className="settings-select" value={Math.min(numImages, maxBatch)} onChange={e => setNumImages(Number(e.target.value))}>
+                                {opts.map(n => <option key={n} value={n}>{n} image{n > 1 ? "s" : ""}</option>)}
+                              </select>
+                            </div>
+                          );
+                        })()}
 
                         <div className="settings-row">
                           <label>Seed</label>

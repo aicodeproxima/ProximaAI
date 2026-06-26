@@ -236,9 +236,11 @@ export function buildPayload(model, userSettings, genType) {
     }
   }
 
-  // Source image/audio for avatar
-  if (genType === "avatar" && userSettings.sourceImageUrl) {
-    payload.image = userSettings.sourceImageUrl;
+  // Source image / audio / driving-video for avatar (C3)
+  if (genType === "avatar") {
+    if (userSettings.sourceImageUrl) payload.image = userSettings.sourceImageUrl;
+    if (p.audioParam && userSettings.sourceAudioUrl?.trim()) payload[p.audioParam] = userSettings.sourceAudioUrl.trim();
+    if (p.videoParam && userSettings.sourceVideoUrl?.trim()) payload[p.videoParam] = userSettings.sourceVideoUrl.trim();
   }
 
   // Output format — only for WaveSpeed-hosted models that support it

@@ -584,11 +584,11 @@ export const MODELS = {
 
   avatar: [
     { id: "wavespeed-ai/infinitetalk", name: "InfiniteTalk", provider: "WaveSpeed", price: 0.15, requiresAudio: true,
-      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }], default: "480p" }, negativePrompt: false, seed: true } },
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }], default: "480p" }, negativePrompt: false, seed: true, audioParam: "audio" } },
     { id: "kwaivgi/kling-v2-ai-avatar-pro", name: "Kling Avatar Pro", provider: "Kwaivgi", price: 0.34, hot: true, requiresAudio: true,
-      params: { resolution: null, negativePrompt: false, seed: false } },
+      params: { resolution: null, negativePrompt: false, seed: false, audioParam: "audio" } },
     { id: "wavespeed-ai/wan-2.2/animate", name: "WAN 2.2 Animate", provider: "WaveSpeed", price: 0.20, requiresVideo: true,
-      params: { resolution: null, negativePrompt: false, seed: true } },
+      params: { resolution: null, negativePrompt: false, seed: true, videoParam: "video" } },
     { id: "wavespeed-ai/image-face-swap-pro", name: "Face Swap Pro", provider: "WaveSpeed", price: 0.05,
       params: { resolution: null, negativePrompt: false, seed: false } },
   ],
