@@ -3,7 +3,7 @@ export const PROVIDER_COLORS = {
   Google: "#4285f4", ByteDance: "#fe2c55", OpenAI: "#10a37f", Alibaba: "#ff6a00",
   Kwaivgi: "#7c3aed", WaveSpeed: "#06b6d4", Vidu: "#ec4899", Minimax: "#f59e0b",
   BFL: "#a855f7", Luma: "#f472b6", PixVerse: "#22d3ee", Pika: "#fb923c",
-  Runway: "#14b8a6",
+  Runway: "#14b8a6", NVIDIA: "#76b900",
 };
 
 // Resolution presets for common schemes
@@ -217,6 +217,33 @@ const AR_VEO = {
   ],
   default: "16:9",
 };
+// ─── New presets for the 2026-06 model additions (Part B) ───
+const RES_VIDEO_480_4K = {
+  paramName: "resolution",
+  options: [
+    { label: "480p", value: "480p" }, { label: "720p", value: "720p" },
+    { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" },
+  ],
+  default: "720p",
+};
+const RES_VIDEO_480_1080 = {
+  paramName: "resolution",
+  options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }],
+  default: "720p",
+};
+const RES_VIDEO_480_720 = {
+  paramName: "resolution",
+  options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }],
+  default: "480p",
+};
+const RES_COSMOS_I2V = {
+  paramName: "resolution",
+  options: [{ label: "256p", value: "256p" }, { label: "480p", value: "480p" }, { label: "720p", value: "720p" }],
+  default: "480p",
+};
+const DUR_SEEDANCE = { options: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 };
+const DUR_KLING3 = { options: [3, 5, 10, 15], default: 5 };
+const DUR_COSMOS = { options: [1, 2, 3, 4, 5, 6, 7], default: 5 };
 
 // ─── MODEL REGISTRY ───
 export const MODELS = {
@@ -277,6 +304,16 @@ export const MODELS = {
       params: { resolution: null, aspectRatio: AR_BRIA, negativePrompt: true, seed: true, outputFormat: false } },
     { id: "bria/fibo", name: "Bria FIBO", provider: "Bria", price: 0.04,
       params: { resolution: null, aspectRatio: AR_BRIA, negativePrompt: true, seed: true, outputFormat: false } },
+
+    // ─── 2026-06 additions ───
+    { id: "wavespeed-ai/qwen-image/text-to-image-2512", name: "Qwen Image 2512", provider: "Alibaba", price: 0.02,
+      params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
+    { id: "alibaba/wan-2.7/text-to-image", name: "WAN 2.7 Image", provider: "Alibaba", price: 0.03,
+      params: { resolution: RES_WAN_T2I, negativePrompt: false, seed: true, optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
+    { id: "nvidia/cosmos-3-super/text-to-image", name: "Cosmos 3 Super", provider: "NVIDIA", price: 0.04,
+      params: { resolution: null, negativePrompt: false, seed: true } },
+    { id: "google/gemini-3-pro-image/text-to-image", name: "Gemini 3 Pro Image", provider: "Google", price: 0.14,
+      params: { resolution: RES_NANO, negativePrompt: true, seed: true, optional: { webSearch: { paramName: "web_search", type: "boolean", default: false } } } },
   ],
 
   i2i: [
@@ -377,6 +414,12 @@ export const MODELS = {
       params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true, requiresMask: true } },
     { id: "bria/embed-product", name: "Bria Embed Product", provider: "Bria", price: 0.04,
       params: { resolution: null, negativePrompt: false, seed: true, outputFormat: false, imageParam: "image", noPrompt: true, requiresProducts: true } },
+
+    // ─── 2026-06 additions ───
+    { id: "wavespeed-ai/qwen-image/edit-2511", name: "Qwen Edit 2511", provider: "Alibaba", price: 0.02,
+      params: { resolution: null, negativePrompt: false, seed: true, maxImages: 3 } },
+    { id: "google/gemini-3-pro-image/edit", name: "Gemini 3 Pro Edit", provider: "Google", price: 0.14,
+      params: { resolution: RES_NANO, negativePrompt: true, seed: true, maxImages: 8 } },
   ],
 
   i23d: [
@@ -441,6 +484,12 @@ export const MODELS = {
     // WaveSpeed — Kandinsky
     { id: "wavespeed-ai/kandinsky5-pro/text-to-video", name: "Kandinsky 5 Pro", provider: "WaveSpeed", price: 0.20,
       params: { resolution: RES_KANDINSKY, aspectRatio: AR_KANDINSKY, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
+
+    // ─── 2026-06 additions ───
+    { id: "bytedance/seedance-2.0/text-to-video", name: "Seedance 2.0", provider: "ByteDance", price: 0.60,
+      params: { resolution: RES_VIDEO_480_4K, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "kwaivgi/kling-v3.0-std/text-to-video", name: "Kling 3.0 Std", provider: "Kwaivgi", price: 0.42,
+      params: { resolution: null, aspectRatio: AR_KLING, duration: DUR_KLING3, negativePrompt: true, seed: false, optional: { cfgScale: { paramName: "cfg_scale", type: "number", default: 0.5, min: 0, max: 1 }, sound: { paramName: "sound", type: "boolean", default: false } } } },
   ],
 
   i2v: [
@@ -501,6 +550,36 @@ export const MODELS = {
     // WaveSpeed — Kandinsky I2V
     { id: "wavespeed-ai/kandinsky5-pro/image-to-video", name: "Kandinsky 5 Pro I2V", provider: "WaveSpeed", price: 0.20,
       params: { resolution: RES_KANDINSKY, aspectRatio: AR_KANDINSKY, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
+
+    // ─── 2026-06 additions (standard) ───
+    { id: "bytedance/seedance-2.0/image-to-video", name: "Seedance 2.0 I2V", provider: "ByteDance", price: 0.60,
+      params: { resolution: RES_VIDEO_480_4K, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "kwaivgi/kling-v3.0-std/image-to-video", name: "Kling 3.0 Std I2V", provider: "Kwaivgi", price: 0.42,
+      params: { resolution: null, duration: DUR_KLING3, negativePrompt: true, seed: false, endFrame: "end_image", optional: { cfgScale: { paramName: "cfg_scale", type: "number", default: 0.5, min: 0, max: 1 }, sound: { paramName: "sound", type: "boolean", default: false } } } },
+    { id: "nvidia/cosmos-3-super/image-to-video", name: "Cosmos 3 Super I2V", provider: "NVIDIA", price: 0.05,
+      params: { resolution: RES_COSMOS_I2V, aspectRatio: AR_STANDARD, duration: DUR_COSMOS, negativePrompt: false, seed: true } },
+    { id: "google/veo3.1-fast/reference-to-video", name: "Veo 3.1 Fast Reference", provider: "Google", price: 0.64,
+      params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, negativePrompt: true, seed: true, referenceImages: "images", optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: false } } } },
+    { id: "google/veo3.1-lite/start-end-to-video", name: "Veo 3.1 Start-End", provider: "Google", price: 0.40,
+      params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, negativePrompt: true, seed: true, endFrame: "last_image" } },
+    { id: "alibaba/wan-2.7/reference-to-video", name: "WAN 2.7 Reference", provider: "Alibaba", price: 0.50,
+      params: { resolution: RES_VIDEO_720_1080, duration: { options: [5, 10, 15], default: 5 }, negativePrompt: true, seed: true, referenceVideos: "videos", optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
+
+    // ─── 2026-06 additions (spicy / uncensored) ───
+    { id: "bytedance/seedance-2.0/image-to-video-spicy", name: "Seedance 2.0 Spicy", provider: "ByteDance", price: 0.60,
+      params: { resolution: RES_VIDEO_480_1080, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: true } },
+    { id: "bytedance/seedance-2.0-fast/image-to-video-spicy", name: "Seedance 2.0 Fast Spicy", provider: "ByteDance", price: 0.50,
+      params: { resolution: RES_VIDEO_480_1080, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: true } },
+    { id: "bytedance/seedance-2.0-mini/image-to-video-spicy", name: "Seedance 2.0 Mini Spicy", provider: "ByteDance", price: 0.30,
+      params: { resolution: RES_VIDEO_480_4K, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: true } },
+    { id: "bytedance/seedance-v1.5-pro/image-to-video-spicy", name: "Seedance 1.5 Pro Spicy", provider: "ByteDance", price: 0.06,
+      params: { resolution: RES_VIDEO_480_1080, aspectRatio: AR_SEEDANCE, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12], default: 5 }, negativePrompt: false, seed: true } },
+    { id: "wavespeed-ai/wan-2.2-spicy/image-to-video", name: "WAN 2.2 Spicy", provider: "Alibaba", price: 0.15,
+      params: { resolution: RES_VIDEO_480_720, duration: { options: [5, 8], default: 5 }, negativePrompt: false, seed: true } },
+    { id: "alibaba/wan-2.6/image-to-video-spicy", name: "WAN 2.6 Spicy", provider: "Alibaba", price: 0.50,
+      params: { resolution: RES_VIDEO_720_1080, duration: { options: [5, 10, 15], default: 5 }, negativePrompt: false, seed: true } },
+    { id: "alibaba/wan-2.7/image-to-video-spicy", name: "WAN 2.7 Spicy", provider: "Alibaba", price: 0.50,
+      params: { resolution: RES_VIDEO_720_1080, duration: { options: [5, 10, 15], default: 5 }, negativePrompt: false, seed: true } },
   ],
 
   avatar: [
