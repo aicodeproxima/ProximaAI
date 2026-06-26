@@ -1021,6 +1021,8 @@ export default function ProximaApp() {
   const [seed, setSeed] = useState("-1");
   const [aspectRatio, setAspectRatio] = useState("auto");
   const [perModelRes, setPerModelRes] = useState({});
+  const [optionalParams, setOptionalParams] = useState({}); // C1: optional-param key -> value (Advanced panel)
+  const [briaPresets, setBriaPresets] = useState({});       // C1: model.id -> Bria preset value
   const [sourceImageUrl, setSourceImageUrl] = useState("");
   const [sourceImageUrls, setSourceImageUrls] = useState([]); // multi-image support
   const [sourcePreview, setSourcePreview] = useState("");
@@ -1741,7 +1743,7 @@ export default function ProximaApp() {
         wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
         genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl,
         sourceImageUrls: sourceImageUrls.length > 0 ? sourceImageUrls : (sourceImageUrl ? [sourceImageUrl] : []),
-        perModelResolution: perModelRes, numImages
+        perModelResolution: perModelRes, numImages, optionalParams, briaPresets
       };
     });
 
@@ -1761,6 +1763,8 @@ export default function ProximaApp() {
             sourceImageUrls: task.sourceImageUrls || [],
             perModelResolution: task.perModelResolution || {},
             numImages: task.numImages || 1,
+            ...(task.optionalParams || {}),
+            briaPresets: task.briaPresets || {},
           };
           const payload = modelConfig?.params
             ? buildPayload(modelConfig, userSettings, task.genType || genType)
@@ -1922,6 +1926,8 @@ export default function ProximaApp() {
           sourceImageUrls: newTask.sourceImageUrls || [],
           perModelResolution: newTask.perModelResolution || {},
           numImages: newTask.numImages || 1,
+          ...(newTask.optionalParams || {}),
+          briaPresets: newTask.briaPresets || {},
         };
         const payload = modelConfig?.params
           ? buildPayload(modelConfig, userSettings, taskGenType)
@@ -2762,6 +2768,75 @@ export default function ProximaApp() {
                           <input type="text" className="settings-input" style={{ width: 72 }} value={seed} onChange={e => setSeed(e.target.value)} />
                           <button onClick={() => setSeed(Math.floor(Math.random() * 999999).toString())} style={{ background: "transparent", border: "1px solid var(--border)", borderRadius: 6, padding: "5px 8px", cursor: "pointer", fontSize: 14 }} title="Random seed">🎲</button>
                         </div>
+
+                        {/* C1: Advanced per-model parameters — driven by each selected model's params.optional + params.briaPreset */}
+                        {(() => {
+                          const sel = selectedModels.map(id => models.find(m => m.id === id)).filter(Boolean);
+                          const optMap = new Map();
+                          sel.forEach(m => {
+                            if (m.params?.optional) {
+                              for (const [key, cfg] of Object.entries(m.params.optional)) {
+                                if (!optMap.has(key)) optMap.set(key, { key, cfg, models: [] });
+                                optMap.get(key).models.push(m.name);
+                              }
+                            }
+                          });
+                          const opts = [...optMap.values()];
+                          const briaModels = sel.filter(m => m.params?.briaPreset);
+                          if (opts.length === 0 && briaModels.length === 0) return null;
+                          const labelOf = k => k.replace(/_/g, " ").replace(/([A-Z])/g, " $1").trim().replace(/^./, c => c.toUpperCase());
+                          return (
+                            <details style={{ marginTop: 6, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                              <summary style={{ cursor: "pointer", fontSize: 11, color: "var(--text-secondary)", userSelect: "none" }}>
+                                ⚙️ Advanced parameters ({opts.length + briaModels.length})
+                              </summary>
+                              <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+                                {opts.map(({ key, cfg, models: ms }) => {
+                                  const cur = optionalParams[key] !== undefined ? optionalParams[key] : cfg.default;
+                                  const note = ms.length < sel.length ? ` (${ms.length}/${sel.length})` : "";
+                                  if (cfg.type === "boolean") {
+                                    return (
+                                      <div className="settings-row" key={key}>
+                                        <label title={ms.join(", ")}>{labelOf(key)}{note}</label>
+                                        <input type="checkbox" checked={!!cur} onChange={e => setOptionalParams(p => ({ ...p, [key]: e.target.checked }))} />
+                                      </div>
+                                    );
+                                  }
+                                  if (cfg.type === "enum") {
+                                    return (
+                                      <div className="settings-row" key={key}>
+                                        <label title={ms.join(", ")}>{labelOf(key)}{note}</label>
+                                        <select className="settings-select" value={cur} onChange={e => setOptionalParams(p => ({ ...p, [key]: e.target.value }))}>
+                                          {cfg.values.map(v => <option key={v} value={v}>{v}</option>)}
+                                        </select>
+                                      </div>
+                                    );
+                                  }
+                                  const step = (cfg.max != null && cfg.max <= 1) ? 0.05 : (Number.isInteger(cfg.default) ? 1 : 0.1);
+                                  return (
+                                    <div className="settings-row" key={key}>
+                                      <label title={ms.join(", ")}>{labelOf(key)}{note}</label>
+                                      <input type="number" className="settings-input" style={{ width: 80 }} value={cur} min={cfg.min} max={cfg.max} step={step}
+                                        onChange={e => setOptionalParams(p => ({ ...p, [key]: e.target.value === "" ? cfg.default : parseFloat(e.target.value) }))} />
+                                      {cfg.min != null && <span style={{ fontSize: 9, color: "var(--text-secondary)" }}>{cfg.min}–{cfg.max}</span>}
+                                    </div>
+                                  );
+                                })}
+                                {briaModels.map(m => {
+                                  const cur = briaPresets[m.id] !== undefined ? briaPresets[m.id] : m.params.briaPreset.default;
+                                  return (
+                                    <div className="settings-row" key={m.id}>
+                                      <label title={m.name}>{m.name}</label>
+                                      <select className="settings-select" value={cur} onChange={e => setBriaPresets(p => ({ ...p, [m.id]: e.target.value }))}>
+                                        {m.params.briaPreset.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                      </select>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </details>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
