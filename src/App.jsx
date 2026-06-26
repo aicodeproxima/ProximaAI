@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useReducer, memo } from "reac
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
+import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -1642,14 +1643,19 @@ export default function ProximaApp() {
 
   // ─── FILE UPLOAD ───
   async function uploadSingleFile(file) {
+    // Shrink large images first — the /wavespeed rewrite 502s on bodies >~3 MB.
+    const toSend = await downscaleImage(file, { maxEdge: 2048, maxBytes: 1_500_000 });
     const formData = new FormData();
-    formData.append("file", file);
+    formData.append("file", toSend);
     const { res } = await proxiedFetch(`${API_BASE}/media/upload/binary`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${apiKey}` },
       body: formData
     });
-    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Upload failed: ${res.status}${body ? " — " + body.slice(0, 140) : ""}`);
+    }
     const data = await res.json();
     return data?.data?.download_url || data?.data?.url || null;
   }
@@ -1666,25 +1672,18 @@ export default function ProximaApp() {
     if (!apiKey) { setUploadStatus("error"); return; }
     setUploadStatus("uploading");
 
-    try {
-      // Upload all files in parallel
-      const uploadPromises = files.map(f => uploadSingleFile(f));
-      const urls = (await Promise.all(uploadPromises)).filter(Boolean);
+    // allSettled so one bad file doesn't sink the whole batch.
+    const results = await Promise.allSettled(files.map(f => uploadSingleFile(f)));
+    const urls = results.filter(r => r.status === "fulfilled" && r.value).map(r => r.value);
+    results.filter(r => r.status === "rejected")
+      .forEach(r => console.warn("[upload]", r.reason?.message || r.reason));
 
-      if (urls.length === 0) throw new Error("No URLs returned");
-
-      // First image goes to primary sourceImageUrl
-      setSourceImageUrl(urls[0]);
-
-      // Additional images go to sourceImageUrls (for multi-image models)
-      if (urls.length > 1) {
-        setSourceImageUrls(prev => [...prev, ...urls.slice(1)]);
-      }
-
-      setUploadStatus("done");
-    } catch (err) {
-      console.error("Upload error:", err);
+    if (urls.length === 0) {
       setUploadStatus("error");
+    } else {
+      setSourceImageUrl(urls[0]);
+      if (urls.length > 1) setSourceImageUrls(prev => [...prev, ...urls.slice(1)]);
+      setUploadStatus("done");
     }
     // Reset input so same files can be re-selected
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1694,14 +1693,12 @@ export default function ProximaApp() {
   async function handleAdditionalFileSelect(e) {
     const files = Array.from(e.target.files || []);
     if (files.length === 0 || !apiKey) return;
-    try {
-      const uploadPromises = files.map(f => uploadSingleFile(f));
-      const urls = (await Promise.all(uploadPromises)).filter(Boolean);
-      if (urls.length > 0) {
-        setSourceImageUrls(prev => [...prev, ...urls]);
-      }
-    } catch (err) {
-      console.error("Additional image upload error:", err);
+    const results = await Promise.allSettled(files.map(f => uploadSingleFile(f)));
+    const urls = results.filter(r => r.status === "fulfilled" && r.value).map(r => r.value);
+    results.filter(r => r.status === "rejected")
+      .forEach(r => console.warn("[upload+]", r.reason?.message || r.reason));
+    if (urls.length > 0) {
+      setSourceImageUrls(prev => [...prev, ...urls]);
     }
     if (multiImageFileRef.current) multiImageFileRef.current.value = "";
   }
