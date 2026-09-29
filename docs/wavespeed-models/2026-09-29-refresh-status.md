@@ -89,11 +89,11 @@ Other notable additions include Sora 2 public variants and a dedicated Video Edi
 
 The audit command is `node scripts/audit-wavespeed-models.mjs`; add `--details` for allowed/required field summaries or `--model=<model-id> --schema-json` for a single public schema. It only fetches public model pages and constructs local payloads. It does not submit generations or read prediction history.
 
-## Current Git/rebase state
+## Git/rebase result
 
 `git push origin main` was rejected because `origin/main` had advanced from `b51e38f` to `8ad5b0c`. A rebase onto `origin/main` was started to preserve the newer remote work.
 
-Current state before completing the rebase:
+Result:
 
 - `src/config/models.js` contains the remote 21-model work, the September family refresh, public-schema corrections, and no duplicate IDs.
 - `public/sw.js` is staged in the rebase with cache version `proximaai-v3`.
@@ -101,17 +101,22 @@ Current state before completing the rebase:
 - The richer C2/C3 input cards and reusable `CockpitTaskCard` renderer were retained.
 - Duplicate audio state/handlers and duplicate payload assignments were removed.
 - v2v source videos, avatar driving videos, end frames, reference videos, auxiliary mask/face/product images, and regeneration persistence now route independently.
-- The current production build passes after the merge resolutions.
+- The production build passes after the merge resolutions.
+- Rebase completed successfully as commit `343ad32`.
+- `main` was pushed to `origin` (`8ad5b0c..343ad32`).
 
 Do not abort or skip the rebase unless this document is re-evaluated first; the local commit and remote work both contain required pieces.
 
-## Remaining steps
+## Deployment verification
 
-1. Stage the resolved files and finish `git rebase --continue`.
-2. Run the production build, full 214-entry public-schema audit, registry duplicate test, conflict-marker scan, and `git diff --check` once more on the completed rebase.
-3. Push `main` and wait for Vercel deployment.
-4. Verify the deployed browser UI: all seven workflow tabs, representative Standard/Lite/Pro/Fast/Reference cards, source-video panel, start/end-frame panel, avatar audio panel, Advanced settings, and mobile-width tab layout. Do not submit a generation and do not open History.
-5. Confirm the deployed bundle contains representative new model IDs and `proximaai-v3`.
+- Live URL: `https://proxima-ai-seven.vercel.app/`.
+- The live bundle contains representative Seedream 5 Pro, Seedance 2.5 Turbo, WAN 3.0 Prime Reference, Qwen Image 3.0 Pro Edit, FLUX 3 Video Upscale, MiniMax H3 Singularity Reference LoRA, Kling O3 4K Video Edit, Vidu Q3 Turbo Start + End, Veo 3.1 Lite Start + End, Nano Banana 2 Lite Edit, and Luma Ray 3.2 Reframe IDs.
+- The live service worker contains cache name `proximaai-v3`.
+- The public login surface loads successfully with the expected title and no browser-console errors.
+- Authenticated workflow cards were not opened because the verification browser had no existing session and this task does not authorize retrieving or transmitting login credentials. Static production-bundle inspection confirms the deployed registry and controls are present.
+- No Generate action was pressed. No prediction endpoint was called. No Gallery, Logs, or private history view was opened.
+
+No engineering work remains for this rollout. A signed-in visual smoke test may be performed manually if desired, while continuing to avoid Generate and private history surfaces.
 
 ## Non-generation endpoints intentionally not exposed
 
