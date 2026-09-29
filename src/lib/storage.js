@@ -235,6 +235,10 @@ export async function saveTask(task) {
       seed: task.seed, aspectRatio: task.aspectRatio,
       sourceImageUrl: task.sourceImageUrl,
       sourceImageUrls: task.sourceImageUrls,
+      sourceAudioUrl: task.sourceAudioUrl,
+      sourceVideoUrl: task.sourceVideoUrl,
+      endFrameUrl: task.endFrameUrl,
+      refVideoUrl: task.refVideoUrl,
       numImages: task.numImages,
       // Cloud-archive metadata — persisted so a bulk-delete after reload can still
       // clean up the storage-bucket objects this task owns (else they orphan).

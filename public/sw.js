@@ -1,4 +1,4 @@
-const CACHE_NAME = "proximaai-v2";
+const CACHE_NAME = "proximaai-v3";
 const PRECACHE = ["/", "/index.html"];
 
 self.addEventListener("install", (e) => {

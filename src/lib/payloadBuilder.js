@@ -116,9 +116,9 @@ export function buildPayload(model, userSettings, genType) {
 
   // Prompt — required for most types, optional for avatar and certain Bria utilities
   // (Restore, Colorize, Relight, Reseason, Remove BG, Upscale, Expand, etc. — flagged with noPrompt)
-  if (userSettings.prompt?.trim()) {
+  if (!p.noPrompt && userSettings.prompt?.trim()) {
     payload.prompt = userSettings.prompt;
-  } else if (genType !== "avatar" && !p.noPrompt) {
+  } else if (!p.noPrompt && genType !== "avatar") {
     payload.prompt = userSettings.prompt || "";
   }
 
@@ -167,7 +167,7 @@ export function buildPayload(model, userSettings, genType) {
 
   // Seed — only if model supports it AND user set a specific one
   if (p.seed && userSettings.seed && userSettings.seed !== "-1") {
-    payload.seed = parseInt(userSettings.seed);
+    payload[p.seedParam || "seed"] = parseInt(userSettings.seed);
   }
 
   // Source image(s) for i2i — primary image (Ref 1) + additional refs merged into one array
@@ -193,6 +193,18 @@ export function buildPayload(model, userSettings, genType) {
         payload.images = allImages; // multi-image models get the full array
       }
     }
+    if (p.auxImageParam && allImages[1]) {
+      payload[p.auxImageParam] = allImages[1];
+    }
+    if (p.productImageParam && allImages[1]) {
+      payload[p.productImageParam] = [{
+        image: allImages[1],
+        x: Number(userSettings.productX ?? 128),
+        y: Number(userSettings.productY ?? 128),
+        width: Number(userSettings.productWidth ?? 512),
+        height: Number(userSettings.productHeight ?? 512),
+      }];
+    }
   }
 
   // Source image / start+end frames / references for i2v (C2)
@@ -206,8 +218,15 @@ export function buildPayload(model, userSettings, genType) {
       // reference-to-video models take the image(s) as an array under their own field
       // (e.g. veo3.1-fast/reference-to-video -> "images")
       if (imgs.length) payload[p.referenceImages] = imgs;
+    } else if (p.startEndFrames && imgs.length) {
+      payload[p.startImageParam || "start_image"] = imgs[0];
+      const endFrame = userSettings.endFrameUrl?.trim() || imgs[1];
+      if (endFrame) payload[p.endImageParam || "end_image"] = endFrame;
     } else if (imgs.length) {
-      payload.image = imgs[0]; // standard i2v: single source/start image
+      const imageParam = p.imageParam || "image";
+      payload[imageParam] = imageParam === "image" ? imgs[0] : imgs;
+      const lastImage = userSettings.endFrameUrl?.trim() || imgs[1];
+      if (p.lastImageParam && lastImage) payload[p.lastImageParam] = lastImage;
     }
     // optional end frame — field name varies per model (last_image vs end_image)
     if (p.endFrame && userSettings.endFrameUrl?.trim()) {
@@ -236,11 +255,22 @@ export function buildPayload(model, userSettings, genType) {
     }
   }
 
-  // Source image / audio / driving-video for avatar (C3)
-  if (genType === "avatar") {
-    if (userSettings.sourceImageUrl) payload.image = userSettings.sourceImageUrl;
-    if (p.audioParam && userSettings.sourceAudioUrl?.trim()) payload[p.audioParam] = userSettings.sourceAudioUrl.trim();
-    if (p.videoParam && userSettings.sourceVideoUrl?.trim()) payload[p.videoParam] = userSettings.sourceVideoUrl.trim();
+  // Source video for video editing, extension, motion control, and upscaling.
+  if (genType === "v2v" && userSettings.sourceVideoUrl) {
+    payload[p.videoParam || "video"] = userSettings.sourceVideoUrl.trim();
+  }
+
+  // Source image/video/audio for avatar models.
+  if (genType === "avatar" && userSettings.sourceImageUrl) {
+    payload[p.imageParam || "image"] = userSettings.sourceImageUrl.trim();
+    const auxiliaryImage = userSettings.sourceImageUrls?.find(url => url?.trim())?.trim();
+    if (p.auxImageParam && auxiliaryImage) payload[p.auxImageParam] = auxiliaryImage;
+  }
+  if (genType === "avatar" && (model.requiresAudio || p.audioParam) && userSettings.sourceAudioUrl) {
+    payload[p.audioParam || "audio"] = userSettings.sourceAudioUrl.trim();
+  }
+  if (genType === "avatar" && (model.requiresVideo || p.videoParam) && userSettings.sourceVideoUrl) {
+    payload[p.videoParam || "video"] = userSettings.sourceVideoUrl.trim();
   }
 
   // Output format — only for WaveSpeed-hosted models that support it
@@ -250,14 +280,15 @@ export function buildPayload(model, userSettings, genType) {
   // i23d models don't take output_format — they always return their natural mesh format
 
   // Batch num_images — for models that support generating multiple images per request
-  if (userSettings.numImages && userSettings.numImages > 1 && (genType === "image" || genType === "i2i")) {
-    const maxBatch = p.maxBatchImages || 4;
+  if (userSettings.numImages && userSettings.numImages > 1 && p.maxBatchImages > 1 && (genType === "image" || genType === "i2i")) {
+    const maxBatch = p.maxBatchImages;
     payload.num_images = Math.min(parseInt(userSettings.numImages), maxBatch);
   }
 
   // Model-specific optional params
   if (p.optional) {
     for (const [key, config] of Object.entries(p.optional)) {
+      if (config.payload === false) continue;
       const userVal = userSettings[key];
       if (userVal !== undefined && userVal !== config.default) {
         payload[config.paramName] = config.type === "number" ? parseFloat(userVal) : userVal;
