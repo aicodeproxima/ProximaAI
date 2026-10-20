@@ -8,7 +8,20 @@ Reusable scripts are in `scripts/browser/`.
 - Live bundle: `curl -sL <site>/ | grep -o 'assets/index-[^"]*\.js'`, then grep that bundle for a string your
   change added. In the page: `[...document.scripts].map(s => s.src).find(s => s.includes('/assets/index-'))`.
 - Vercel deploys ~20-30 s after `git push origin main`. Reload open tabs (and the phone) after every deploy.
-- Wait for a deploy in one call: `sh scripts/browser/wait-deploy.sh '<string your change added>'` (polls every 5 s, prints the live bundle).
+- Wait for a deploy in one call: `sh scripts/browser/wait-deploy.sh '<string your change added>'` (polls every 5 s,
+  checks index.html and the bundle, prints the live bundle).
+- Right after a deploy a navigation can get the previous index.html whose bundle 404s (blank page); the inline guard in
+  index.html reloads once. If a page is blank, check `[...document.scripts]` against the live bundle and reload.
+
+## Sign-in (since 2026-10-20; measured live at 384 px)
+| What | Selector |
+|---|---|
+| Fields | `#login-username`, `#login-password`; submit is the form's `button[type=submit]` ("SIGN IN") |
+| Unlock mode | button text "Locked out? Use your backup code" → `#login-backup-code`, `#login-new-password` |
+| Signed in? | `localStorage["proximaai-session"]` (JSON `{token, expires_at, username}`, 12 h); `proximaai-user` alone no longer signs in |
+| Account modal ids | `#acct-current-password`, `#acct-new-password`, `#acct-confirm-password`, `#acct-new-username`, `#acct-backup-code`, `#acct-type-it-again`, `#acct-email-address`, `#acct-verification-code` |
+Never type the owner's password or key. Server-side checks without signing in: mint a 3-minute token in SQL
+(`_sign_session_token('admin:'||username, now()+interval '3 minutes')`) and curl the proxy's `/api/v3/balance` (no billing).
 
 ## Navigation (no deep links: pages are React state)
 | What | Selector / action |
