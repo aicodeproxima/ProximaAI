@@ -42,6 +42,37 @@ export function pollOutcome(data) {
   return "running";
 }
 
+// Applies one poll answer to a task: the updated task, or null while it is still running. Shared by every
+// poll loop (new, regenerated, resumed), so a purged prediction can never keep a live loop polling forever.
+export function applyPoll(task, data, now) {
+  switch (pollOutcome(data)) {
+    case "completed": {
+      const wallClock = now - task.startTime;
+      return { ...task, status: "completed", outputs: data.outputs, endTime: now, wallClockMs: wallClock,
+        inferenceMs: data?.timings?.inference || wallClock, nsfw: data?.has_nsfw_contents };
+    }
+    case "failed": return { ...task, status: "failed", error: data.error || "Generation failed", endTime: now };
+    case "gone": return failTask(task, now, GONE_ERROR);
+    default: return null;
+  }
+}
+
+// What a failed poll means: "stop" (signed out / no key saved: the resume effect restarts it later),
+// "retry" (rate limit, network drop, proxy/WaveSpeed 5xx), or "fail" (WaveSpeed refused the poll).
+// A phone that loses signal mid-poll used to fail the task on the first fetch error.
+export function pollErrorAction(e) {
+  if (e?.session || e?.noKey) return "stop";
+  const code = e?.code;
+  if (typeof code !== "number" || code === 429 || code >= 500) return "retry";
+  return "fail";
+}
+
+// Images poll fast and give up after 5 minutes of polling; 3D and video poll slower until WaveSpeed answers.
+export function pollTiming(genType) {
+  if (genType === "image" || genType === "i2i") return { interval: 3000, maxPollMs: 300000 };
+  return { interval: genType === "i23d" ? 10000 : 15000, maxPollMs: Infinity };
+}
+
 // Adds the IndexedDB snapshot to state without dropping what is already there. On load the resume effect's
 // read resolves first (measured on the phone), so replacing state wiped the tasks it had just resumed.
 export function mergeLoadedTasks(current, loaded) {

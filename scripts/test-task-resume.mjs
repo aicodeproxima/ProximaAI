@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, RESUME_WINDOW_MS, SUBMIT_GRACE_MS } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, pollTiming, pollErrorAction, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -109,6 +109,56 @@ test("load merge prefers the in-state copy of a task (it is newer than IndexedDB
 test("load merge sorts newest first", () => {
   const merged = mergeLoadedTasks([task("mid", { startTime: 2 })], [task("new", { startTime: 3 }), task("old", { startTime: 1 })]);
   assert.deepEqual(merged.map(t => t.id), ["new", "mid", "old"]);
+});
+
+// Every poll loop (new, regenerated, resumed) applies a poll answer the same way.
+test("poll answer: a purged prediction fails the task as expired instead of polling forever", () => {
+  const t = applyPoll(task("a"), { status: "deleted", outputs: [] }, NOW);
+  assert.equal(t.status, "failed");
+  assert.equal(t.error, GONE_ERROR);
+  assert.equal(t.endTime, NOW);
+});
+
+test("poll answer: completed copies outputs, timings and the nsfw flag", () => {
+  const t = applyPoll(task("a"), { status: "completed", outputs: ["https://cdn/a.png"], timings: { inference: 1234 }, has_nsfw_contents: [false] }, NOW);
+  assert.equal(t.status, "completed");
+  assert.deepEqual(t.outputs, ["https://cdn/a.png"]);
+  assert.equal(t.wallClockMs, 5 * 60_000);
+  assert.equal(t.inferenceMs, 1234);
+  assert.deepEqual(t.nsfw, [false]);
+});
+
+test("poll answer: failed keeps WaveSpeed's error", () => {
+  const t = applyPoll(task("a"), { status: "failed", error: "nsfw detected" }, NOW);
+  assert.equal(t.status, "failed");
+  assert.equal(t.error, "nsfw detected");
+});
+
+test("poll answer: still running returns null (poll again)", () => {
+  assert.equal(applyPoll(task("a"), { status: "processing" }, NOW), null);
+});
+
+test("poll error: signed out or no key stops the loop without failing the task", () => {
+  assert.equal(pollErrorAction({ code: 401, session: true }), "stop");
+  assert.equal(pollErrorAction({ code: 400, noKey: true }), "stop");
+});
+
+test("poll error: rate limits, network drops and server errors retry instead of failing the task", () => {
+  assert.equal(pollErrorAction({ code: 429 }), "retry");
+  assert.equal(pollErrorAction(new TypeError("Failed to fetch")), "retry");
+  assert.equal(pollErrorAction({ code: 502 }), "retry");
+});
+
+test("poll error: WaveSpeed refusing the poll (4xx) fails the task", () => {
+  assert.equal(pollErrorAction({ code: 404 }), "fail");
+  assert.equal(pollErrorAction({ code: 0, message: "Refusing to poll a non-WaveSpeed URL" }), "fail");
+});
+
+test("poll timing: images poll every 3 s for 5 min, 3D every 10 s, video until WaveSpeed answers", () => {
+  assert.deepEqual(pollTiming("image"), { interval: 3000, maxPollMs: 300000 });
+  assert.deepEqual(pollTiming("i2i"), { interval: 3000, maxPollMs: 300000 });
+  assert.deepEqual(pollTiming("i23d"), { interval: 10000, maxPollMs: Infinity });
+  assert.deepEqual(pollTiming("t2v"), { interval: 15000, maxPollMs: Infinity });
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

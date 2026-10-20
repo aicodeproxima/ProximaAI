@@ -13,7 +13,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
-import { mergeLoadedTasks, pollOutcome, failTask, EXPIRED_ERROR, GONE_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, pollTiming, pollErrorAction, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -1885,6 +1885,38 @@ export default function ProximaApp() {
     return () => { Object.values(pollRefs.current).forEach(id => clearTimeout(id)); };
   }, []);
 
+  // ─── POLLING: one loop for new, regenerated and resumed tasks ───
+  // Polls until WaveSpeed completes, fails or purges the task ("gone"), the task passes the 48 h resume
+  // window, or (images) 5 min pass without an answer. Rate limits, network drops and 5xx retry with
+  // backoff; a dead session or a missing key stops the loop without failing the task, and the resume
+  // effect restarts it after sign-in / once a key is saved.
+  function startPolling(task, pollUrl, { genType, resumed = false, delay } = {}) {
+    const { interval, maxPollMs } = pollTiming(genType);
+    const deadline = (resumed ? (task.startTime || Date.now()) : Date.now()) + maxPollMs;
+    const update = (fn) => setTasks(prev => prev.map(t => t.id === task.id ? fn(t) : t));
+    const finish = (fn) => { delete pollRefs.current[task.id]; update(fn); };
+    const timeout = () => finish(t => ({ ...t, status: "failed", error: resumed ? "Timeout (resumed)" : "Timeout", endTime: Date.now() }));
+    const poll = async () => {
+      if (Date.now() - (task.startTime || 0) > RESUME_WINDOW_MS) { finish(t => failTask(t, Date.now(), EXPIRED_ERROR)); return; }
+      try {
+        const result = await pollResult(pollUrl);
+        const data = result?.data || result;
+        const now = Date.now();
+        if (applyPoll(task, data, now)) finish(t => applyPoll(t, data, now));
+        else if (now > deadline) timeout();
+        else pollRefs.current[task.id] = setTimeout(poll, interval);
+      } catch (e) {
+        const action = pollErrorAction(e);
+        if (action === "stop") delete pollRefs.current[task.id];
+        else if (action === "retry") {
+          if (Date.now() > deadline) timeout();
+          else pollRefs.current[task.id] = setTimeout(poll, interval * 2 + Math.random() * 2000);
+        } else finish(t => ({ ...t, status: "failed", error: e.message || (resumed ? "Poll error (resumed)" : "Poll error"), endTime: Date.now() }));
+      }
+    };
+    pollRefs.current[task.id] = setTimeout(poll, delay ?? interval);
+  }
+
   // ─── RESUME POLLING for in-flight tasks after refresh/close/OS-kill ───
   // On mount (after auth), load any pending/processing tasks from IndexedDB
   // with their saved pollUrl, inject them into state, and restart their polls.
@@ -1905,50 +1937,8 @@ export default function ProximaApp() {
       // Restart polling for each
       for (const task of pending) {
         if (!task.pollUrl || pollRefs.current[task.id]) continue;
-        const tFast = task.genType === "image" || task.genType === "i2i";
-        const pollInterval = tFast ? 3000 : (task.genType === "i23d" ? 10000 : 15000);
-        const maxTimeout = tFast ? 300000 : Infinity;
-        const pollUrl = task.pollUrl;
-        const poll = async () => {
-          // Guard: no resumed poll (429 retries included) outlives WaveSpeed's copy of the result.
-          if (Date.now() - task.startTime > RESUME_WINDOW_MS) {
-            setTasks(prev => prev.map(t => t.id === task.id ? failTask(t, Date.now(), EXPIRED_ERROR) : t));
-            return;
-          }
-          try {
-            const result = await pollResult(pollUrl);
-            const data = result?.data || result;
-            const outcome = pollOutcome(data);
-            if (outcome === "completed") {
-              const wallClock = Date.now() - task.startTime;
-              setTasks(prev => prev.map(t => t.id === task.id ? {
-                ...t, status: "completed", outputs: data.outputs,
-                endTime: Date.now(), wallClockMs: wallClock,
-                inferenceMs: data?.timings?.inference || wallClock,
-                nsfw: data?.has_nsfw_contents
-              } : t));
-            } else if (outcome === "failed") {
-              setTasks(prev => prev.map(t => t.id === task.id ? {
-                ...t, status: "failed", error: data.error || "Generation failed", endTime: Date.now()
-              } : t));
-            } else if (outcome === "gone") {
-              // WaveSpeed purged it and answers status "deleted": polling again can never finish it.
-              setTasks(prev => prev.map(t => t.id === task.id ? failTask(t, Date.now(), GONE_ERROR) : t));
-            } else if (Date.now() - task.startTime > maxTimeout) {
-              // Timed out only after at least one poll: an image interrupted minutes ago has usually finished.
-              setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "failed", error: "Timeout (resumed)", endTime: Date.now() } : t));
-            } else {
-              pollRefs.current[task.id] = setTimeout(poll, pollInterval);
-            }
-          } catch (e) {
-            // Signed out or no key saved: stop without failing; the next resume picks the task up again.
-            if (e.session || e.noKey) delete pollRefs.current[task.id];
-            else if (e.code === 429) pollRefs.current[task.id] = setTimeout(poll, pollInterval * 2 + Math.random() * 2000);
-            else setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "failed", error: e.message || "Poll error (resumed)", endTime: Date.now() } : t));
-          }
-        };
-        // Start polling immediately (the task's been waiting)
-        pollRefs.current[task.id] = setTimeout(poll, 500);
+        // Start polling almost immediately (the task has been waiting)
+        startPolling(task, task.pollUrl, { genType: task.genType, resumed: true, delay: 500 });
       }
     })();
     return () => { cancelled = true; };
@@ -2222,51 +2212,7 @@ export default function ProximaApp() {
           setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "processing", taskId, pollUrl } : t));
           saveTask({ ...task, status: "processing", taskId, pollUrl });
 
-          // Polling loop
-          const isFast = genType === "image" || genType === "i2i";
-          const pollInterval = isFast ? 3000 : (genType === "i23d" ? 10000 : 15000);
-          const maxTimeout = isFast ? 300000 : Infinity;
-          const startPoll = Date.now();
-
-          const poll = async () => {
-            if (maxTimeout !== Infinity && Date.now() - startPoll > maxTimeout) {
-              setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "failed", error: "Timeout", endTime: Date.now() } : t));
-              return;
-            }
-            try {
-              const result = await pollResult(pollUrl);
-              const data = result?.data || result;
-              if (data.status === "completed" && data.outputs?.length > 0) {
-                const wallClock = Date.now() - task.startTime;
-                setTasks(prev => prev.map(t => t.id === task.id ? {
-                  ...t, status: "completed", outputs: data.outputs,
-                  endTime: Date.now(), wallClockMs: wallClock,
-                  inferenceMs: data?.timings?.inference || wallClock,
-                  nsfw: data?.has_nsfw_contents
-                } : t));
-              } else if (data.status === "failed") {
-                setTasks(prev => prev.map(t => t.id === task.id ? {
-                  ...t, status: "failed", error: data.error || "Generation failed", endTime: Date.now()
-                } : t));
-              } else {
-                pollRefs.current[task.id] = setTimeout(poll, pollInterval);
-              }
-            } catch (e) {
-              if (e.session || e.noKey) {
-                // Signed out or no key saved: stop without failing; resume picks it up after sign-in.
-                delete pollRefs.current[task.id];
-              } else if (e.code === 429) {
-                // Rate limited — backoff
-                pollRefs.current[task.id] = setTimeout(poll, pollInterval * 2 + Math.random() * 2000);
-              } else {
-                setTasks(prev => prev.map(t => t.id === task.id ? {
-                  ...t, status: "failed", error: e.message || "Poll error", endTime: Date.now()
-                } : t));
-              }
-            }
-          };
-
-          pollRefs.current[task.id] = setTimeout(poll, pollInterval);
+          startPolling(task, pollUrl, { genType: task.genType || genType });
 
         } catch (e) {
           let errMsg = e.message || "Submit failed";
@@ -2381,48 +2327,10 @@ export default function ProximaApp() {
           return;
         }
 
-        setTasks(prev => prev.map(t => t.id === newTask.id ? { ...t, status: "processing", taskId } : t));
-
-        const isImageType = taskGenType === "image" || taskGenType === "i2i";
-        const pollInterval = isImageType ? 3000 : 15000;
-        const maxTimeout = isImageType ? 300000 : Infinity;
-        const startPoll = Date.now();
-
-        const poll = async () => {
-          if (maxTimeout !== Infinity && Date.now() - startPoll > maxTimeout) {
-            setTasks(prev => prev.map(t => t.id === newTask.id ? { ...t, status: "failed", error: "Timeout", endTime: Date.now() } : t));
-            return;
-          }
-          try {
-            const result = await pollResult(pollUrl);
-            const data = result?.data || result;
-            if (data.status === "completed" && data.outputs?.length > 0) {
-              const wallClock = Date.now() - newTask.startTime;
-              setTasks(prev => prev.map(t => t.id === newTask.id ? {
-                ...t, status: "completed", outputs: data.outputs,
-                endTime: Date.now(), wallClockMs: wallClock,
-                inferenceMs: data?.timings?.inference || wallClock,
-              } : t));
-            } else if (data.status === "failed") {
-              setTasks(prev => prev.map(t => t.id === newTask.id ? {
-                ...t, status: "failed", error: data.error || "Generation failed", endTime: Date.now()
-              } : t));
-            } else {
-              pollRefs.current[newTask.id] = setTimeout(poll, pollInterval);
-            }
-          } catch (e) {
-            if (e.session || e.noKey) {
-              delete pollRefs.current[newTask.id];
-            } else if (e.code === 429) {
-              pollRefs.current[newTask.id] = setTimeout(poll, pollInterval * 2 + Math.random() * 2000);
-            } else {
-              setTasks(prev => prev.map(t => t.id === newTask.id ? {
-                ...t, status: "failed", error: e.message || "Poll error", endTime: Date.now()
-              } : t));
-            }
-          }
-        };
-        pollRefs.current[newTask.id] = setTimeout(poll, pollInterval);
+        // Persist pollUrl so a reload / tab kill can resume this poll (it used to be kept in memory only)
+        setTasks(prev => prev.map(t => t.id === newTask.id ? { ...t, status: "processing", taskId, pollUrl } : t));
+        saveTask({ ...newTask, status: "processing", taskId, pollUrl });
+        startPolling(newTask, pollUrl, { genType: taskGenType });
       } catch (e) {
         let errMsg = e.message || "Regenerate failed";
         if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
