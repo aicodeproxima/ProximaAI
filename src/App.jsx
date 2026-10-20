@@ -69,7 +69,7 @@ function LoginScreen({ onSignedIn, notice = "" }) {
         setInfo(r.password_changed ? "Unlocked and password changed — sign in with the new password." : "Unlocked — sign in again.");
         return;
       }
-      if (r.reason === "backup_locked") setError("Backup code locked after 5 wrong tries. Unlocking now needs a database reset.");
+      if (r.reason === "backup_locked") setError(`Too many wrong backup codes — try again in ${Math.max(1, Math.ceil((r.retry_after || 900) / 60))} min.`);
       else if (r.reason === "no_backup_code") setError("No backup code was ever set, so unlocking needs a database reset.");
       else if (r.reason === "weak_password") setError("New password must be at least 8 characters");
       else setError(`Wrong backup code · ${r.attempts_left ?? 0} tr${r.attempts_left === 1 ? "y" : "ies"} left`);
@@ -399,9 +399,11 @@ function AccountModal({ onClose, onSaved }) {
     try {
       const r = await changeMyPassword(currentPassword, newPassword);
       if (!r?.ok) { setError(accountError(r, "Failed to save. Try again.")); return; }
+      // Every other device is signed out by the change; this one continues on the fresh token.
+      setSession({ token: r.token, expires_at: r.expires_at, username: r.username });
       setNewPassword(""); setConfirmPassword("");
       setStep("done");
-      onSaved?.("Password changed");
+      onSaved?.("Password changed — your other devices were signed out");
     } catch (err) { setError(err.message || "Failed to save. Try again."); }
     finally { setBusy(false); setCurrentPassword(""); }
   }
@@ -1907,7 +1909,10 @@ export default function ProximaApp() {
         else pollRefs.current[task.id] = setTimeout(poll, interval);
       } catch (e) {
         const action = pollErrorAction(e);
-        if (action === "stop") delete pollRefs.current[task.id];
+        if (action === "stop") {
+          delete pollRefs.current[task.id];
+          if (e.noKey) setKeyStatus("missing"); // saving a key flips keyBlocked back, and the resume effect restarts this poll
+        }
         else if (action === "retry") {
           if (Date.now() > deadline) timeout();
           else pollRefs.current[task.id] = setTimeout(poll, interval * 2 + Math.random() * 2000);
@@ -2215,6 +2220,7 @@ export default function ProximaApp() {
           startPolling(task, pollUrl, { genType: task.genType || genType });
 
         } catch (e) {
+          if (e.noKey) setKeyStatus("missing");
           let errMsg = e.message || "Submit failed";
           if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
           if (e.code === 402) errMsg = "Insufficient balance";
@@ -2332,6 +2338,7 @@ export default function ProximaApp() {
         saveTask({ ...newTask, status: "processing", taskId, pollUrl });
         startPolling(newTask, pollUrl, { genType: taskGenType });
       } catch (e) {
+        if (e.noKey) setKeyStatus("missing");
         let errMsg = e.message || "Regenerate failed";
         if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
         if (e.code === 402) errMsg = "Insufficient balance";

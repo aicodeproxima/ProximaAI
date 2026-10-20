@@ -100,30 +100,41 @@ async function verifySessionToken(token: string | null): Promise<string | null> 
 }
 
 // ─── Per-user WaveSpeed key (service role) ──────────────────────────────────
-async function getUserWaveSpeedKey(token: string): Promise<string | null> {
+// get_my_wavespeed_key re-verifies the token in the database, which also applies revocation (a rename or
+// password change) that the in-memory HMAC check above cannot see. Its answer is kept apart:
+//   key      — use it
+//   missing  — signed in, but no key saved yet          → 400 X-Proxima-Auth: no-key
+//   session  — the database refused the token           → 401 X-Proxima-Auth: session
+//   error    — Supabase unreachable / misconfigured      → 503 (retryable; never shown as "no key")
+type KeyLookup = { key: string } | { status: 'missing' | 'session' | 'error' };
+async function getUserWaveSpeedKey(token: string): Promise<KeyLookup> {
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
     console.error('[wavespeed-v2] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured');
-    return null;
+    return { status: 'error' };
   }
   const headers = {
     apikey: SERVICE_ROLE_KEY,
     Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
     'Content-Type': 'application/json',
   };
-  // Primary: user_secrets via SECURITY DEFINER RPC (re-verifies the token).
   try {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_my_wavespeed_key`, {
       method: 'POST', headers, body: JSON.stringify({ p_session_token: token }),
     });
     if (r.ok) {
       const v = await r.json();
-      if (typeof v === 'string' && v.length >= 8) return v;
+      return typeof v === 'string' && v.length >= 8 ? { key: v } : { status: 'missing' };
     }
-  } catch (e) { console.warn('[wavespeed-v2] get_my_wavespeed_key failed', e); }
-
-  return null;
+    const body = await r.text().catch(() => '');
+    if (/session token|invalid signature|malformed/i.test(body)) return { status: 'session' };
+    console.warn('[wavespeed-v2] get_my_wavespeed_key HTTP', r.status);
+    return { status: 'error' };
+  } catch (e) {
+    console.warn('[wavespeed-v2] get_my_wavespeed_key failed', e);
+    return { status: 'error' };
+  }
 }
 
 // ─── Rate limiting (Upstash REST; no SDK import) ────────────────────────────
@@ -189,12 +200,18 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   // 3. Resolve the caller's WaveSpeed key server-side.
-  const wsKey = await getUserWaveSpeedKey(token!);
-  if (!wsKey) {
-    return new Response(JSON.stringify({ error: 'No WaveSpeed key configured' }), {
-      status: 400, headers: { ...cors, 'Content-Type': 'application/json', 'X-Proxima-Auth': 'no-key' },
-    });
+  const lookup = await getUserWaveSpeedKey(token!);
+  if (!('key' in lookup)) {
+    const json = { ...cors, 'Content-Type': 'application/json' };
+    if (lookup.status === 'session') {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...json, 'X-Proxima-Auth': 'session' } });
+    }
+    if (lookup.status === 'missing') {
+      return new Response(JSON.stringify({ error: 'No WaveSpeed key configured' }), { status: 400, headers: { ...json, 'X-Proxima-Auth': 'no-key' } });
+    }
+    return new Response(JSON.stringify({ error: 'Key lookup failed — try again' }), { status: 503, headers: json });
   }
+  const wsKey = lookup.key;
 
   // 4. Build the upstream URL. The vercel.json rewrite delivers the WaveSpeed
   //    path as ?p=<path> (Vercel's filesystem catch-all [...path] only matches a

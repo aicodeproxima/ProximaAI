@@ -31,7 +31,7 @@ export function clearSession() {
 }
 
 // Server-side token failures, as raised by _verify_session_token or the proxy's 401.
-const SESSION_ERROR = /invalid session token|malformed (session token|exp)|session token expired|invalid signature|not admin-scoped/i;
+const SESSION_ERROR = /invalid session token|malformed (session token|exp)|session token expired|session token revoked|invalid signature|not admin-scoped/i;
 export function isSessionError(err) {
   return SESSION_ERROR.test(String(err?.message || err || ""));
 }
