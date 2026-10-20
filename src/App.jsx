@@ -1738,7 +1738,7 @@ export default function ProximaApp() {
     };
   }, [isAuthed]);
 
-  const models = MODELS[genType] || [];
+  const models = (MODELS[genType] || []).filter(m => !m.retired);
   const categoryFavoriteIds = getCategoryFavoriteIds(favoriteModelsByType, genType);
   const favoriteModelCount = Object.keys(MODELS).reduce(
     (total, type) => total + getCategoryFavoriteIds(favoriteModelsByType, type).length,
@@ -2130,6 +2130,7 @@ export default function ProximaApp() {
         const taskGenType = newTask.genType || genType;
         const taskModels = MODELS[taskGenType] || [];
         const modelConfig = taskModels.find(m => m.id === newTask.modelId);
+        if (modelConfig?.retired) throw new Error(`${modelConfig.name} was retired by WaveSpeed — pick another model`);
         const userSettings = {
           prompt: newTask.prompt, negPrompt: newTask.negPrompt,
           resolution: newTask.resolution, duration: newTask.duration,
@@ -2233,7 +2234,7 @@ export default function ProximaApp() {
     setRefVideoUrl(log.refVideoUrl || "");
     if (log.numImages) setNumImages(log.numImages);
     // Try to reselect models
-    const modelIds = (MODELS[log.genType] || []).filter(m => log.models.includes(m.name)).map(m => m.id);
+    const modelIds = (MODELS[log.genType] || []).filter(m => !m.retired && log.models.includes(m.name)).map(m => m.id);
     setSelectedModels(modelIds);
     setPerModelRes({});
     setPage("cockpit");

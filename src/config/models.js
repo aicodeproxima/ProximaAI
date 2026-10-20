@@ -441,7 +441,9 @@ export const MODELS = {
       params: { resolution: null, aspectRatio: AR_NANO2, negativePrompt: false, seed: false } },
     { id: "google/nano-banana-pro/text-to-image", name: "Nano Banana Pro", provider: "Google", price: 0.14, hot: true,
       params: { resolution: RES_NANO, aspectRatio: AR_NANO_PRO, negativePrompt: false, seed: false } },
-    { id: "google/imagen4", name: "Imagen 4", provider: "Google", price: 0.08, hot: true,
+    // Retired upstream: WaveSpeed answers "Model not found" (public page 404 since 2026-09-29).
+    // Kept so old history still resolves; `retired` hides it from the picker and blocks regenerate.
+    { id: "google/imagen4", name: "Imagen 4", provider: "Google", price: 0.08, retired: true,
       params: { resolution: RES_NANO_12, negativePrompt: true, seed: true } },
 
     // Flux
