@@ -1643,7 +1643,12 @@ export default function ProximaApp() {
       removeFailedSync("setting", "apiKey");
       refreshBalance().catch(() => {});
       const logData = await getHistory(500);
-      if (logData?.length && !cancelled) setLogs(logData);
+      if (logData?.length && !cancelled) {
+        // Already stored: the save effect walks every entry and would otherwise upload all of them again on each load
+        // (one never uploaded is still in the failed-sync queue, and the reconcile pass uploads local-only entries).
+        for (const l of logData) savedLogIds.current.add(l.id);
+        setLogs(logData);
+      }
       const savedTasks = await getCompletedTasks(500);
       if (savedTasks?.length && !cancelled) {
         for (const t of savedTasks) savedTaskIds.current.add(t.id);
