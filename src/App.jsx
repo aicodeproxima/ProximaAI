@@ -2418,7 +2418,7 @@ export default function ProximaApp() {
   }
 
   async function handleFileSelect(e) {
-    const files = Array.from(e.target.files || []);
+    const files = Array.from(e.target.files || []).slice(0, maxImagesAllowed);
     if (files.length === 0) return;
 
     // Preview first image
@@ -2437,8 +2437,9 @@ export default function ProximaApp() {
     if (urls.length === 0) {
       setUploadStatus("error");
     } else {
-      setSourceImageUrl(urls[0]);
-      if (urls.length > 1) setSourceImageUrls(prev => [...prev, ...urls.slice(1)]);
+      const limitedUrls = urls.slice(0, maxImagesAllowed);
+      setSourceImageUrl(limitedUrls[0]);
+      setSourceImageUrls(limitedUrls.slice(1));
       setUploadStatus("done");
     }
     // Reset input so same files can be re-selected
@@ -2454,7 +2455,7 @@ export default function ProximaApp() {
     results.filter(r => r.status === "rejected")
       .forEach(r => console.warn("[upload+]", r.reason?.message || r.reason));
     if (urls.length > 0) {
-      setSourceImageUrls(prev => [...prev, ...urls]);
+      setSourceImageUrls(prev => [...prev, ...urls].slice(0, Math.max(0, maxImagesAllowed - 1)));
     }
     if (multiImageFileRef.current) multiImageFileRef.current.value = "";
   }
@@ -3241,7 +3242,7 @@ export default function ProximaApp() {
                       {['i2i', 'i2v', 'avatar'].includes(genType) && maxImagesAllowed > 1 && uploadStatus === "done" && (
                         <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
                           <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6, fontFamily: font }}>
-                            Additional Reference Images ({sourceImageUrls.length}/{maxImagesAllowed} max)
+                            Additional Reference Images ({sourceImageUrls.length}/{Math.max(0, maxImagesAllowed - 1)} max)
                           </div>
                           {/* Thumbnails of additional images */}
                           {sourceImageUrls.length > 0 && (
@@ -3287,7 +3288,9 @@ export default function ProximaApp() {
                             </>
                           )}
                           <div style={{ fontSize: 9, color: "var(--text-muted)", marginTop: 4 }}>
-                            {selectedConfigs.some(m => m.params?.auxImageParam === "mask_image")
+                            {selectedConfigs.some(m => m.id === "krea/v3/edit")
+                              ? 'Krea 3 supports up to 8 references. Name them "<image-1>", "<image-2>", etc. in the prompt.'
+                              : selectedConfigs.some(m => m.params?.auxImageParam === "mask_image")
                               ? "Ref 2 is the required mask image."
                               : selectedConfigs.some(m => m.params?.auxImageParam === "face_image")
                                 ? "Ref 2 is the required replacement-face image."

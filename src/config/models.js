@@ -716,7 +716,7 @@ export const MODELS = {
     { id: "ideogram-ai/ideogram-v4.5/edit", name: "Ideogram 4.5 Edit", provider: "Ideogram", price: 0.06,
       params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", maxImages: 1, optional: { editPrecision: { paramName: "edit_precision", type: "enum", values: ["regular", "high"], default: "regular" }, quality: { paramName: "quality", type: "enum", values: ["very_low", "low", "medium", "high"], default: "medium" } } } },
     { id: "krea/v3/edit", name: "Krea 3 Edit", provider: "Krea", price: 0.24,
-      params: { resolution: null, negativePrompt: true, seed: true, maxImages: 8, optional: { model: { paramName: "model", type: "enum", values: ["berry", "jam"], default: "berry" }, reasoningLevel: { paramName: "reasoning_level", type: "enum", values: ["low", "medium"], default: "low" } } } },
+      params: { resolution: null, negativePrompt: true, seed: true, imageParam: "images", maxImages: 8, optional: { model: { paramName: "model", type: "enum", values: ["berry", "jam"], default: "berry" }, reasoningLevel: { paramName: "reasoning_level", type: "enum", values: ["low", "medium"], default: "low" } } } },
   ],
 
   i23d: [

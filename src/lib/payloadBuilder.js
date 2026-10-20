@@ -217,19 +217,21 @@ export function buildPayload(model, userSettings, genType) {
         }
       }
     }
-    if (allImages.length > 0) {
+    const modelImageLimit = Math.max(1, Number.parseInt(p.maxImages, 10) || (imageParam === "image" ? 1 : allImages.length));
+    const modelImages = allImages.slice(0, modelImageLimit);
+    if (modelImages.length > 0) {
       if (imageParam === "image") {
-        payload.image = allImages[0]; // singular models only get first image
+        payload.image = modelImages[0]; // singular models only get first image
       } else {
-        payload.images = allImages; // multi-image models get the full array
+        payload[imageParam] = modelImages;
       }
     }
-    if (p.auxImageParam && allImages[1]) {
-      payload[p.auxImageParam] = allImages[1];
+    if (p.auxImageParam && modelImages[1]) {
+      payload[p.auxImageParam] = modelImages[1];
     }
-    if (p.productImageParam && allImages[1]) {
+    if (p.productImageParam && modelImages[1]) {
       payload[p.productImageParam] = [{
-        image: allImages[1],
+        image: modelImages[1],
         x: Number(userSettings.productX ?? 128),
         y: Number(userSettings.productY ?? 128),
         width: Number(userSettings.productWidth ?? 512),
