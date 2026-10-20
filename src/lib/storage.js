@@ -391,11 +391,8 @@ export async function migrateFromLocalStorage() {
     }
 
     // 2. Migrate from localStorage (fallback keys)
-    const oldKey = localStorage.getItem("prism-api-key");
-    if (oldKey) {
-      await setSetting("apiKey", oldKey);
-      localStorage.removeItem("prism-api-key");
-    }
+    // (The WaveSpeed key now lives only on the server; an old browser copy is discarded, not migrated.)
+    if (localStorage.getItem("prism-api-key")) localStorage.removeItem("prism-api-key");
 
     const oldLogs = localStorage.getItem("prism-logs");
     if (oldLogs) {

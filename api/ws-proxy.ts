@@ -15,8 +15,8 @@
 // until Deploy 2a flips the client's API_BASE. That makes Deploy 1 zero-risk.
 //
 // Security review references baked in:
-//   F.1.2 — read user_secrets first, fall back to settings.apiKey during the
-//           parallel-store window (removed in a follow-up once 2.3 cleanup runs).
+//   F.1.2 — the key is read from user_secrets only (the settings.apiKey fallback was
+//           removed at the 2026-10-20 cut-over).
 //   F.1.3 — CORS allowlist incl. `null` Origin (PWA/service-worker fetches).
 //   F.1.4 — service-role key is a SERVER env var; this file is under api/ which
 //           Vite never bundles to the client. CI bundle-audit gates this too.
@@ -52,6 +52,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Proxima-Session',
     'Access-Control-Max-Age': '86400',
+    'Access-Control-Expose-Headers': 'X-Proxima-Auth',
     'Vary': 'Origin',
   };
 }
@@ -99,10 +100,7 @@ async function verifySessionToken(token: string | null): Promise<string | null> 
 }
 
 // ─── Per-user WaveSpeed key (service role) ──────────────────────────────────
-function subjectToDeviceId(subject: string): string {
-  return subject.startsWith('admin:') ? `user:${subject.slice(6)}` : subject;
-}
-async function getUserWaveSpeedKey(token: string, subject: string): Promise<string | null> {
+async function getUserWaveSpeedKey(token: string): Promise<string | null> {
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
@@ -124,23 +122,6 @@ async function getUserWaveSpeedKey(token: string, subject: string): Promise<stri
       if (typeof v === 'string' && v.length >= 8) return v;
     }
   } catch (e) { console.warn('[wavespeed-v2] get_my_wavespeed_key failed', e); }
-
-  // Fallback (F.1.2): legacy settings.apiKey, read via service role bypassing RLS.
-  // Removed once Phase 2.3 cleanup deletes settings.apiKey rows.
-  try {
-    const deviceId = subjectToDeviceId(subject);
-    const url = `${SUPABASE_URL}/rest/v1/settings?device_id=eq.${encodeURIComponent(deviceId)}&key=eq.apiKey&select=value`;
-    const r = await fetch(url, { headers });
-    if (r.ok) {
-      const rows = await r.json();
-      const raw = Array.isArray(rows) && rows[0]?.value;
-      const key = typeof raw === 'string' ? raw : null;
-      if (key && key.length >= 8) {
-        console.warn('[wavespeed-v2] served key from legacy settings.apiKey fallback');
-        return key;
-      }
-    }
-  } catch (e) { console.warn('[wavespeed-v2] settings.apiKey fallback failed', e); }
 
   return null;
 }
@@ -194,7 +175,7 @@ export default async function handler(req: Request): Promise<Response> {
   const subject = await verifySessionToken(token);
   if (!subject) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401, headers: { ...cors, 'Content-Type': 'application/json' },
+      status: 401, headers: { ...cors, 'Content-Type': 'application/json', 'X-Proxima-Auth': 'session' },
     });
   }
 
@@ -208,10 +189,10 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   // 3. Resolve the caller's WaveSpeed key server-side.
-  const wsKey = await getUserWaveSpeedKey(token!, subject);
+  const wsKey = await getUserWaveSpeedKey(token!);
   if (!wsKey) {
     return new Response(JSON.stringify({ error: 'No WaveSpeed key configured' }), {
-      status: 400, headers: { ...cors, 'Content-Type': 'application/json' },
+      status: 400, headers: { ...cors, 'Content-Type': 'application/json', 'X-Proxima-Auth': 'no-key' },
     });
   }
 

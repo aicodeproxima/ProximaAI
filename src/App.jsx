@@ -4,10 +4,11 @@ import { buildPayload, getEffectiveImageBatchCount, getImageBatchLimit, planImag
 import { requestCost } from "./lib/pricing.js";
 import { draftTask, unitQuote, taskUserSettings } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
-import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
+import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE } from "./lib/api.js";
+import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
@@ -16,32 +17,86 @@ import { mergeLoadedTasks, pollOutcome, failTask, EXPIRED_ERROR, GONE_ERROR, RES
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
-function LoginScreen({ onLogin }) {
+// Sign-in is checked on the server (bcrypt). Three failed attempts lock it; the backup code set in
+// Settings → Account unlocks it (and can set a new password if the old one is forgotten).
+const loginInputStyle = {
+  width: "100%", background: "rgba(10,20,40,0.5)", border: "1px solid rgba(99,102,241,0.15)",
+  borderRadius: 10, padding: "12px 14px", color: "#f1f5f9", fontFamily: `'JetBrains Mono', 'Fira Code', monospace`, fontSize: 15,
+  outline: "none", boxSizing: "border-box", transition: "border-color 0.3s, box-shadow 0.3s",
+};
+const loginFocus = e => { e.target.style.borderColor = "#6366f1"; e.target.style.boxShadow = "0 0 0 3px rgba(99,102,241,0.1)"; };
+const loginBlur = e => { e.target.style.borderColor = "rgba(99,102,241,0.15)"; e.target.style.boxShadow = "none"; };
+
+function LoginScreen({ onSignedIn, notice = "" }) {
+  const [mode, setMode] = useState("signin"); // "signin" | "unlock"
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [backupCode, setBackupCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState("");
+  const [info, setInfo] = useState(notice);
+  const [loading, setLoading] = useState(false);
   const font = `'JetBrains Mono', 'Fira Code', monospace`;
   const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
 
-  const [loading, setLoading] = useState(false);
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!username.trim() || !password) return;
-    setLoading(true);
+    if (!username.trim() || !password || loading) return;
+    setLoading(true); setError(""); setInfo("");
     try {
-      const success = await onLogin(username.trim(), password);
-      if (!success) {
-        setError("Invalid username or password");
-        setPassword("");
-      }
+      const r = await signIn(username.trim(), password);
+      if (r.ok) { onSignedIn({ token: r.token, expires_at: r.expires_at, username: r.username }); return; }
+      setPassword("");
+      if (r.reason === "locked") { setMode("unlock"); setError("Sign-in is locked after 3 failed attempts. Unlock it with your backup code."); }
+      else if (r.reason === "not_provisioned") setError("This account isn't set up on the server yet.");
+      else setError(`Invalid username or password · ${r.attempts_left ?? 0} attempt${r.attempts_left === 1 ? "" : "s"} left before lockout`);
+    } catch {
+      setError("Can't reach the server — check your connection and try again. (This attempt didn't count.)");
     } finally {
       setLoading(false);
     }
   }
 
+  async function handleUnlock(e) {
+    e.preventDefault();
+    if (!backupCode.trim() || loading) return;
+    if (newPassword && newPassword.length < 8) { setError("New password must be at least 8 characters"); return; }
+    setLoading(true); setError(""); setInfo("");
+    try {
+      const r = await unlockWithBackupCode(backupCode.trim(), newPassword || null);
+      if (r.ok) {
+        setMode("signin"); setBackupCode(""); setNewPassword("");
+        setInfo(r.password_changed ? "Unlocked and password changed — sign in with the new password." : "Unlocked — sign in again.");
+        return;
+      }
+      if (r.reason === "backup_locked") setError("Backup code locked after 5 wrong tries. Unlocking now needs a database reset.");
+      else if (r.reason === "no_backup_code") setError("No backup code was ever set, so unlocking needs a database reset.");
+      else if (r.reason === "weak_password") setError("New password must be at least 8 characters");
+      else setError(`Wrong backup code · ${r.attempts_left ?? 0} tr${r.attempts_left === 1 ? "y" : "ies"} left`);
+    } catch {
+      setError("Can't reach the server — check your connection and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const labelStyle = { display: "block", fontSize: 11, color: "#94a3b8", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 };
+  const canSubmit = mode === "signin" ? (username.trim() && password && !loading) : (backupCode.trim() && !loading);
+  const buttonStyle = {
+    width: "100%", padding: "14px", border: "none", borderRadius: 12,
+    fontFamily: font, fontSize: 14, fontWeight: 700, letterSpacing: 0.5,
+    cursor: canSubmit ? "pointer" : "not-allowed",
+    background: canSubmit ? "linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa)" : "rgba(30,41,59,0.3)",
+    color: "white",
+    boxShadow: canSubmit ? "0 4px 20px rgba(99,102,241,0.35)" : "none",
+    transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)",
+    marginTop: 4, minHeight: 44,
+  };
+  const linkStyle = { background: "transparent", border: "none", color: "#818cf8", fontFamily: font, fontSize: 12, cursor: "pointer", padding: "10px 4px", minHeight: 44 };
+
   return (
     <div style={{ width: "100%", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, boxSizing: "border-box" }}>
-      <form onSubmit={handleSubmit} style={{
+      <form onSubmit={mode === "signin" ? handleSubmit : handleUnlock} style={{
         background: "rgba(8,12,25,0.6)",
         border: "1px solid rgba(99,102,241,0.2)",
         borderRadius: 18,
@@ -57,65 +112,52 @@ function LoginScreen({ onLogin }) {
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ fontSize: 48, marginBottom: 10, color: "#a78bfa", filter: "drop-shadow(0 0 20px rgba(167,139,250,0.4))" }}>◈</div>
           <div style={{ fontFamily: font, fontSize: 20, fontWeight: 700, color: "#f1f5f9", letterSpacing: 1.5 }}>ProximaAI</div>
-          <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontFamily: font, letterSpacing: 0.5 }}>PARALLEL AI GENERATION COCKPIT</div>
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontFamily: font, letterSpacing: 0.5 }}>{mode === "signin" ? "PARALLEL AI GENERATION COCKPIT" : "UNLOCK WITH BACKUP CODE"}</div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div>
-            <label style={{ display: "block", fontSize: 11, color: "#94a3b8", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Username</label>
-            <input
-              type="text"
-              value={username}
-              onChange={e => { setUsername(e.target.value); setError(""); }}
-              autoFocus
-              autoComplete="username"
-              style={{
-                width: "100%", background: "rgba(10,20,40,0.5)", border: "1px solid rgba(99,102,241,0.15)",
-                borderRadius: 10, padding: "12px 14px", color: "#f1f5f9", fontFamily: font, fontSize: 15,
-                outline: "none", boxSizing: "border-box", transition: "border-color 0.3s, box-shadow 0.3s",
-              }}
-              onFocus={e => { e.target.style.borderColor = "#6366f1"; e.target.style.boxShadow = "0 0 0 3px rgba(99,102,241,0.1)"; }}
-              onBlur={e => { e.target.style.borderColor = "rgba(99,102,241,0.15)"; e.target.style.boxShadow = "none"; }}
-            />
-          </div>
-          <div>
-            <label style={{ display: "block", fontSize: 11, color: "#94a3b8", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => { setPassword(e.target.value); setError(""); }}
-              autoComplete="current-password"
-              style={{
-                width: "100%", background: "rgba(10,20,40,0.5)", border: "1px solid rgba(99,102,241,0.15)",
-                borderRadius: 10, padding: "12px 14px", color: "#f1f5f9", fontFamily: font, fontSize: 15,
-                outline: "none", boxSizing: "border-box", transition: "border-color 0.3s, box-shadow 0.3s",
-              }}
-              onFocus={e => { e.target.style.borderColor = "#6366f1"; e.target.style.boxShadow = "0 0 0 3px rgba(99,102,241,0.1)"; }}
-              onBlur={e => { e.target.style.borderColor = "rgba(99,102,241,0.15)"; e.target.style.boxShadow = "none"; }}
-            />
-          </div>
+          {mode === "signin" ? (<>
+            <div>
+              <label style={labelStyle}>Username</label>
+              <input type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
+                autoFocus autoComplete="username" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+            </div>
+            <div>
+              <label style={labelStyle}>Password</label>
+              <input type="password" value={password} onChange={e => { setPassword(e.target.value); setError(""); }}
+                autoComplete="current-password" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+            </div>
+          </>) : (<>
+            <div>
+              <label style={labelStyle}>Backup code</label>
+              <input type="text" value={backupCode} onChange={e => { setBackupCode(e.target.value); setError(""); }}
+                autoFocus autoComplete="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+            </div>
+            <div>
+              <label style={labelStyle}>New password (optional, 8+ characters)</label>
+              <input type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }}
+                autoComplete="new-password" placeholder="Leave empty to keep the current one" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+            </div>
+          </>)}
+          {info && (
+            <div style={{ fontSize: 12, color: "#22c55e", padding: "10px 14px", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 10, fontFamily: font }}>
+              ✓ {info}
+            </div>
+          )}
           {error && (
             <div style={{ fontSize: 12, color: "#ef4444", padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 10, fontFamily: font }}>
               ✗ {error}
             </div>
           )}
-          <button type="submit"
-            disabled={!username.trim() || !password}
-            style={{
-              width: "100%", padding: "14px", border: "none", borderRadius: 12,
-              fontFamily: font, fontSize: 14, fontWeight: 700, letterSpacing: 0.5,
-              cursor: (!username.trim() || !password) ? "not-allowed" : "pointer",
-              background: (!username.trim() || !password) ? "rgba(30,41,59,0.3)" : "linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa)",
-              color: "white",
-              boxShadow: (!username.trim() || !password) ? "none" : "0 4px 20px rgba(99,102,241,0.35)",
-              transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)",
-              marginTop: 4,
-            }}>
-            SIGN IN
+          <button type="submit" disabled={!canSubmit} style={buttonStyle}>
+            {loading ? "CHECKING…" : mode === "signin" ? "SIGN IN" : "UNLOCK"}
+          </button>
+          <button type="button" style={linkStyle} onClick={() => { setMode(mode === "signin" ? "unlock" : "signin"); setError(""); setInfo(""); }}>
+            {mode === "signin" ? "Locked out? Use your backup code" : "← Back to sign in"}
           </button>
         </div>
 
-        <div style={{ textAlign: "center", marginTop: 24, fontSize: 10, color: "#64748b", fontFamily: font, letterSpacing: 0.5 }}>
+        <div style={{ textAlign: "center", marginTop: 16, fontSize: 10, color: "#64748b", fontFamily: font, letterSpacing: 0.5 }}>
           Cloud sync enabled · Works across all devices
         </div>
       </form>
@@ -219,6 +261,23 @@ function FloatingSaveButton({ saveStatus, onForceSave, failedCount = 0 }) {
 }
 
 // ─── ACCOUNT MANAGEMENT MODAL ───
+// Server answers for the password-checked account RPCs, in words.
+function accountError(r, fallback) {
+  if (r?.reason === "invalid") return "Current password is wrong (this counts toward the 3-attempt lockout)";
+  if (r?.reason === "locked") return "Too many wrong passwords — sign-in is now locked. Sign out and unlock it with your backup code.";
+  if (r?.reason === "weak_password") return "New password must be at least 8 characters";
+  if (r?.reason === "invalid_username") return "Username: 2–64 characters, no spaces, dots, colons or slashes";
+  if (r?.reason === "too_short") return "Backup code must be at least 12 characters";
+  return fallback;
+}
+
+// 20 random characters from a 32-symbol alphabet (no 0/O/1/I), grouped for writing down: ~100 bits.
+function makeBackupCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const chars = Array.from(crypto.getRandomValues(new Uint8Array(20)), b => alphabet[b % alphabet.length]).join("");
+  return chars.match(/.{4}/g).join("-");
+}
+
 function AccountModal({ onClose, onSaved }) {
   // Steps: load → menu → set-email → verify-email → change-username → change-password → change-email-verify-new → done
   const [step, setStep] = useState("load");
@@ -234,12 +293,19 @@ function AccountModal({ onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [action, setAction] = useState(""); // "username" | "password" | "email"
   const [pendingVerifyEmail, setPendingVerifyEmail] = useState("");
+  const [backupCode, setBackupCodeInput] = useState("");
+  const [confirmBackupCode, setConfirmBackupCode] = useState("");
+  const saveAccount = (fields) => setMyAccount(fields).catch(() => false);
 
   useEffect(() => {
     (async () => {
-      const stored = await getStoredCredentials();
-      setCreds(stored || {});
-      setEmail(stored?.email || "");
+      try {
+        const a = await getMyAccount();
+        if (!a?.ok) throw new Error("Couldn't load the account");
+        setCreds({ username: a.username, email: a.email || "", email_verified: a.email_verified ? "true" : "false",
+          last_verified_at: String(a.last_verified_at || 0), has_backup_code: !!a.has_backup_code });
+        setEmail(a.email || "");
+      } catch (err) { setCreds({}); setError(err.message || "Couldn't load the account"); }
       setStep("menu");
     })();
   }, []);
@@ -290,10 +356,10 @@ function AccountModal({ onClose, onSaved }) {
     const now = String(Date.now());
     // First-time email setup: save email as verified and finish
     if (!creds?.email || creds.email !== pendingVerifyEmail) {
-      await saveCredentials({ email: pendingVerifyEmail, emailVerified: true, lastVerifiedAt: now });
+      await saveAccount({ email: pendingVerifyEmail, emailVerified: true, lastVerifiedAt: now });
       setCreds(c => ({ ...c, email: pendingVerifyEmail, email_verified: "true", last_verified_at: now }));
     } else {
-      await saveCredentials({ emailVerified: true, lastVerifiedAt: now });
+      await saveAccount({ emailVerified: true, lastVerifiedAt: now });
       setCreds(c => ({ ...c, last_verified_at: now }));
     }
     // Route to the action they wanted
@@ -306,26 +372,56 @@ function AccountModal({ onClose, onSaved }) {
 
   async function submitNewUsername(e) {
     e.preventDefault();
-    if (!newUsername.trim() || newUsername.length < 2) { setError("Username must be at least 2 characters"); return; }
-    setBusy(true);
-    const ok = await saveCredentials({ username: newUsername.trim() });
-    setBusy(false);
-    if (!ok) { setError("Failed to save. Try again."); return; }
-    try { localStorage.setItem("proximaai-user", newUsername.trim()); } catch {}
-    setStep("done");
-    onSaved?.("Username changed");
+    const name = newUsername.trim();
+    if (name.length < 2) { setError("Username must be at least 2 characters"); return; }
+    if (!currentPassword) { setError("Enter your current password"); return; }
+    setBusy(true); setError("");
+    try {
+      const r = await renameMyAccount(currentPassword, name);
+      if (!r?.ok) { setError(accountError(r, "Failed to save. Try again.")); return; }
+      // The server moved every row to the new name and issued a token for it; reload so all
+      // scope-bound state (realtime filter, favorites key, queues) starts over under the new scope.
+      setSession({ token: r.token, expires_at: r.expires_at, username: r.username });
+      resetDeviceIdCache();
+      setStep("done");
+      onSaved?.("Username changed — reloading");
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err) { setError(err.message || "Failed to save. Try again."); }
+    finally { setBusy(false); setCurrentPassword(""); }
   }
 
   async function submitNewPassword(e) {
     e.preventDefault();
-    if (newPassword.length < 4) { setError("Password must be at least 4 characters"); return; }
+    if (!currentPassword) { setError("Enter your current password"); return; }
+    if (newPassword.length < 8) { setError("Password must be at least 8 characters"); return; }
     if (newPassword !== confirmPassword) { setError("Passwords don't match"); return; }
-    setBusy(true);
-    const ok = await saveCredentials({ password: newPassword });
-    setBusy(false);
-    if (!ok) { setError("Failed to save. Try again."); return; }
-    setStep("done");
-    onSaved?.("Password changed");
+    setBusy(true); setError("");
+    try {
+      const r = await changeMyPassword(currentPassword, newPassword);
+      if (!r?.ok) { setError(accountError(r, "Failed to save. Try again.")); return; }
+      setNewPassword(""); setConfirmPassword("");
+      setStep("done");
+      onSaved?.("Password changed");
+    } catch (err) { setError(err.message || "Failed to save. Try again."); }
+    finally { setBusy(false); setCurrentPassword(""); }
+  }
+
+  async function submitBackupCode(e) {
+    e.preventDefault();
+    const code = backupCode.trim();
+    if (!currentPassword) { setError("Enter your current password"); return; }
+    if (code.length < 12) { setError("Backup code must be at least 12 characters"); return; }
+    if (code !== confirmBackupCode.trim()) { setError("Backup codes don't match"); return; }
+    setBusy(true); setError("");
+    try {
+      const r = await setBackupCode(currentPassword, code);
+      if (!r?.ok) { setError(accountError(r, "Failed to save. Try again.")); return; }
+      setBackupCodeInput(""); setConfirmBackupCode("");
+      setCreds(c => ({ ...c, has_backup_code: true }));
+      setStep("done");
+      onSaved?.("Backup code saved — keep your written copy safe");
+    } catch (err) { setError(err.message || "Failed to save. Try again."); }
+    finally { setBusy(false); setCurrentPassword(""); }
   }
 
   async function submitNewEmail(e) {
@@ -341,7 +437,7 @@ function AccountModal({ onClose, onSaved }) {
     setBusy(true); setError("");
     const r = await verifyEmailOtp(pendingVerifyEmail, otp.trim());
     if (!r.ok) { setBusy(false); setError(r.error || "Invalid code"); return; }
-    const ok = await saveCredentials({ email: pendingVerifyEmail, emailVerified: true });
+    const ok = await saveAccount({ email: pendingVerifyEmail, emailVerified: true });
     setBusy(false);
     if (!ok) { setError("Failed to save"); return; }
     setStep("done");
@@ -384,6 +480,7 @@ function AccountModal({ onClose, onSaved }) {
               Signed in as <b style={{ color: "#e2e8f0" }}>{creds?.username || "admin"}</b>
               {creds?.email && <><br/>Email: <span style={{ color: "#e2e8f0" }}>{creds.email}</span> {creds.email_verified === "true" ? "✓" : <span style={{ color: "#f59e0b" }}>(unverified)</span>}</>}
               {!creds?.email && <><br/><span style={{ color: "#f59e0b" }}>No email set — add one for account recovery</span></>}
+              {creds && creds.has_backup_code === false && <><br/><span style={{ color: "#f59e0b" }}>No backup code — set one so a sign-in lockout can be undone</span></>}
               {(() => {
                 const lv = parseInt(creds?.last_verified_at || "0", 10);
                 if (lv > Date.now() - 10 * 60 * 1000) {
@@ -399,6 +496,7 @@ function AccountModal({ onClose, onSaved }) {
               <button disabled={busy} style={btn()} onClick={() => startAction("username")}>Change Username</button>
               <button disabled={busy} style={btn()} onClick={() => startAction("password")}>Change Password</button>
               <button disabled={busy} style={btn()} onClick={() => startAction("email")}>{creds?.email ? "Change Email" : "Set Email"}</button>
+              <button disabled={busy} style={btn()} onClick={() => { setError(""); setCurrentPassword(""); setStep("set-backup"); }}>{creds?.has_backup_code ? "Replace Backup Code" : "Set Backup Code"}</button>
               <button style={{ ...btn(), marginTop: 8, background: "transparent" }} onClick={onClose}>Close</button>
             </div>
             <div style={{ marginTop: 18, paddingTop: 12, borderTop: "1px solid rgba(148,163,184,0.15)", textAlign: "center", fontSize: 11, color: "#64748b", letterSpacing: 0.4 }}>
@@ -451,9 +549,11 @@ function AccountModal({ onClose, onSaved }) {
         {step === "change-username" && (
           <form onSubmit={submitNewUsername}>
             <div style={title}>New Username</div>
-            <div style={subtitle}>Current: <b>{creds?.username || "admin"}</b></div>
-            <label style={label}>New Username</label>
-            <input type="text" value={newUsername} onChange={e => { setNewUsername(e.target.value); setError(""); }} style={input} autoFocus />
+            <div style={subtitle}>Current: <b>{creds?.username || "admin"}</b>. Your data moves to the new name.</div>
+            <label style={label}>Current Password</label>
+            <input type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
+            <label style={{ ...label, marginTop: 12 }}>New Username</label>
+            <input type="text" value={newUsername} onChange={e => { setNewUsername(e.target.value); setError(""); }} style={input} autoComplete="username" />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
@@ -465,11 +565,34 @@ function AccountModal({ onClose, onSaved }) {
         {step === "change-password" && (
           <form onSubmit={submitNewPassword}>
             <div style={title}>New Password</div>
-            <div style={subtitle}>Minimum 4 characters.</div>
-            <label style={label}>New Password</label>
-            <input type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} style={input} autoFocus />
+            <div style={subtitle}>Minimum 8 characters.</div>
+            <label style={label}>Current Password</label>
+            <input type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
+            <label style={{ ...label, marginTop: 12 }}>New Password</label>
+            <input type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} style={input} autoComplete="new-password" />
             <label style={{ ...label, marginTop: 12 }}>Confirm Password</label>
             <input type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setError(""); }} style={input} />
+            {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
+              <button type="submit" disabled={busy} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Saving..." : "Save"}</button>
+            </div>
+          </form>
+        )}
+
+        {step === "set-backup" && (
+          <form onSubmit={submitBackupCode}>
+            <div style={title}>Backup Code</div>
+            <div style={subtitle}>Unlocks sign-in after 3 failed attempts, and can set a new password if you forget it. Write it down and keep it somewhere safe: the server stores only a hash, so it can't be shown again.</div>
+            <label style={label}>Current Password</label>
+            <input type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
+            <label style={{ ...label, marginTop: 12 }}>Backup Code (12+ characters)</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input type="text" value={backupCode} onChange={e => { setBackupCodeInput(e.target.value); setError(""); }} style={{ ...input, flex: 1, minWidth: 0 }} autoComplete="off" spellCheck={false} />
+              <button type="button" style={{ ...btn(), padding: "12px 14px" }} onClick={() => { const c = makeBackupCode(); setBackupCodeInput(c); setConfirmBackupCode(""); setError(""); }}>Generate</button>
+            </div>
+            <label style={{ ...label, marginTop: 12 }}>Type It Again</label>
+            <input type="text" value={confirmBackupCode} onChange={e => { setConfirmBackupCode(e.target.value); setError(""); }} style={input} autoComplete="off" spellCheck={false} />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
@@ -1036,11 +1159,21 @@ function localModelFavoritesKey(scope = getDeviceId()) {
 }
 
 export default function ProximaApp() {
-  const [isAuthed, setIsAuthed] = useState(() => {
-    try { return !!localStorage.getItem("proximaai-user"); } catch { return false; }
-  });
+  // Signed in = an unexpired server-issued session token (see lib/session.js).
+  const [isAuthed, setIsAuthed] = useState(() => !!getSession());
+  const [sessionNotice, setSessionNotice] = useState("");
   const [page, setPage] = useState("cockpit");
-  const [apiKey, setApiKey] = useState("");
+  // The WaveSpeed key lives on the server. keyStatus comes from a balance check through the proxy:
+  // "ok" | "missing" (none saved) | "invalid" (WaveSpeed rejected it) | "unknown" (not checked / network).
+  const [keyStatus, setKeyStatus] = useState("unknown");
+  const [keyInput, setKeyInput] = useState("");
+  const keyBlocked = keyStatus === "missing" || keyStatus === "invalid";
+  const refreshBalance = useCallback(async () => {
+    const r = await checkBalance();
+    if (r.balance !== null) setBalance(r.balance);
+    if (r.keyStatus !== "unknown") setKeyStatus(r.keyStatus);
+    return r;
+  }, []);
   const [balance, setBalance] = useState(null);
   const [genType, setGenType] = useState("image");
   const [selectedModels, setSelectedModels] = useState([]);
@@ -1144,14 +1277,12 @@ export default function ProximaApp() {
     if (queue.length > 0) {
       try { await syncTasksBatch(queue); for (const t of queue) removeFailedSync("task", t.id); } catch {}
     }
-    if (apiKeyDebounceRef.current) { clearTimeout(apiKeyDebounceRef.current); apiKeyDebounceRef.current = null; }
-    if (apiKey) { try { await syncSetting("apiKey", apiKey); removeFailedSync("setting", "apiKey"); } catch {} }
     const failed = getFailedSyncs();
     // Deletes win over upserts: never re-upsert a task that's queued for deletion.
     const taskRetries = failed.filter(f => f.kind === "task" && !deletingIds.current.has(f.id)).map(f => f.data).filter(Boolean);
     if (taskRetries.length > 0) { try { await syncTasksBatch(taskRetries); for (const t of taskRetries) removeFailedSync("task", t.id); } catch {} }
     for (const f of failed.filter(f => f.kind === "history" && !deletingLogIds.current.has(f.id))) { try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id); } catch {} }
-    for (const f of failed.filter(f => f.kind === "setting")) { try { await syncSetting(f.id, f.data); removeFailedSync("setting", f.id); } catch {} }
+    for (const f of failed.filter(f => f.kind === "setting" && f.id !== "apiKey")) { try { await syncSetting(f.id, f.data); removeFailedSync("setting", f.id); } catch {} }
     const favoriteScope = getDeviceId();
     if (failed.some(f => f.kind === "model-favorites" && f.scope === favoriteScope)) {
       try { await flushQueuedModelFavorites(favoriteScope); } catch {}
@@ -1258,7 +1389,6 @@ export default function ProximaApp() {
   const isGeneratingRef = useRef(false);
   const timerRefs = useRef({});
   const initialLoadDone = useRef(false);
-  const apiKeyDebounceRef = useRef(null);
   const taskSyncQueueRef = useRef([]);
   const taskSyncTimerRef = useRef(null);
   const bootstrapInProgress = useRef(false);
@@ -1274,7 +1404,7 @@ export default function ProximaApp() {
   const [failedSyncCount, setFailedSyncCount] = useState(0);
 
   // ─── AUTH HANDLERS ───
-  // Initialize Supabase early so verifyCredentials can run before login
+  // Initialize Supabase early so sign-in can reach the server right away
   useEffect(() => { if (isSupabaseConfigured()) initSupabase(); }, []);
 
   // Reconcile cached session username with the canonical one in _account settings.
@@ -1286,15 +1416,9 @@ export default function ProximaApp() {
     let cancelled = false;
     (async () => {
       try {
-        const cached = localStorage.getItem("proximaai-user");
-        if (!cached) return;
+        if (!getSession()) return;
         await initSupabase();
-        const stored = await getStoredCredentials();
         if (cancelled) return;
-        if (stored?.username && stored.username !== cached) {
-          try { localStorage.setItem("proximaai-user", stored.username); } catch {}
-          resetDeviceIdCache();
-        }
         // Auto-pull latest backup list so "Last backup" timestamp is live on load
         const list = await listBackups(20);
         if (!cancelled) setBackups(list);
@@ -1303,20 +1427,12 @@ export default function ProximaApp() {
     return () => { cancelled = true; };
   }, [isAuthed]);
 
-  async function handleLogin(username, password) {
-    // Check Supabase-stored credentials first, falls back to admin/admin if none set
-    const valid = await verifyCredentials(username, password);
-    if (valid) {
-      // Store the exact username the user typed (must match what verifyCredentials accepted,
-      // which is what's in the Supabase settings table under `_account` scope). This drives
-      // `getDeviceId() -> "user:<username>"` so data + backups are scoped per account and
-      // follow the user across devices.
-      try { localStorage.setItem("proximaai-user", username); } catch {}
-      resetDeviceIdCache();
-      setIsAuthed(true);
-      return true;
-    }
-    return false;
+  function handleSignedIn(session) {
+    // The data scope is the server's spelling of the username (getDeviceId() -> "user:<username>").
+    setSession(session);
+    resetDeviceIdCache();
+    setSessionNotice("");
+    setIsAuthed(true);
   }
 
   async function handleLogout() {
@@ -1324,8 +1440,16 @@ export default function ProximaApp() {
     // Let an already-queued favorites write finish while the current account scope
     // is still active. A failed write remains in the scoped retry queue.
     try { await favoriteSyncChainRef.current; } catch {}
-    try { localStorage.removeItem("proximaai-user"); } catch {}
+    signOutLocal();
+  }
+
+  // Ends the session on this device. Running polls stop (their tasks stay "processing" in IndexedDB and
+  // resume after the next sign-in, within the 48-hour window).
+  function signOutLocal() {
+    clearSession();
     resetDeviceIdCache();
+    for (const id of Object.keys(pollRefs.current)) clearTimeout(pollRefs.current[id]);
+    pollRefs.current = {};
     // Clear in-memory state so next login re-fetches fresh
     setIsAuthed(false);
     setTasks([]);
@@ -1335,7 +1459,8 @@ export default function ProximaApp() {
     favoriteModelsRef.current = emptyFavorites;
     favoriteModelsUpdatedAtRef.current = 0;
     setFavoriteModelsByType(emptyFavorites);
-    setApiKey("");
+    setKeyStatus("unknown");
+    setKeyInput("");
     setBalance(null);
     setPage("cockpit");
     savedLogIds.current.clear();
@@ -1343,6 +1468,25 @@ export default function ProximaApp() {
     initialLoadDone.current = false;
     taskSyncQueueRef.current = [];
   }
+
+  // Session expiry: an RPC or the proxy rejected the token, or its 12 hours ran out on this device.
+  const expireSessionRef = useRef(null);
+  expireSessionRef.current = () => {
+    if (!isAuthed) return;
+    signOutLocal();
+    setSessionNotice("Your session expired — sign in again.");
+  };
+  useEffect(() => {
+    onSessionExpired(() => expireSessionRef.current?.());
+    return () => onSessionExpired(null);
+  }, []);
+  useEffect(() => {
+    if (!isAuthed) return;
+    const check = () => { if (!getSession()) expireSessionRef.current?.(); };
+    const id = setInterval(check, 60000);
+    document.addEventListener("visibilitychange", check);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", check); };
+  }, [isAuthed]);
 
   // Load state from IndexedDB + Supabase (gated on authentication)
   useEffect(() => {
@@ -1361,12 +1505,10 @@ export default function ProximaApp() {
         favoriteModelsUpdatedAtRef.current = localFavoriteSnapshot.updatedAt;
         setFavoriteModelsByType(localFavoriteSnapshot.byType);
       }
-      const key = await getSetting("apiKey");
-      if (key && !cancelled) {
-        setApiKey(key);
-        // Trigger balance check directly on initial load (bypasses debounced effect)
-        checkBalance(key).then(r => { if (r.balance !== null && !cancelled) setBalance(r.balance); }).catch(() => {});
-      }
+      // The WaveSpeed key lives on the server now: drop any copy an older build left in this browser.
+      if (await getSetting("apiKey")) setSetting("apiKey", "");
+      removeFailedSync("setting", "apiKey");
+      refreshBalance().catch(() => {});
       const logData = await getHistory(500);
       if (logData?.length && !cancelled) setLogs(logData);
       const savedTasks = await getCompletedTasks(500);
@@ -1461,11 +1603,6 @@ export default function ProximaApp() {
 
         // Merge settings: cloud wins for keys not set locally
         if (remote.settings) {
-          if (!key && remote.settings.apiKey) {
-            setApiKey(remote.settings.apiKey);
-            setSetting("apiKey", remote.settings.apiKey);
-            checkBalance(remote.settings.apiKey).then(r => { if (r.balance !== null && !cancelled) setBalance(r.balance); }).catch(() => {});
-          }
           if (!savedImgRes && remote.settings.defaultImageRes) { setDefaultImageRes(remote.settings.defaultImageRes); setSetting("defaultImageRes", remote.settings.defaultImageRes); }
           if (!savedVidDur && remote.settings.defaultVideoDur) { setDefaultVideoDur(Number(remote.settings.defaultVideoDur)); setSetting("defaultVideoDur", remote.settings.defaultVideoDur); }
         }
@@ -1497,7 +1634,7 @@ export default function ProximaApp() {
           for (const entry of historyRetries) {
             try { await syncHistoryEntry(entry); removeFailedSync("history", entry.id); } catch {}
           }
-          const settingRetries = failed.filter(f => f.kind === "setting");
+          const settingRetries = failed.filter(f => f.kind === "setting" && f.id !== "apiKey");
           for (const s of settingRetries) {
             try { await syncSetting(s.id, s.data); removeFailedSync("setting", s.id); } catch {}
           }
@@ -1527,7 +1664,7 @@ export default function ProximaApp() {
           setFailedSyncCount(getFailedSyncs().length);
         }
       }
-      // Mark initial load complete so future apiKey changes debounce-sync to cloud
+      // Mark initial load complete so later setting changes debounce-sync to cloud
       if (!cancelled) initialLoadDone.current = true;
       // First cross-device reconcile: drops rows deleted on other devices, adds theirs.
       if (!cancelled) reconcileWithCloud();
@@ -1634,25 +1771,6 @@ export default function ProximaApp() {
     };
   }, [isAuthed, reconcileWithCloud]);
 
-  // Save API key — debounced to avoid keystroke-level syncs
-  useEffect(() => {
-    if (!apiKey) return;
-    // Skip sync if this update came from the initial cloud load (avoids echo)
-    if (!initialLoadDone.current) return;
-    if (apiKeyDebounceRef.current) clearTimeout(apiKeyDebounceRef.current);
-    apiKeyDebounceRef.current = setTimeout(() => {
-      setSetting("apiKey", apiKey);
-      // Preemptively queue as failed; remove on success. Guarantees no silent loss.
-      addFailedSync({ kind: "setting", id: "apiKey", data: apiKey });
-      setFailedSyncCount(getFailedSyncs().length);
-      trackedSync("apiKey", () => syncSetting("apiKey", apiKey))
-        .then(() => { removeFailedSync("setting", "apiKey"); setFailedSyncCount(getFailedSyncs().length); })
-        .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
-      checkBalance(apiKey).then(r => { if (r.balance !== null) setBalance(r.balance); });
-    }, 800);
-    return () => { if (apiKeyDebounceRef.current) clearTimeout(apiKeyDebounceRef.current); };
-  }, [apiKey]);
-
   // Save NEW logs to IndexedDB (and sync to Supabase) — skip already-saved entries
   useEffect(() => {
     if (logs.length > 0) {
@@ -1737,14 +1855,6 @@ export default function ProximaApp() {
           }).catch(() => {});
         }
       }
-      // 2. Fire any pending apiKey debounce
-      if (apiKeyDebounceRef.current) {
-        clearTimeout(apiKeyDebounceRef.current);
-        apiKeyDebounceRef.current = null;
-        if (apiKey) {
-          syncSetting("apiKey", apiKey).then(() => removeFailedSync("setting", "apiKey")).catch(() => {});
-        }
-      }
     };
 
     const onVisibility = () => {
@@ -1768,7 +1878,7 @@ export default function ProximaApp() {
       window.removeEventListener("beforeunload", onBeforeUnload);
       window.removeEventListener("pagehide", flushPending);
     };
-  }, [apiKey]);
+  }, []);
 
   // Cleanup polling timeouts on unmount
   useEffect(() => {
@@ -1781,7 +1891,7 @@ export default function ProximaApp() {
   // Without this, hitting refresh or being backgrounded kills the poll timer
   // and the task stays "processing" forever.
   useEffect(() => {
-    if (!isAuthed || !apiKey) return;
+    if (!isAuthed || keyBlocked) return;
     let cancelled = false;
     (async () => {
       const pending = await getPendingTasks();
@@ -1806,7 +1916,7 @@ export default function ProximaApp() {
             return;
           }
           try {
-            const result = await pollResult(apiKey, pollUrl);
+            const result = await pollResult(pollUrl);
             const data = result?.data || result;
             const outcome = pollOutcome(data);
             if (outcome === "completed") {
@@ -1831,7 +1941,9 @@ export default function ProximaApp() {
               pollRefs.current[task.id] = setTimeout(poll, pollInterval);
             }
           } catch (e) {
-            if (e.code === 429) pollRefs.current[task.id] = setTimeout(poll, pollInterval * 2 + Math.random() * 2000);
+            // Signed out or no key saved: stop without failing; the next resume picks the task up again.
+            if (e.session || e.noKey) delete pollRefs.current[task.id];
+            else if (e.code === 429) pollRefs.current[task.id] = setTimeout(poll, pollInterval * 2 + Math.random() * 2000);
             else setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "failed", error: e.message || "Poll error (resumed)", endTime: Date.now() } : t));
           }
         };
@@ -1840,7 +1952,7 @@ export default function ProximaApp() {
       }
     })();
     return () => { cancelled = true; };
-  }, [isAuthed, apiKey]);
+  }, [isAuthed, keyBlocked]);
 
   // Clean up pollUrl from IndexedDB once a task reaches terminal state.
   // Reuses the saveTask call that already runs in the persistence effect —
@@ -1947,21 +2059,10 @@ export default function ProximaApp() {
 
   // ─── FILE UPLOAD ───
   async function uploadSingleFile(file) {
-    // Shrink large images first — the /wavespeed rewrite 502s on bodies >~3 MB.
+    // Images are shrunk first (models fetch the URL; huge sources only slow them down). Files go to our
+    // public storage bucket, so no WaveSpeed key is needed in the browser.
     const toSend = await downscaleImage(file, { maxEdge: 2048, maxBytes: 1_500_000 });
-    const formData = new FormData();
-    formData.append("file", toSend);
-    const { res } = await proxiedFetch(`${API_BASE}/media/upload/binary`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${apiKey}` },
-      body: formData
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Upload failed: ${res.status}${body ? " — " + body.slice(0, 140) : ""}`);
-    }
-    const data = await res.json();
-    return data?.data?.download_url || data?.data?.url || null;
+    return uploadMedia(toSend);
   }
 
   async function handleFileSelect(e) {
@@ -1973,7 +2074,6 @@ export default function ProximaApp() {
     reader.onload = (ev) => setSourcePreview(ev.target.result);
     reader.readAsDataURL(files[0]);
 
-    if (!apiKey) { setUploadStatus("error"); return; }
     setUploadStatus("uploading");
 
     // allSettled so one bad file doesn't sink the whole batch.
@@ -1996,7 +2096,7 @@ export default function ProximaApp() {
   // Upload additional reference images from gallery picker
   async function handleAdditionalFileSelect(e) {
     const files = Array.from(e.target.files || []);
-    if (files.length === 0 || !apiKey) return;
+    if (files.length === 0) return;
     const results = await Promise.allSettled(files.map(f => uploadSingleFile(f)));
     const urls = results.filter(r => r.status === "fulfilled" && r.value).map(r => r.value);
     results.filter(r => r.status === "rejected")
@@ -2010,7 +2110,7 @@ export default function ProximaApp() {
   // C2: end-frame image upload (last_image / end_image) — single image, reuses downscale+upload
   async function handleEndFrameSelect(e) {
     const file = (e.target.files || [])[0];
-    if (!file || !apiKey) return;
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = ev => setEndFramePreview(ev.target.result);
     reader.readAsDataURL(file);
@@ -2026,7 +2126,7 @@ export default function ProximaApp() {
   // C3: avatar audio / driving-video upload (URL paste also supported in the cards)
   async function handleAudioSelect(e) {
     const file = (e.target.files || [])[0];
-    if (!file || !apiKey) return;
+    if (!file) return;
     setSourceAudioStatus("uploading");
     try { const url = await uploadSingleFile(file); if (url) { setSourceAudioUrl(url); setSourceAudioStatus("done"); } else setSourceAudioStatus("error"); }
     catch (err) { console.warn("[avatar-audio]", err?.message || err); setSourceAudioStatus("error"); }
@@ -2034,7 +2134,7 @@ export default function ProximaApp() {
   }
   async function handleAvatarVideoSelect(e) {
     const file = (e.target.files || [])[0];
-    if (!file || !apiKey) return;
+    if (!file) return;
     setSourceVideoStatus("uploading");
     try { const url = await uploadSingleFile(file); if (url) { setSourceVideoUrl(url); setSourceVideoStatus("done"); } else setSourceVideoStatus("error"); }
     catch (err) { console.warn("[avatar-video]", err?.message || err); setSourceVideoStatus("error"); }
@@ -2063,7 +2163,7 @@ export default function ProximaApp() {
   async function handleGenerate() {
     const selectedConfigs = selectedModels.map(id => models.find(m => m.id === id)).filter(Boolean);
     const promptRequired = selectedConfigs.some(m => !m.params?.noPrompt) && genType !== "avatar";
-    if (!apiKey || (promptRequired && !prompt.trim()) || selectedModels.length === 0) return;
+    if (keyBlocked || (promptRequired && !prompt.trim()) || selectedModels.length === 0) return;
     const sourceTypes = ["i2i", "i2v", "i23d", "v2v", "avatar"];
     const sourceRequired = sourceTypes.includes(genType) && selectedConfigs.some(m => !m.params?.sourceOptional);
     if (sourceRequired && !sourceImageUrl.trim()) {
@@ -2103,7 +2203,7 @@ export default function ProximaApp() {
             ? buildPayload(modelConfig, taskUserSettings(task, task.genType || genType), task.genType || genType)
             : { prompt: task.prompt, resolution: task.resolution };
 
-          const submitRes = await submitTask(apiKey, task.modelId, payload);
+          const submitRes = await submitTask(task.modelId, payload);
           const taskId = submitRes?.data?.id;
           const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
 
@@ -2134,7 +2234,7 @@ export default function ProximaApp() {
               return;
             }
             try {
-              const result = await pollResult(apiKey, pollUrl);
+              const result = await pollResult(pollUrl);
               const data = result?.data || result;
               if (data.status === "completed" && data.outputs?.length > 0) {
                 const wallClock = Date.now() - task.startTime;
@@ -2152,7 +2252,10 @@ export default function ProximaApp() {
                 pollRefs.current[task.id] = setTimeout(poll, pollInterval);
               }
             } catch (e) {
-              if (e.code === 429) {
+              if (e.session || e.noKey) {
+                // Signed out or no key saved: stop without failing; resume picks it up after sign-in.
+                delete pollRefs.current[task.id];
+              } else if (e.code === 429) {
                 // Rate limited — backoff
                 pollRefs.current[task.id] = setTimeout(poll, pollInterval * 2 + Math.random() * 2000);
               } else {
@@ -2167,7 +2270,7 @@ export default function ProximaApp() {
 
         } catch (e) {
           let errMsg = e.message || "Submit failed";
-          if (e.code === 401) errMsg = "Invalid API key";
+          if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
           if (e.code === 402) errMsg = "Insufficient balance";
           if (e.code === 429) errMsg = "Rate limited — try fewer models";
           setTasks(prev => prev.map(t => t.id === task.id ? {
@@ -2203,7 +2306,7 @@ export default function ProximaApp() {
             setLogs(prev => [logEntry, ...prev]);
           }
           // Refresh balance
-          checkBalance(apiKey).then(r => { if (r.balance !== null) setBalance(r.balance); });
+          refreshBalance().catch(() => {});
         }
         return prev.map(t => {
           if ((t.status === "pending" || t.status === "processing") && t.batchId === batchId) {
@@ -2221,9 +2324,9 @@ export default function ProximaApp() {
   }, []);
 
   // Regenerate — re-submit the same task with a new ID, without disrupting existing results
-  // Wrapped in useCallback so CockpitTaskCard memo equality holds. Deps: apiKey (used inside).
+  // Wrapped in useCallback so CockpitTaskCard memo equality holds. Deps: keyBlocked (used inside).
   const regenerateTask = useCallback(function regenerateTask(originalTask) {
-    if (!apiKey) return;
+    if (keyBlocked) return;
     const newTask = {
       ...originalTask,
       id: genId(),
@@ -2264,7 +2367,7 @@ export default function ProximaApp() {
           ? buildPayload(modelConfig, taskUserSettings(newTask, taskGenType), taskGenType)
           : { prompt: newTask.prompt };
 
-        const submitRes = await submitTask(apiKey, newTask.modelId, payload);
+        const submitRes = await submitTask(newTask.modelId, payload);
         const taskId = submitRes?.data?.id;
         const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
 
@@ -2291,7 +2394,7 @@ export default function ProximaApp() {
             return;
           }
           try {
-            const result = await pollResult(apiKey, pollUrl);
+            const result = await pollResult(pollUrl);
             const data = result?.data || result;
             if (data.status === "completed" && data.outputs?.length > 0) {
               const wallClock = Date.now() - newTask.startTime;
@@ -2308,7 +2411,9 @@ export default function ProximaApp() {
               pollRefs.current[newTask.id] = setTimeout(poll, pollInterval);
             }
           } catch (e) {
-            if (e.code === 429) {
+            if (e.session || e.noKey) {
+              delete pollRefs.current[newTask.id];
+            } else if (e.code === 429) {
               pollRefs.current[newTask.id] = setTimeout(poll, pollInterval * 2 + Math.random() * 2000);
             } else {
               setTasks(prev => prev.map(t => t.id === newTask.id ? {
@@ -2320,14 +2425,14 @@ export default function ProximaApp() {
         pollRefs.current[newTask.id] = setTimeout(poll, pollInterval);
       } catch (e) {
         let errMsg = e.message || "Regenerate failed";
-        if (e.code === 401) errMsg = "Invalid API key";
+        if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
         if (e.code === 402) errMsg = "Insufficient balance";
         setTasks(prev => prev.map(t => t.id === newTask.id ? {
           ...t, status: "failed", error: errMsg, endTime: Date.now()
         } : t));
       }
     })();
-  }, [apiKey]);
+  }, [keyBlocked]);
 
   function replayLog(log) {
     setPrompt(log.prompt);
@@ -2666,7 +2771,7 @@ export default function ProximaApp() {
         <style>{css}</style>
         <BackgroundLayer type={background} accent={(THEMES[theme] || THEMES.default).accent} />
         <div className="proxima-app">
-          <LoginScreen onLogin={handleLogin} />
+          <LoginScreen onSignedIn={handleSignedIn} notice={sessionNotice} />
         </div>
       </>
     );
@@ -2701,7 +2806,7 @@ export default function ProximaApp() {
             <div className="topbar-title">ProximaAI — {page === "cockpit" ? "GENERATION COCKPIT" : page === "gallery" ? "SAVED OUTPUTS" : page === "logs" ? "GENERATION LOG" : "SETTINGS"}</div>
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
               {balance !== null && <div className="balance-pill">${Number(balance).toFixed(2)}</div>}
-              {!apiKey && <span style={{ fontSize: 11, color: "var(--error)" }}>⚠ No API Key</span>}
+              {keyBlocked && <span style={{ fontSize: 11, color: "var(--error)" }}>⚠ {keyStatus === "invalid" ? "API key rejected" : "No API Key"}</span>}
             </div>
           </div>
 
@@ -3346,10 +3451,10 @@ export default function ProximaApp() {
                     )}
 
                     <button className={`gen-btn ${isGenerating ? "running" : "ready"}`}
-                      disabled={!apiKey || (promptRequired && !prompt.trim()) || selectedModels.length === 0 || (sourceRequired && !sourceImageUrl.trim()) || (needsAudio && !sourceAudioUrl.trim())}
+                      disabled={keyBlocked || (promptRequired && !prompt.trim()) || selectedModels.length === 0 || (sourceRequired && !sourceImageUrl.trim()) || (needsAudio && !sourceAudioUrl.trim())}
                       onClick={handleGenerate}>
                       {isGenerating ? `⏳ GENERATING (${activeCount} active)...` :
-                       !apiKey ? "⚠ SET API KEY IN SETTINGS" :
+                       keyBlocked ? (keyStatus === "invalid" ? "⚠ UPDATE API KEY IN SETTINGS" : "⚠ SET API KEY IN SETTINGS") :
                        sourceRequired && !sourceImageUrl.trim() ? `⚠ ADD SOURCE ${sourceIsVideo ? "VIDEO" : "IMAGE"} ABOVE` :
                        needsAudio && !sourceAudioUrl.trim() ? "⚠ ADD SOURCE AUDIO ABOVE" :
                        `⚡ ${genType === "i2i" || genType === "v2v" ? "EDIT" : "GENERATE"}${selectedModels.length > 0 ? ` ACROSS ${selectedModels.length} MODELS` : ""}`}
@@ -3715,25 +3820,29 @@ export default function ProximaApp() {
 
                 <div className="setting-group">
                   <div className="setting-label">WaveSpeed API Key</div>
-                  <input type="password" className="setting-input" placeholder="Enter your WaveSpeed API key..."
-                    value={apiKey} onChange={e => { setApiKey(e.target.value); setTestStatus(null); }} />
-                  <div className="setting-hint">Get your key at <span style={{ color: "var(--accent)" }}>wavespeed.ai/settings</span>. Stored locally in your browser. Requests are forwarded to WaveSpeed through Vite's dev server proxy on your machine — no third-party services involved, your API key never leaves your computer.</div>
-                  {apiKey && (
-                    <button className="api-test-btn"
-                      disabled={testStatus === "testing"}
-                      onClick={async () => {
-                        setTestStatus("testing");
-                        const r = await checkBalance(apiKey);
-                        if (r.balance !== null) {
-                          setBalance(r.balance);
-                          setTestStatus({ ok: true, msg: `Connected! Balance: $${Number(r.balance).toFixed(4)}` });
-                        } else {
-                          setTestStatus({ ok: false, msg: r.error ? r.error : "Could not verify key. Check if it's correct." });
-                        }
-                      }}>
-                      {testStatus === "testing" ? "Testing..." : "Test Connection"}
-                    </button>
-                  )}
+                  <input type="password" className="setting-input" autoComplete="off"
+                    placeholder={keyStatus === "ok" ? "Saved on the server — paste a new key to replace it" : "Paste your WaveSpeed API key..."}
+                    value={keyInput} onChange={e => { setKeyInput(e.target.value); setTestStatus(null); }} />
+                  <div className="setting-hint">Get your key at <span style={{ color: "var(--accent)" }}>wavespeed.ai/settings</span>. It is saved to ProximaAI's protected server store, never kept in this browser, and added to each request by ProximaAI's server.{keyStatus === "ok" ? " ✓ A working key is saved." : keyStatus === "missing" ? " No key saved yet." : keyStatus === "invalid" ? " ✗ WaveSpeed rejects the saved key." : ""}</div>
+                  <button className="api-test-btn"
+                    disabled={testStatus === "testing"}
+                    onClick={async () => {
+                      setTestStatus("testing");
+                      try {
+                        const typed = keyInput.trim();
+                        if (typed) { await saveWavespeedKey(typed); setKeyInput(""); }
+                        const r = await refreshBalance();
+                        const saved = typed ? "Saved. " : "";
+                        if (r.keyStatus === "ok") setTestStatus({ ok: true, msg: `${saved}Connected! Balance: $${Number(r.balance).toFixed(4)}` });
+                        else if (r.keyStatus === "missing") setTestStatus({ ok: false, msg: "No key saved on the server yet — paste it above." });
+                        else if (r.keyStatus === "invalid") setTestStatus({ ok: false, msg: `${saved}WaveSpeed rejected this key. Check it and save again.` });
+                        else setTestStatus({ ok: false, msg: `${saved}${r.error || "Could not reach WaveSpeed."}` });
+                      } catch (err) {
+                        setTestStatus({ ok: false, msg: err.message || "Could not save the key" });
+                      }
+                    }}>
+                    {testStatus === "testing" ? "Checking..." : keyInput.trim() ? "Save & Test Key" : "Test Connection"}
+                  </button>
                   {testStatus && testStatus !== "testing" && (
                     <div style={{
                       marginTop: 10, padding: "10px 12px", borderRadius: 8, fontSize: 12,
@@ -3846,8 +3955,6 @@ export default function ProximaApp() {
                         clearFavoritesRemote(),
                       ]);
                       // Clear local settings
-                      setSetting("apiKey", "");
-                      setApiKey("");
                       setBalance(null);
                       getStorageStats().then(s => setStorageStats(s));
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);

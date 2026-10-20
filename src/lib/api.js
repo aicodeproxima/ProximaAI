@@ -1,72 +1,89 @@
 // ─── WaveSpeed API Integration ───
+// Every call goes through the /api/wavespeed-v2 edge proxy with the signed-in session token. The proxy
+// checks the token and adds the WaveSpeed key server-side, so the browser never holds the key.
 
-const API_BASE = "/wavespeed/api/v3";
+import { sessionToken, reportSessionExpired } from "./session.js";
+import { uploadInputFile } from "./supabase.js";
 
-export async function proxiedFetch(url, options = {}) {
-  const res = await fetch(url, options);
-  return { res, proxyIndex: 0 };
+const PROXY_ROOT = "/api/wavespeed-v2";
+const API_BASE = `${PROXY_ROOT}/api/v3`;
+
+// Maps a poll URL onto the proxy: WaveSpeed's absolute URL, the retired /wavespeed rewrite (tasks saved
+// before the cut-over), or a bare API path. Anything else is refused so the session token never leaves
+// this origin.
+export function toProxyUrl(url) {
+  const u = String(url || "");
+  if (/^https?:\/\/api\.wavespeed\.ai\//i.test(u)) return u.replace(/^https?:\/\/api\.wavespeed\.ai/i, PROXY_ROOT);
+  if (u.startsWith(`${PROXY_ROOT}/`)) return u;
+  if (u.startsWith("/wavespeed/")) return PROXY_ROOT + u.slice("/wavespeed".length);
+  if (u.startsWith("/api/v3/")) return PROXY_ROOT + u;
+  if (u.startsWith("/")) return `${API_BASE}${u}`;
+  throw { code: 0, message: `Refusing to poll a non-WaveSpeed URL: ${u.slice(0, 80)}` };
 }
 
-export async function submitTask(apiKey, modelSlug, payload) {
-  const url = `${API_BASE}/${modelSlug}`;
-  const { res } = await proxiedFetch(url, {
+// The proxy marks its own refusals with X-Proxima-Auth so they can't be confused with WaveSpeed's
+// answers: "session" = token missing/expired/forged (sign in again), "no-key" = no key saved yet.
+async function wsFetch(url, options = {}) {
+  const token = sessionToken();
+  if (!token) {
+    reportSessionExpired();
+    throw { code: 401, message: "Session expired — sign in again", session: true };
+  }
+  const res = await fetch(url, { ...options, headers: { ...(options.headers || {}), "X-Proxima-Session": token } });
+  const refusal = res.headers.get("x-proxima-auth");
+  if (res.status === 401 && refusal === "session") {
+    reportSessionExpired();
+    throw { code: 401, message: "Session expired — sign in again", session: true };
+  }
+  if (res.status === 400 && refusal === "no-key") {
+    throw { code: 400, message: "No WaveSpeed key saved — add it in Settings", noKey: true };
+  }
+  return res;
+}
+
+export async function submitTask(modelSlug, payload) {
+  const res = await wsFetch(`${API_BASE}/${modelSlug}`, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw { code: res.status, message: err.message || res.statusText };
+    throw { code: res.status, message: err.message || err.error || res.statusText };
   }
   return res.json();
 }
 
-export async function pollResult(apiKey, pollUrl) {
-  // Rewrite absolute WaveSpeed URLs to go through our proxy
-  let target = pollUrl;
-  if (pollUrl.startsWith("http")) {
-    target = pollUrl.replace(/^https?:\/\/api\.wavespeed\.ai/, "/wavespeed");
-  } else if (!pollUrl.startsWith("/wavespeed")) {
-    target = `${API_BASE}${pollUrl}`;
-  }
-  const { res } = await proxiedFetch(target, {
-    headers: { "Authorization": `Bearer ${apiKey}` },
-  });
+export async function pollResult(pollUrl) {
+  const res = await wsFetch(toProxyUrl(pollUrl));
   if (!res.ok) throw { code: res.status, message: res.statusText };
   return res.json();
 }
 
-export async function checkBalance(apiKey) {
+// keyStatus: "ok" (key works), "missing" (none saved on the server), "invalid" (WaveSpeed rejected it),
+// "unknown" (network/session trouble — don't block generation on it).
+export async function checkBalance() {
   try {
-    const { res } = await proxiedFetch(`${API_BASE}/balance`, {
-      headers: { "Authorization": `Bearer ${apiKey}` },
-    });
+    const res = await wsFetch(`${API_BASE}/balance`);
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
-      return { error: `HTTP ${res.status}${txt ? ": " + txt.slice(0, 150) : ""}`, balance: null };
+      return {
+        error: `HTTP ${res.status}${txt ? ": " + txt.slice(0, 150) : ""}`, balance: null,
+        keyStatus: res.status === 401 || res.status === 403 ? "invalid" : "unknown",
+      };
     }
     const data = await res.json();
     const bal = data?.data?.balance ?? data?.balance ?? null;
-    return { error: null, balance: typeof bal === "number" ? bal.toFixed(2) : bal };
+    return { error: null, balance: typeof bal === "number" ? bal.toFixed(2) : bal, keyStatus: "ok" };
   } catch (e) {
-    return { error: e.message || "Network error", balance: null };
+    return { error: e.message || "Network error", balance: null, keyStatus: e.noKey ? "missing" : "unknown" };
   }
 }
 
-export async function uploadMedia(apiKey, file) {
-  const formData = new FormData();
-  formData.append("file", file);
-  const { res } = await proxiedFetch(`${API_BASE}/media/upload/binary`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${apiKey}` },
-    body: formData,
-  });
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-  const data = await res.json();
-  return data?.data?.download_url || data?.data?.url;
+// Input media (source images, end frames, audio, driving video) goes to our own public storage bucket;
+// WaveSpeed fetches it by URL. (WaveSpeed's upload endpoint needs the key in the browser.)
+export async function uploadMedia(file) {
+  return uploadInputFile(file);
 }
 
 export { API_BASE };

@@ -6,6 +6,8 @@
 // Activated automatically when VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.
 // Gracefully no-ops otherwise (local-only mode).
 
+import { sessionToken, isSessionError, reportSessionExpired } from "./session.js";
+
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 
@@ -525,159 +527,127 @@ export async function getArchiveStats() {
   } catch { return { bytes: 0, count: 0 }; }
 }
 
+// ─── Server calls that need the signed-in session ───
+// Each RPC re-checks the session token server-side. A token failure signs this device out (the caller
+// still gets the error); other failures are returned to the caller as-is.
+async function sessionRpc(fn, args = {}) {
+  await initSupabase();
+  if (!supabase) throw new Error("Cloud not configured");
+  const token = sessionToken();
+  if (!token) { reportSessionExpired(); throw new Error("Session expired — sign in again"); }
+  const { data, error } = await supabase.rpc(fn, { p_session_token: token, ...args });
+  if (error) {
+    if (isSessionError(error)) reportSessionExpired();
+    throw error;
+  }
+  return data;
+}
+
+// ─── Input media uploads (source images, end frames, audio, driving video) ───
+// Public bucket path uploads/<scope>/<uuid>.<ext>; WaveSpeed fetches the file by its public URL.
+export async function uploadInputFile(file) {
+  await initSupabase();
+  if (!supabase) throw new Error("Cloud not configured");
+  const ct = file.type || "application/octet-stream";
+  const fromName = /\.([a-z0-9]{2,5})$/i.exec(file.name || "")?.[1];
+  const ext = (fromName || (ct.split("/")[1] || "bin").split(";")[0]).toLowerCase();
+  const scope = getDeviceId().replace(/[^a-zA-Z0-9_-]/g, "_");
+  const id = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  const path = `uploads/${scope}/${id}.${ext}`;
+  const { error } = await supabase.storage.from(ARCHIVE_BUCKET).upload(path, file, { contentType: ct, cacheControl: "31536000" });
+  if (error) throw new Error(`Upload failed: ${error.message}`);
+  return supabase.storage.from(ARCHIVE_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
 // ─── Backups: rolling snapshots of a user's full data, manual or auto ───
-// Stored in data_backups table. Auto-backups run via pg_cron every 2 days.
-// Manual backups happen before destructive actions (Clear Outputs / Reset Everything).
+// Stored in data_backups (not readable by the browser); every call goes through token-checked RPCs.
+// Auto-backups run via pg_cron every 2 days. Manual backups happen before destructive actions.
 
 export async function createBackup(type = "manual", note = null) {
-  if (!supabase) return { ok: false, error: "Cloud not configured" };
-  const username = getDeviceId();
   try {
-    // Pull current state to embed into the snapshot
-    const [tasksRes, historyRes, settingsRes, favoritesRes] = await Promise.allSettled([
-      supabase.from("tasks").select("*").eq("device_id", username).order("start_time", { ascending: false }).limit(500),
-      supabase.from("history").select("*").eq("device_id", username).order("timestamp", { ascending: false }).limit(1000),
-      supabase.from("settings").select("key,value").eq("device_id", username),
-      supabase.from("favorites").select("*").eq("device_id", username),
-    ]);
-    const tasks = tasksRes.status === "fulfilled" ? (tasksRes.value.data || []) : [];
-    const history = historyRes.status === "fulfilled" ? (historyRes.value.data || []) : [];
-    const settingsRows = settingsRes.status === "fulfilled" ? (settingsRes.value.data || []) : [];
-    const favorites = favoritesRes.status === "fulfilled" ? (favoritesRes.value.data || []) : [];
-    const settingsObj = {};
-    for (const row of settingsRows) settingsObj[row.key] = row.value;
-
-    const { data, error } = await supabase.from("data_backups").insert({
-      username, backup_type: type, note,
-      task_count: tasks.length, history_count: history.length,
-      tasks_snapshot: tasks, history_snapshot: history,
-      settings_snapshot: settingsObj, favorites_snapshot: favorites,
-    }).select("id,created_at").single();
-    if (error) return { ok: false, error: error.message };
-    return { ok: true, id: data.id, createdAt: data.created_at };
+    const r = await sessionRpc("snapshot_my_data_phase2", { p_type: type, p_note: note });
+    return r?.ok ? { ok: true, id: r.id } : { ok: false, error: r?.reason || "Backup failed" };
   } catch (e) { return { ok: false, error: e.message || "Backup failed" }; }
 }
 
 export async function listBackups(limit = 20) {
-  if (!supabase) return [];
-  const username = getDeviceId();
   try {
-    const { data, error } = await supabase
-      .from("data_backups")
-      .select("id, backup_type, task_count, history_count, note, created_at")
-      .eq("username", username)
-      .order("created_at", { ascending: false })
-      .limit(limit);
-    if (error) return [];
-    return data || [];
+    return (await sessionRpc("list_my_backups_phase2", { p_limit: limit })) || [];
   } catch { return []; }
 }
 
-export async function getBackup(id) {
-  if (!supabase) return null;
-  const username = getDeviceId();
-  try {
-    const { data, error } = await supabase
-      .from("data_backups").select("*")
-      .eq("id", id).eq("username", username).single();
-    if (error) return null;
-    return data;
-  } catch { return null; }
-}
-
+// The server takes its own pre-restore safety snapshot, then replaces tasks, history, favorites and
+// settings in one transaction (all or nothing).
 export async function restoreBackup(id) {
-  if (!supabase) return { ok: false, error: "Cloud not configured" };
-  const backup = await getBackup(id);
-  if (!backup) return { ok: false, error: "Backup not found" };
-  const username = getDeviceId();
   try {
-    // Snapshot current state first (safety net) so restore is undoable
-    await createBackup("pre-restore", `Before restoring ${new Date(backup.created_at).toLocaleString()}`);
-
-    // Wipe current and replace from snapshot
-    await supabase.from("tasks").delete().eq("device_id", username);
-    await supabase.from("history").delete().eq("device_id", username);
-    await supabase.from("settings").delete().eq("device_id", username);
-    await supabase.from("favorites").delete().eq("device_id", username);
-
-    const tasks = backup.tasks_snapshot || [];
-    const history = backup.history_snapshot || [];
-    const settingsObj = backup.settings_snapshot || {};
-    const favorites = backup.favorites_snapshot || [];
-
-    // Rescope every row to the CURRENT user's device_id. Backups made under an
-    // old username (e.g. "user:admin" before a rename) must be restored under
-    // the current username so the logged-in session can see them.
-    const rescoped = (rows) => rows.map((r) => ({ ...r, device_id: username }));
-
-    if (tasks.length > 0) await supabase.from("tasks").upsert(rescoped(tasks), { onConflict: "id" });
-    if (history.length > 0) await supabase.from("history").upsert(rescoped(history), { onConflict: "id" });
-    const settingRows = Object.entries(settingsObj).map(([key, value]) => ({
-      device_id: username, key, value, updated_at: new Date().toISOString(),
-    }));
-    if (settingRows.length > 0) await supabase.from("settings").upsert(settingRows, { onConflict: "device_id,key" });
-    if (favorites.length > 0) await supabase.from("favorites").upsert(rescoped(favorites), { onConflict: "id" });
-
-    return { ok: true, tasks: tasks.length, history: history.length };
+    const r = await sessionRpc("restore_my_backup_phase2", { p_backup_id: id });
+    if (!r?.ok) return { ok: false, error: r?.reason === "backup_not_found" ? "Backup not found" : (r?.reason || "Restore failed") };
+    return { ok: true, tasks: r.tasks_restored, history: r.history_restored };
   } catch (e) { return { ok: false, error: e.message || "Restore failed" }; }
 }
 
 export async function deleteBackup(id) {
-  if (!supabase) return false;
-  const username = getDeviceId();
   try {
-    const { error } = await supabase.from("data_backups").delete().eq("id", id).eq("username", username);
-    return !error;
+    const r = await sessionRpc("delete_my_backup_phase2", { p_backup_id: id });
+    return !!r?.ok && r.deleted_rows > 0;
   } catch { return false; }
 }
 
-// ─── Account Credentials (globally stored, not device-scoped) ───
-// Stored in `settings` table with device_id="_account" so they sync across all devices
+// ─── Sign-in and account (server-side; bcrypt; 3 failed sign-ins lock it until a backup code unlocks) ───
 
-const ACCOUNT_SCOPE = "_account";
-
-async function sha256Hex(str) {
-  const buf = new TextEncoder().encode(str);
-  const hash = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-export async function getStoredCredentials() {
-  if (!supabase) return null;
-  try {
-    const { data, error } = await supabase.from("settings").select("key,value").eq("device_id", ACCOUNT_SCOPE);
-    if (error || !data) return null;
-    const result = {};
-    for (const row of data) result[row.key] = row.value;
-    return Object.keys(result).length > 0 ? result : null;
-  } catch { return null; }
-}
-
-export async function verifyCredentials(username, password) {
-  const stored = await getStoredCredentials();
-  if (!stored) {
-    // No stored creds — fallback to hardcoded admin/admin for initial setup
-    return username === "admin" && password === "admin";
+// Returns the server's answer: { ok, token, expires_at, username, rehash_required } or
+// { ok:false, reason: "invalid" (attempts_left) | "locked" | "not_provisioned" }. Throws only when the
+// server can't be reached, so a network failure is never shown as a wrong password.
+export async function signIn(username, password) {
+  await initSupabase();
+  if (!supabase) throw new Error("Cloud not configured");
+  const { data, error } = await supabase.rpc("verify_admin", { p_username: username, p_password: password });
+  if (error) throw error;
+  if (data?.ok && data.rehash_required) {
+    // Legacy sha256 password: store it as bcrypt now. The server only accepts the same password here.
+    supabase.rpc("set_admin_credentials_rehash", { p_session_token: data.token, p_plain_password: password }).then(() => {}, () => {});
   }
-  if (stored.username !== username) return false;
-  const hash = await sha256Hex(password);
-  return stored.password_hash === hash;
+  return data || { ok: false, reason: "invalid" };
 }
 
-export async function saveCredentials({ username, password, email, emailVerified, lastVerifiedAt }) {
-  if (!supabase) return false;
-  try {
-    const rows = [];
-    const ts = new Date().toISOString();
-    if (username !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "username", value: username, updated_at: ts });
-    if (password !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "password_hash", value: await sha256Hex(password), updated_at: ts });
-    if (email !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "email", value: email, updated_at: ts });
-    if (emailVerified !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "email_verified", value: String(emailVerified), updated_at: ts });
-    if (lastVerifiedAt !== undefined) rows.push({ device_id: ACCOUNT_SCOPE, key: "last_verified_at", value: String(lastVerifiedAt), updated_at: ts });
-    if (rows.length === 0) return true;
-    const { error } = await supabase.from("settings").upsert(rows, { onConflict: "device_id,key" });
-    return !error;
-  } catch { return false; }
+export async function unlockWithBackupCode(code, newPassword = null) {
+  await initSupabase();
+  if (!supabase) throw new Error("Cloud not configured");
+  const { data, error } = await supabase.rpc("unlock_admin_with_backup_code", { p_code: code, p_new_password: newPassword || null });
+  if (error) throw error;
+  return data || { ok: false, reason: "invalid" };
+}
+
+export async function getMyAccount() {
+  return sessionRpc("get_my_account");
+}
+
+export async function setMyAccount({ email, emailVerified, lastVerifiedAt }) {
+  const r = await sessionRpc("set_my_account", {
+    p_email: email ?? null,
+    p_email_verified: emailVerified ?? null,
+    p_last_verified_at: lastVerifiedAt == null ? null : Number(lastVerifiedAt),
+  });
+  return !!r?.ok;
+}
+
+// The three below re-check the current password server-side; a wrong one counts toward the lockout.
+export async function changeMyPassword(currentPassword, newPassword) {
+  return sessionRpc("change_my_password", { p_current_password: currentPassword, p_new_password: newPassword });
+}
+
+export async function renameMyAccount(currentPassword, newUsername) {
+  return sessionRpc("rename_my_account", { p_current_password: currentPassword, p_new_username: newUsername });
+}
+
+export async function setBackupCode(currentPassword, code) {
+  return sessionRpc("set_admin_backup_code", { p_current_password: currentPassword, p_code: code });
+}
+
+// The WaveSpeed key is written to the server's protected store and never kept in the browser.
+export async function saveWavespeedKey(key) {
+  const r = await sessionRpc("set_my_wavespeed_key", { p_key: key });
+  return !!r?.ok;
 }
 
 // ─── Email OTP via Supabase Auth ───
