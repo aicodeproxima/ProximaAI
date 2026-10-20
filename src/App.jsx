@@ -684,6 +684,7 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 .task-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .task-model { font-size: 13px; font-weight: 600; }
+.task-batch-index { margin-left: 6px; font-family: ${font}; font-size: 11px; color: var(--text-muted); }
 .task-status { font-size: 11px; font-family: ${font}; padding: 3px 8px; border-radius: 12px; font-weight: 600; }
 .task-status.pending { background: rgba(148,163,184,0.1); color: var(--text-muted); }
 .task-status.processing { background: rgba(99,102,241,0.1); color: var(--accent); }
@@ -863,6 +864,12 @@ function formatTime(ms) {
   return s >= 60 ? `${(s / 60).toFixed(1)}m` : `${s.toFixed(1)}s`;
 }
 function formatCost(c) { return `$${c.toFixed(4)}`; }
+// "1 model · 4 images" when a batch fans out (or natively batches) one model into several images.
+function logModelsLabel(log) {
+  const models = new Set(log.models || []).size;
+  const images = (log.tasks || []).reduce((n, t) => n + (t.outputs?.length || 0), 0);
+  return `${models} model${models === 1 ? "" : "s"}${images > models ? ` · ${images} images` : ""}`;
+}
 function timeAgo(ts) {
   const diff = Date.now() - ts;
   if (diff < 60000) return "just now";
@@ -918,7 +925,7 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
       )}
       <div className="task-header">
         <div>
-          <span className="task-model">{task.modelName}</span>
+          <span className="task-model">{task.modelName}{task.batchImageIndex && task.requestedImages > 1 && <span className="task-batch-index">{task.batchImageIndex}/{task.requestedImages}</span>}</span>
           <span style={{ fontSize: 10, color: PROVIDER_COLORS[task.provider] || "#aaa", marginLeft: 6 }}>{task.provider}</span>
           {(task.actualRes || task.actualDur) && (
             <span style={{ fontSize: 9, color: "var(--text-muted)", marginLeft: 6 }}>
@@ -3459,7 +3466,7 @@ export default function ProximaApp() {
                           style={selectMode ? { cursor: "pointer", position: "relative" } : undefined}>
                           {selectMode && <div aria-hidden="true" className={`select-check${selectedIds.has(task.id) ? " on" : ""}`}>{selectedIds.has(task.id) ? "✓" : ""}</div>}
                           <div className="task-header">
-                            <span className="task-model">{task.modelName}</span>
+                            <span className="task-model">{task.modelName}{task.batchImageIndex && task.requestedImages > 1 && <span className="task-batch-index">{task.batchImageIndex}/{task.requestedImages}</span>}</span>
                             <span className="task-status completed">COMPLETED</span>
                           </div>
                           <div style={{ fontSize: 12, color: "var(--text-secondary)", margin: "4px 0" }}>{task.prompt}</div>
@@ -3497,7 +3504,7 @@ export default function ProximaApp() {
                       {galleryProcessing.map(task => (
                         <div key={task.id} className="task-card">
                           <div className="task-header">
-                            <span className="task-model">{task.modelName}</span>
+                            <span className="task-model">{task.modelName}{task.batchImageIndex && task.requestedImages > 1 && <span className="task-batch-index">{task.batchImageIndex}/{task.requestedImages}</span>}</span>
                             <span className={`task-status ${task.status}`}>{task.status.toUpperCase()}</span>
                           </div>
                           <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "4px 0" }}>{task.prompt?.slice(0, 80)}</div>
@@ -3524,7 +3531,7 @@ export default function ProximaApp() {
                           style={{ borderColor: "rgba(239,68,68,0.2)", ...(selectMode ? { cursor: "pointer", position: "relative" } : {}) }}>
                           {selectMode && <div aria-hidden="true" className={`select-check${selectedIds.has(task.id) ? " on" : ""}`}>{selectedIds.has(task.id) ? "✓" : ""}</div>}
                           <div className="task-header">
-                            <span className="task-model">{task.modelName}</span>
+                            <span className="task-model">{task.modelName}{task.batchImageIndex && task.requestedImages > 1 && <span className="task-batch-index">{task.batchImageIndex}/{task.requestedImages}</span>}</span>
                             <span className="task-status failed">FAILED</span>
                           </div>
                           <div style={{ fontSize: 12, color: "var(--error)", margin: "6px 0", fontFamily: font, background: "rgba(239,68,68,0.08)", padding: "8px 10px", borderRadius: 6, wordBreak: "break-word" }}>
@@ -3578,7 +3585,7 @@ export default function ProximaApp() {
                             {logSelectMode && <div aria-hidden="true" className={`select-check log-check${sel ? " on" : ""}`}>{sel ? "✓" : ""}</div>}
                             <span style={{ fontFamily: font, fontSize: 11, color: "var(--text-muted)" }}>{timeAgo(log.timestamp)}</span>
                             <span className="log-prompt">{log.prompt}</span>
-                            <span className="log-models">{log.models.length} model{log.models.length > 1 ? "s" : ""}</span>
+                            <span className="log-models">{logModelsLabel(log)}</span>
                             <span style={{ fontSize: 11 }}>{TYPE_ICONS[log.genType]}</span>
                             <span className="log-cost">{formatCost(log.totalCost)}</span>
                             {logSelectMode
