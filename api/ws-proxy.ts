@@ -27,7 +27,7 @@
 //   Webhook — model submits carry standard_webhook=<prod>/api/ws-webhook (added here, never by the client) once
 //           WAVESPEED_WEBHOOK_SECRET is set; src/lib/wsWebhook.js forwardParams decides (2026-10-20).
 
-import { forwardParams } from '../src/lib/wsWebhook.js';
+import { forwardParams, safeUpstreamPath } from '../src/lib/wsWebhook.js';
 
 export const config = { runtime: 'edge' };
 
@@ -224,8 +224,10 @@ export default async function handler(req: Request, ctx?: { waitUntil?: (p: Prom
   //    this single function instead). Fall back to stripping the prefix if the
   //    original URL passed through unrewritten.
   const reqUrl = new URL(req.url);
-  let path = reqUrl.searchParams.get('p') || reqUrl.pathname.replace(/^\/api\/(wavespeed-v2|ws-proxy)\/?/, '');
-  path = path.replace(/^\/+/, '');
+  const path = safeUpstreamPath(reqUrl.searchParams.get('p') || reqUrl.pathname.replace(/^\/api\/(wavespeed-v2|ws-proxy)\/?/, ''));
+  if (!path) {
+    return new Response(JSON.stringify({ error: 'Bad path' }), { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } });
+  }
 
   // 5. Forward headers: copy Content-Type, REPLACE Authorization with server key,
   //    drop hop-by-hop and identifying headers.
@@ -250,8 +252,7 @@ export default async function handler(req: Request, ctx?: { waitUntil?: (p: Prom
   //     submits also get the server's result webhook (api/ws-webhook.ts) once its signing secret is configured, so
   //     the result is saved even if every device closes; the client never chooses where results are sent.
   const qs = forwardParams(reqUrl.searchParams, {
-    method: req.method, path, body: body ? new TextDecoder().decode(body) : '',
-    webhookOn: !!process.env.WAVESPEED_WEBHOOK_SECRET,
+    method: req.method, path, body: body ?? '', webhookOn: !!process.env.WAVESPEED_WEBHOOK_SECRET,
   }).toString();
   const upstreamUrl = `${WAVESPEED_BASE}/${path}${qs ? `?${qs}` : ''}`;
 

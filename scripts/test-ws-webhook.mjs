@@ -2,7 +2,7 @@
 // standard_webhook parameter. Run: node scripts/test-ws-webhook.mjs
 import assert from "node:assert/strict";
 import { createHmac, randomBytes } from "node:crypto";
-import { verifyWebhook, webhookUpdate, handleWebhook, forwardParams, WEBHOOK_URL, WEBHOOK_TOLERANCE_S } from "../src/lib/wsWebhook.js";
+import { verifyWebhook, webhookUpdate, handleWebhook, forwardParams, WEBHOOK_URL, WEBHOOK_TOLERANCE_S, safeUpstreamPath } from "../src/lib/wsWebhook.js";
 import { applyPoll, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
@@ -244,6 +244,30 @@ await test("a body that is not a JSON object gets no webhook", () => {
 
 await test("no webhook until the secret is configured", () => {
   assert.deepEqual(fwd({ webhookOn: false }), {});
+});
+
+await test("a byte body (as the proxy holds it) is read only for submits", () => {
+  const bytes = new TextEncoder().encode(SUBMIT.body).buffer;
+  assert.deepEqual(fwd({ body: bytes }), { standard_webhook: WEBHOOK_URL });
+  assert.deepEqual(fwd({ path: "api/v3/predictions", body: new TextEncoder().encode("{}").buffer }), {});
+  assert.deepEqual(fwd({ body: new Uint8Array([0xff, 0xfe, 0x00]).buffer }), {});
+});
+
+// ─── Proxy: the upstream path ───
+await test("plain WaveSpeed paths pass, leading slashes dropped", () => {
+  for (const p of ["api/v3/wavespeed-ai/flux-schnell", "api/v3/bytedance/seedance-2.0-fast/video-edit-turbo",
+    "api/v3/predictions/0a1b2c/result", "api/v3/predictions", "api/v3/balance", "api/v3/some_owner/Model.v2~x"]) {
+    assert.equal(safeUpstreamPath(p), p);
+  }
+  assert.equal(safeUpstreamPath("///api/v3/balance"), "api/v3/balance");
+});
+
+await test("a path cannot carry its own query, fragment, escapes or dot segments", () => {
+  for (const p of ["api/v3/o/m?standard_webhook=https://evil.example", "api/v3/o/m#x", "api/v3/o/m%3Fa=b",
+    "api/v3/predictions/../o/m", "api/v3/./o/m", "api/v3/o/..", "..", "api/v3//o/m", "api/v3/o/m/", "api/v3/o m",
+    "api\\v3\\o", "api/v3/o/m\n", "", null, undefined, "https://evil.example/api/v3/o/m"]) {
+    assert.equal(safeUpstreamPath(p), null, JSON.stringify(p));
+  }
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

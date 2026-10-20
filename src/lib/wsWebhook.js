@@ -105,10 +105,11 @@ export async function handleWebhook({ headers, body, secrets, now, apply }) {
 // secret endpoint are not. WaveSpeed rejects a webhook combined with sync mode or base64 output.
 const SUBMIT_PATH = /^api\/v3\/(?!predictions(\/|$)|media\/|webhook\/)[^/]+\/[^/]/;
 const isOn = (v) => v === true || v === "true" || v === 1;
+// `body` is the raw body (string or bytes); it is decoded only once the path is a submit.
 export function isWebhookSubmit(method, path, body) {
   if (method !== "POST" || !SUBMIT_PATH.test(path)) return false;
   let payload;
-  try { payload = JSON.parse(body); } catch { return false; }
+  try { payload = JSON.parse(typeof body === "string" ? body : new TextDecoder("utf-8", { fatal: true }).decode(body)); } catch { return false; }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   return !isOn(payload.enable_sync_mode) && !isOn(payload.enable_base64_output);
 }
@@ -120,4 +121,13 @@ export function forwardParams(params, { method, path, body, webhookOn }) {
   for (const k of ["p", "webhook", "standard_webhook"]) out.delete(k);
   if (webhookOn && isWebhookSubmit(method, path, body)) out.set("standard_webhook", WEBHOOK_URL);
   return out;
+}
+
+// The WaveSpeed path the proxy forwards to, or null. The rewrite hands it over URL-decoded (?p=), so a "?" or "#"
+// inside it would become the upstream query or fragment, and a ".." segment is normalised by fetch: either would let a
+// caller set its own webhook or make a submit look like something else. Only plain segments pass.
+const PATH_SEGMENT = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/; // never empty, never "." / ".."
+export function safeUpstreamPath(raw) {
+  const path = String(raw ?? "").replace(/^\/+/, "");
+  return path && path.split("/").every(s => PATH_SEGMENT.test(s)) ? path : null;
 }
