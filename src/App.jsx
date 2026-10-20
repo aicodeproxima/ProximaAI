@@ -966,7 +966,9 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
   .results-grid { grid-template-columns: 1fr; gap: 14px; }
 
   .log-row { grid-template-columns: minmax(0, 1fr) 128px 50px; gap: 6px; padding: 12px 14px; font-size: 13px; }
-  .log-models { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* fixed column: "12 models · 48 images" fits at 384, rows stay aligned */
+  /* fixed column keeps rows aligned; at 10px JetBrains Mono (6.0px/glyph, measured with the font loaded) labels up to
+     21 chars fit ("12 models · 48 images"), longer ones get an ellipsis */
+  .log-models { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* Hidden by class, not position: select mode inserts a checkmark first, which shifted nth-child hiding
      (the checkmark vanished and time + replay showed instead, wrapping the row). */
   .log-row > .log-hide-m { display: none; }
