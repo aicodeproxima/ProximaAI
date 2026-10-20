@@ -14,7 +14,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -2090,6 +2090,31 @@ export default function ProximaApp() {
       }
     })();
     return () => { cancelled = true; };
+  }, [isAuthed, keyBlocked]);
+
+  // Coming back to the app re-polls every running task at once (rules in planRepoll): a phone that left it froze
+  // the poll timers and cut the request in flight, so the result used to show only after a full interval or backoff.
+  const repollAtRef = useRef(0);
+  useEffect(() => {
+    if (!isAuthed || keyBlocked) return;
+    const kick = () => {
+      if (document.visibilityState !== "visible") return;
+      const { kick: due, at } = planRepoll(tasksRef.current, Date.now(), repollAtRef.current);
+      repollAtRef.current = at;
+      for (const t of due) {
+        clearTimeout(pollRefs.current[t.id]); // the new loop replaces the old one; a request it has in flight is ignored
+        startPolling(t, t.pollUrl, { genType: t.genType, resumed: true, delay: 0 });
+      }
+    };
+    const onPageShow = (e) => { if (e.persisted) kick(); };
+    document.addEventListener("visibilitychange", kick);
+    window.addEventListener("pageshow", onPageShow);
+    window.addEventListener("online", kick);
+    return () => {
+      document.removeEventListener("visibilitychange", kick);
+      window.removeEventListener("pageshow", onPageShow);
+      window.removeEventListener("online", kick);
+    };
   }, [isAuthed, keyBlocked]);
 
   // Clean up pollUrl from IndexedDB once a task reaches terminal state.

@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -247,6 +247,32 @@ test("poll delay: images every 3 s for 5 min, then every 30 s; 3D every 10 s; vi
 test("an image still running after 5 minutes is never failed by the app's clock", () => {
   assert.equal(pollTiming("image").maxPollMs, undefined, "no client deadline");
   assert.equal(applyPoll(task("a", { startTime: NOW - 20 * 60_000 }), { status: "processing" }, NOW), null, "still running = poll again");
+});
+
+// Coming back to the app (visible again, restored from the back/forward cache, or back online) re-polls every running
+// task at once. While the phone was away its timers were frozen and the poll in flight was cut, so the next check
+// would otherwise wait out a full interval or retry backoff (up to a minute for a slow image).
+test("re-poll on return: every running task with a prediction id, nothing else", () => {
+  const rows = [task("run"), task("pend", { status: "pending", pollUrl: undefined, taskId: undefined }), task("done", { status: "completed" }),
+    task("bad", { status: "failed" }), task("rec", { recovered: true }), task("noUrl", { pollUrl: undefined })];
+  const p = planRepoll(rows, NOW, 0);
+  assert.deepEqual(p.kick.map(t => t.id), ["run", "rec", "noUrl"]);
+  assert.equal(p.kick.find(t => t.id === "noUrl").pollUrl, "/api/v3/predictions/p1/result", "poll URL rebuilt from the prediction id");
+  assert.equal(p.at, NOW);
+});
+test("re-poll on return: a task past the 48 h window is left to its loop to expire", () => {
+  assert.deepEqual(planRepoll([task("old", { startTime: NOW - RESUME_WINDOW_MS - 1 })], NOW, 0).kick, []);
+});
+test("re-poll on return: focus + visibility + online firing together re-poll once", () => {
+  const first = planRepoll([task("a")], NOW, 0);
+  assert.equal(first.kick.length, 1);
+  const burst = planRepoll([task("a")], NOW + REPOLL_THROTTLE_MS - 1, first.at);
+  assert.deepEqual(burst.kick, [], "inside the throttle");
+  assert.equal(burst.at, first.at, "a skipped burst does not extend the throttle");
+  assert.equal(planRepoll([task("a")], NOW + REPOLL_THROTTLE_MS, first.at).kick.length, 1);
+});
+test("re-poll on return: nothing running leaves the throttle untouched", () => {
+  assert.deepEqual(planRepoll([task("d", { status: "completed" })], NOW, 0), { kick: [], at: 0 });
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

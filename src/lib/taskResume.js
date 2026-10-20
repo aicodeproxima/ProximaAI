@@ -116,6 +116,21 @@ export function nextPollDelay(genType, elapsedMs) {
   return elapsedMs > t.slowAfterMs ? t.slowInterval : t.interval;
 }
 
+// Which running tasks to re-poll right away when the app comes back (visible again, restored from the back/forward
+// cache, back online). A phone that left the app froze its timers and cut the poll in flight, so the next check would
+// otherwise wait out a full interval or retry backoff. Focus, visibility and online often fire together: one re-poll
+// per REPOLL_THROTTLE_MS. Rows without a prediction id are still mid-submit and have nothing to poll.
+export const REPOLL_THROTTLE_MS = 5000;
+export function planRepoll(tasks, now, lastAt) {
+  if (now - lastAt < REPOLL_THROTTLE_MS) return { kick: [], at: lastAt };
+  const kick = [];
+  for (const t of tasks) {
+    const pollUrl = IN_FLIGHT.has(t.status) && now - (t.startTime || 0) <= RESUME_WINDOW_MS ? pollUrlFor(t) : null;
+    if (pollUrl) kick.push(t.pollUrl === pollUrl ? t : { ...t, pollUrl });
+  }
+  return { kick, at: kick.length ? now : lastAt };
+}
+
 // Adds the IndexedDB snapshot to state without dropping what is already there. On load the resume effect's
 // read resolves first (measured on the phone), so replacing state wiped the tasks it had just resumed.
 export function mergeLoadedTasks(current, loaded) {
