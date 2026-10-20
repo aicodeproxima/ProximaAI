@@ -967,9 +967,9 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 
   .log-row { grid-template-columns: minmax(0, 1fr) 128px 50px; gap: 6px; padding: 12px 14px; font-size: 13px; }
   .log-models { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* fixed column: "12 models · 48 images" fits at 384, rows stay aligned */
-  .log-row > :nth-child(1) { display: none; }
-  .log-row > :nth-child(5), .log-row > :nth-child(6) { display: none; }
-  .log-header > :nth-child(1) { display: none; }
+  /* Hidden by class, not position: select mode inserts a checkmark first, which shifted nth-child hiding
+     (the checkmark vanished and time + replay showed instead, wrapping the row). */
+  .log-row > .log-hide-m { display: none; }
 
   .setting-group { margin-bottom: 28px; }
   .setting-label { font-size: 14px; margin-bottom: 8px; }
@@ -3597,7 +3597,7 @@ export default function ProximaApp() {
                     {renderLogSelectBar()}
                     <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
                       <div className="log-row log-header" style={logSelectMode ? { paddingLeft: 40 } : undefined}>
-                        <span>Time</span><span>Prompt</span><span>Models</span><span>Type</span><span>Cost</span><span></span>
+                        <span className="log-hide-m">Time</span><span>Prompt</span><span>Models</span><span>Type</span><span className="log-hide-m">Cost</span><span className="log-hide-m"></span>
                       </div>
                       {logs.map(log => {
                         const sel = logSelectMode && logSelectedIds.has(log.id);
@@ -3606,14 +3606,14 @@ export default function ProximaApp() {
                             onClick={logSelectMode ? () => toggleSelectLog(log.id) : () => replayLog(log)}
                             style={logSelectMode ? { position: "relative", paddingLeft: 40 } : undefined}>
                             {logSelectMode && <div aria-hidden="true" className={`select-check log-check${sel ? " on" : ""}`}>{sel ? "✓" : ""}</div>}
-                            <span style={{ fontFamily: font, fontSize: 11, color: "var(--text-muted)" }}>{timeAgo(log.timestamp)}</span>
+                            <span className="log-hide-m" style={{ fontFamily: font, fontSize: 11, color: "var(--text-muted)" }}>{timeAgo(log.timestamp)}</span>
                             <span className="log-prompt">{log.prompt}</span>
                             <span className="log-models">{logModelsLabel(log)}</span>
                             <span style={{ fontSize: 11 }}>{TYPE_ICONS[log.genType]}</span>
-                            <span className="log-cost">{formatCost(log.totalCost)}</span>
+                            <span className="log-cost log-hide-m">{formatCost(log.totalCost)}</span>
                             {logSelectMode
-                              ? <span />
-                              : <button className="log-replay" onClick={e => { e.stopPropagation(); replayLog(log); }}>▶</button>}
+                              ? <span className="log-hide-m" />
+                              : <button className="log-replay log-hide-m" onClick={e => { e.stopPropagation(); replayLog(log); }}>▶</button>}
                           </div>
                         );
                       })}
