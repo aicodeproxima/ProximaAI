@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -336,6 +336,15 @@ test("no match: fails the task once the grace has passed, keeps waiting before",
   assert.equal(late.fail[0].status, "failed");
   assert.match(late.fail[0].error, /before WaveSpeed/i);
   assert.deepEqual(planOrphans([orphan("o", { startTime: NOW - 10_000 })], [], new Set(), NOW), { adopt: [], fail: [] });
+});
+
+// Cancel while the submit is on the wire: its response must not turn the cancelled task back into a running one.
+test("a submit response for a task cancelled meanwhile changes nothing", () => {
+  const cancelled = orphan("c", { status: "failed", error: "Cancelled" });
+  assert.equal(isInFlight(cancelled), false);
+  assert.equal(isInFlight(undefined), false, "deleted meanwhile");
+  assert.equal(isInFlight(orphan("p")), true);
+  assert.equal(settlePoll(cancelled, t => ({ ...t, status: "processing", taskId: "pred-1" })), cancelled);
 });
 
 test("matches the history item shape WaveSpeed documents (slug model, nanosecond created_at)", () => {

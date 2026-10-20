@@ -147,6 +147,7 @@ export function retryTask(original, { id, now, seed }) {
 export function settlePoll(task, fn) {
   return IN_FLIGHT.has(task?.status) ? fn(task) : task;
 }
+export const isInFlight = (task) => IN_FLIGHT.has(task?.status);
 
 // What a failed poll means: "stop" (signed out / no key saved: the resume effect restarts it later),
 // "retry" (rate limit, network drop, proxy/WaveSpeed 5xx), or "fail" (WaveSpeed refused the poll).

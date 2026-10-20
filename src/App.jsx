@@ -14,7 +14,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -2421,20 +2421,22 @@ export default function ProximaApp() {
           const submitRes = await submitTask(task.modelId, payload).finally(() => submittingIds.current.delete(task.id));
           const taskId = submitRes?.data?.id;
           const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
+          // Cancelled (or deleted) while the submit was on the wire: it stays that way.
+          if (!isInFlight(tasksRef.current.find(t => t.id === task.id))) return;
 
           // Check if sync mode returned outputs directly
           if (submitRes?.data?.outputs?.length > 0) {
             const wallClock = Date.now() - task.startTime;
-            setTasks(prev => prev.map(t => t.id === task.id ? {
+            setTasks(prev => prev.map(t => t.id === task.id ? settlePoll(t, t => ({
               ...t, status: "completed", outputs: submitRes.data.outputs,
               endTime: Date.now(), wallClockMs: wallClock,
               inferenceMs: submitRes.data?.timings?.inference || wallClock
-            } : t));
+            })) : t));
             return;
           }
 
           // Persist pollUrl immediately so we can resume polling after tab close / refresh / OS kill
-          setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "processing", taskId, pollUrl } : t));
+          setTasks(prev => prev.map(t => t.id === task.id ? settlePoll(t, t => ({ ...t, status: "processing", taskId, pollUrl })) : t));
           saveTask({ ...task, status: "processing", taskId, pollUrl });
 
           startPolling(task, pollUrl, { genType: task.genType || genType });
@@ -2539,19 +2541,20 @@ export default function ProximaApp() {
         const submitRes = await submitTask(newTask.modelId, payload).finally(() => submittingIds.current.delete(newTask.id));
         const taskId = submitRes?.data?.id;
         const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
+        if (!isInFlight(tasksRef.current.find(t => t.id === newTask.id))) return; // cancelled meanwhile
 
         if (submitRes?.data?.outputs?.length > 0) {
           const wallClock = Date.now() - newTask.startTime;
-          setTasks(prev => prev.map(t => t.id === newTask.id ? {
+          setTasks(prev => prev.map(t => t.id === newTask.id ? settlePoll(t, t => ({
             ...t, status: "completed", outputs: submitRes.data.outputs,
             endTime: Date.now(), wallClockMs: wallClock,
             inferenceMs: submitRes.data?.timings?.inference || wallClock
-          } : t));
+          })) : t));
           return;
         }
 
         // Persist pollUrl so a reload / tab kill can resume this poll (it used to be kept in memory only)
-        setTasks(prev => prev.map(t => t.id === newTask.id ? { ...t, status: "processing", taskId, pollUrl } : t));
+        setTasks(prev => prev.map(t => t.id === newTask.id ? settlePoll(t, t => ({ ...t, status: "processing", taskId, pollUrl })) : t));
         saveTask({ ...newTask, status: "processing", taskId, pollUrl });
         startPolling(newTask, pollUrl, { genType: taskGenType });
       } catch (e) {
