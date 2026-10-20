@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useReducer, memo } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
-import { buildPayload } from "./lib/payloadBuilder.js";
+import { buildPayload, getEffectiveImageBatchCount, getImageBatchLimit, planImageBatchRequests } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
@@ -1854,10 +1854,11 @@ export default function ProximaApp() {
   const categoryFavoritesSelected = categoryFavoriteIds.length > 0
     && selectedModels.length === categoryFavoriteIds.length
     && categoryFavoriteIds.every(id => selectedFavoriteSet.has(id));
+  const selectedModelConfigs = selectedModels.map(id => models.find(m => m.id === id)).filter(Boolean);
+  const effectiveImageBatchCount = getEffectiveImageBatchCount(selectedModelConfigs, numImages, genType);
   const estCost = selectedModels.reduce((sum, id) => {
     const m = models.find(x => x.id === id);
-    const count = m?.params?.maxBatchImages > 1 ? Math.min(numImages || 1, m.params.maxBatchImages) : 1;
-    return sum + (m?.price || 0) * count;
+    return sum + (m?.price || 0) * effectiveImageBatchCount;
   }, 0);
 
   function toggleModel(id) {
@@ -2039,22 +2040,28 @@ export default function ProximaApp() {
     setPage("cockpit");
 
     const batchId = genId();
-    const newTasks = selectedModels.map(modelId => {
-      const model = models.find(m => m.id === modelId);
+    const batchPlan = planImageBatchRequests(selectedConfigs, numImages, genType);
+    const newTasks = batchPlan.map(({ model, nativeBatch, requestIndex, requestCount, imagesPerRequest, totalImages }) => {
+      const modelId = model.id;
       // C4: coercion-aware resolution/duration this model will ACTUALLY receive (for the card)
       const rp = model?.params?.resolution;
       const chosenR = rp ? (perModelRes[modelId] || resolution || rp.default) : null;
       const actualResOpt = rp ? (rp.options.find(o => o.value === chosenR) || rp.options.find(o => o.value === rp.default)) : null;
       const dp = model?.params?.duration;
       const actualDur = dp ? (dp.options.includes(Number(duration)) ? Number(duration) : dp.default) : null;
+      const parsedSeed = Number.parseInt(seed, 10);
+      const taskSeed = !nativeBatch && requestCount > 1 && Number.isFinite(parsedSeed) && seed !== "-1"
+        ? String(parsedSeed + requestIndex) : seed;
       return {
         id: genId(), batchId, modelId, modelName: model?.name || modelId,
-        provider: model?.provider || "Unknown", price: model?.price || 0,
+        provider: model?.provider || "Unknown", price: (model?.price || 0) * imagesPerRequest,
         status: "pending", startTime: Date.now(), endTime: null,
         wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
-        genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl,
+        genType, prompt, negPrompt, resolution, duration, seed: taskSeed, aspectRatio, sourceImageUrl,
         sourceImageUrls: sourceImageUrls.length > 0 ? sourceImageUrls : (sourceImageUrl ? [sourceImageUrl] : []),
-        perModelResolution: perModelRes, numImages, optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl,
+        perModelResolution: perModelRes, numImages: imagesPerRequest, requestedImages: totalImages,
+        batchImageIndex: requestCount > 1 ? requestIndex + 1 : null,
+        optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl,
         actualRes: actualResOpt?.label || null, actualDur
       };
     });
@@ -3230,8 +3237,8 @@ export default function ProximaApp() {
 
                         {(genType === "image" || genType === "i2i") && (() => {
                           // C4: cap the batch options to each selected model's actual max (maxBatchImages||4)
-                          const maxBatch = Math.min(16, ...selectedModels.map(id => { const m = models.find(x => x.id === id); return (m?.params?.maxBatchImages) || 4; }));
-                          const opts = [1, 2, 3, 4, 8, 12, 16].filter(n => n <= maxBatch);
+                          const maxBatch = Math.min(16, ...selectedModels.map(id => getImageBatchLimit(models.find(x => x.id === id))));
+                          const opts = Array.from({ length: maxBatch }, (_, i) => i + 1);
                           return (
                             <div className="settings-row">
                               <label>Batch</label>

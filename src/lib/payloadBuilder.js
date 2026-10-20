@@ -109,6 +109,37 @@ export function nearestValid(value, options, defaultVal) {
   return defaultVal;
 }
 
+const FALLBACK_IMAGE_BATCH_LIMIT = 4;
+
+export function getImageBatchLimit(model) {
+  const nativeLimit = Number.parseInt(model?.params?.maxBatchImages, 10);
+  return nativeLimit > 1 ? nativeLimit : FALLBACK_IMAGE_BATCH_LIMIT;
+}
+
+export function getEffectiveImageBatchCount(models, requested, genType) {
+  if (genType !== "image" && genType !== "i2i") return 1;
+  const validModels = (models || []).filter(Boolean);
+  if (validModels.length === 0) return 1;
+  const requestedCount = Math.max(1, Number.parseInt(requested, 10) || 1);
+  const sharedLimit = Math.min(16, ...validModels.map(getImageBatchLimit));
+  return Math.min(requestedCount, sharedLimit);
+}
+
+// Models without a native num_images input get one parallel request per image.
+// Models that support native batching keep a single, more efficient request.
+export function planImageBatchRequests(models, requested, genType) {
+  const totalImages = getEffectiveImageBatchCount(models, requested, genType);
+  return (models || []).filter(Boolean).flatMap(model => {
+    const nativeLimit = Number.parseInt(model?.params?.maxBatchImages, 10) || 1;
+    const nativeBatch = (genType === "image" || genType === "i2i") && nativeLimit > 1;
+    const requestCount = nativeBatch ? 1 : totalImages;
+    const imagesPerRequest = nativeBatch ? Math.min(totalImages, nativeLimit) : 1;
+    return Array.from({ length: requestCount }, (_, requestIndex) => ({
+      model, nativeBatch, requestIndex, requestCount, imagesPerRequest, totalImages,
+    }));
+  });
+}
+
 export function buildPayload(model, userSettings, genType) {
   const payload = {};
   const p = model.params;
