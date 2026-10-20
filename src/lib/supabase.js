@@ -328,17 +328,27 @@ export async function clearFavoritesRemote() {
 
 // ─── Settings Sync ───
 
-export async function syncSetting(key, value) {
-  if (!supabase) return;
+export async function syncSetting(key, value, deviceScope = getDeviceId()) {
+  // Local-only installations have nothing to sync. A configured client that has
+  // not initialized yet is a real failure so the caller's retry queue stays intact.
+  if (!supabase) {
+    if (!isSupabaseConfigured()) return { ok: true, localOnly: true };
+    throw new Error("Cloud sync is not initialized");
+  }
   try {
     const r = await supabase.from("settings").upsert({
-      device_id: getDeviceId(),
+      device_id: deviceScope,
       key,
       value,
       updated_at: new Date().toISOString(),
     });
-    if (!r.error) touchSync();
-  } catch (err) { warnOnce("syncSetting", err); }
+    if (r.error) throw r.error;
+    touchSync();
+    return { ok: true };
+  } catch (err) {
+    warnOnce("syncSetting", err);
+    throw err;
+  }
 }
 
 export async function pullSettings() {

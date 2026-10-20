@@ -4,10 +4,11 @@ import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
+import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
 function LoginScreen({ onLogin }) {
@@ -601,11 +602,21 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .prompt-area:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1), 0 0 20px rgba(99,102,241,0.08); }
 .prompt-area::placeholder { color: var(--text-muted); }
 
+.model-selector-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.model-actions { display: flex; align-items: center; gap: 6px; }
+.model-action-btn { min-height: 30px; padding: 4px 9px; border-radius: 7px; border: 1px solid rgba(99,102,241,0.3); background: transparent; color: var(--accent); font-family: ${font}; font-size: 10px; font-weight: 700; line-height: 1; cursor: pointer; transition: all 0.2s; }
+.model-action-btn:hover:not(:disabled) { background: rgba(99,102,241,0.15); }
+.model-action-btn.favorites { border-color: rgba(245,158,11,0.35); color: var(--warning); }
+.model-action-btn.favorites:hover:not(:disabled), .model-action-btn.favorites.active { background: rgba(245,158,11,0.12); box-shadow: 0 0 10px rgba(245,158,11,0.08); }
+.model-action-btn.clear { border-color: rgba(239,68,68,0.3); color: var(--error); }
+.model-action-btn.clear:hover:not(:disabled) { background: rgba(239,68,68,0.1); }
+.model-action-btn:disabled { cursor: default; opacity: 0.4; }
 .model-grid { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; overflow-x: hidden; }
-.model-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; transition: all 0.25s cubic-bezier(0.4,0,0.2,1); border: 1px solid transparent; }
+.model-item { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border-radius: 8px; transition: all 0.25s cubic-bezier(0.4,0,0.2,1); border: 1px solid transparent; }
 .model-item:hover { background: rgba(99,102,241,0.06); border-color: rgba(99,102,241,0.1); }
-.model-item:active { transform: scale(0.98); }
 .model-item.selected { background: rgba(99,102,241,0.1); border-color: rgba(99,102,241,0.25); box-shadow: 0 0 12px rgba(99,102,241,0.08); }
+.model-choice { min-width: 0; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 4px 0; border: 0; background: transparent; color: inherit; font-family: ${fontBody}; text-align: left; cursor: pointer; }
+.model-choice:active { transform: scale(0.99); }
 .model-check { width: 16px; height: 16px; border-radius: 4px; border: 2px solid var(--text-muted); display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.25s cubic-bezier(0.4,0,0.2,1); font-size: 10px; }
 .model-item.selected .model-check { background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: #6366f1; color: white; box-shadow: 0 0 8px rgba(99,102,241,0.4); }
 .model-name { font-size: 13px; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -613,6 +624,11 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .hot-badge { font-size: 9px; background: var(--error); color: white; padding: 1px 5px; border-radius: 3px; font-weight: 700; font-family: ${font}; }
 .model-price { font-size: 11px; font-family: ${font}; color: var(--text-muted); }
 .model-meta { display: contents; }
+.model-favorite-btn { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-muted); font-size: 20px; line-height: 1; cursor: pointer; transition: color 0.2s, background 0.2s, border-color 0.2s, transform 0.2s; }
+.model-favorite-btn:hover { color: var(--warning); background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.2); }
+.model-favorite-btn:active { transform: scale(0.9); }
+.model-favorite-btn.active { color: var(--warning); text-shadow: 0 0 10px rgba(245,158,11,0.45); }
+.model-choice:focus-visible, .model-favorite-btn:focus-visible, .model-action-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .settings-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .settings-row label { font-size: 11px; color: var(--text-muted); font-weight: 500; }
@@ -768,15 +784,21 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
   .prompt-area { min-height: 96px; padding: 13px; font-size: 16px; border-radius: 11px; }
 
   /* On taller screens, expand the model list so users see more without scrolling the inner panel */
+  .model-selector-header { align-items: flex-start; flex-wrap: wrap; }
+  .model-selector-header > span { padding-top: 4px; }
+  .model-actions { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+  .model-action-btn { min-height: 44px; padding: 8px 12px; border-radius: 9px; font-size: 11px; }
   .model-grid { max-height: 320px; gap: 6px; }
 
-  .model-item { padding: 12px 14px; border-radius: 11px; gap: 0; flex-wrap: wrap; align-items: flex-start; min-height: 56px; }
-  .model-check { width: 22px; height: 22px; border-radius: 6px; font-size: 13px; margin-right: 12px; margin-top: 1px; }
-  .model-name { font-size: 14.5px; white-space: normal; overflow: visible; text-overflow: unset; flex: 1; min-width: calc(100% - 36px); line-height: 1.3; }
-  .model-meta { display: flex; align-items: center; gap: 8px; width: 100%; padding-left: 34px; margin-top: 6px; }
+  .model-item { grid-template-columns: minmax(0, 1fr) 44px; padding: 8px 8px 8px 14px; border-radius: 11px; gap: 4px; min-height: 60px; }
+  .model-choice { display: grid; grid-template-columns: 34px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 0; row-gap: 5px; width: 100%; min-height: 44px; padding: 0; align-items: center; }
+  .model-check { grid-column: 1; grid-row: 1 / span 2; width: 22px; height: 22px; border-radius: 6px; font-size: 13px; margin: 0 12px 0 0; }
+  .model-name { grid-column: 2; grid-row: 1; font-size: 14.5px; white-space: normal; overflow: visible; text-overflow: unset; min-width: 0; line-height: 1.3; }
+  .model-meta { grid-column: 2; grid-row: 2; display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; margin: 0; }
   .model-provider { font-size: 11px; padding: 3px 8px; border-radius: 5px; }
   .hot-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
   .model-price { font-size: 13px; margin-left: auto; }
+  .model-favorite-btn { width: 44px; height: 44px; font-size: 23px; border-radius: 10px; }
 
   .settings-row { gap: 10px; }
   .settings-row label { font-size: 13px; }
@@ -1010,6 +1032,10 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
 });
 
 // ─── MAIN APP ───
+function localModelFavoritesKey(scope = getDeviceId()) {
+  return `${MODEL_FAVORITES_SETTING}:${encodeURIComponent(scope)}`;
+}
+
 export default function ProximaApp() {
   const [isAuthed, setIsAuthed] = useState(() => {
     try { return !!localStorage.getItem("proximaai-user"); } catch { return false; }
@@ -1019,6 +1045,10 @@ export default function ProximaApp() {
   const [balance, setBalance] = useState(null);
   const [genType, setGenType] = useState("image");
   const [selectedModels, setSelectedModels] = useState([]);
+  const [favoriteModelsByType, setFavoriteModelsByType] = useState(() => emptyModelFavorites());
+  const favoriteModelsRef = useRef(emptyModelFavorites());
+  const favoriteModelsUpdatedAtRef = useRef(0);
+  const favoriteSyncChainRef = useRef(Promise.resolve());
   const [prompt, setPrompt] = useState("");
   const [negPrompt, setNegPrompt] = useState("");
   const [resolution, setResolution] = useState("1k");
@@ -1084,6 +1114,9 @@ export default function ProximaApp() {
   // Force-flush all pending cloud writes + replay any failed entries
   const forceSaveAll = async () => {
     setSaveStatus("saving");
+    // Serialize with any click-triggered favorites save so an older snapshot can
+    // never finish after a newer one and overwrite it.
+    try { await favoriteSyncChainRef.current; } catch {}
     if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
     const queue = taskSyncQueueRef.current.splice(0).filter(t => !deletingIds.current.has(t.id));
     if (queue.length > 0) {
@@ -1097,6 +1130,10 @@ export default function ProximaApp() {
     if (taskRetries.length > 0) { try { await syncTasksBatch(taskRetries); for (const t of taskRetries) removeFailedSync("task", t.id); } catch {} }
     for (const f of failed.filter(f => f.kind === "history" && !deletingLogIds.current.has(f.id))) { try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id); } catch {} }
     for (const f of failed.filter(f => f.kind === "setting")) { try { await syncSetting(f.id, f.data); removeFailedSync("setting", f.id); } catch {} }
+    const favoriteScope = getDeviceId();
+    if (failed.some(f => f.kind === "model-favorites" && f.scope === favoriteScope)) {
+      try { await flushQueuedModelFavorites(favoriteScope); } catch {}
+    }
     // Replay any cloud deletes that didn't confirm (bulk-delete dropped mid-flight).
     const delRetries = failed.filter(f => f.kind === "task-delete").map(f => f.id);
     if (delRetries.length > 0) { const dr = await deleteTasksRemote(delRetries); if (dr.ok) { await deleteTasks(delRetries); for (const id of delRetries) removeFailedSync("task-delete", id); } }
@@ -1172,6 +1209,25 @@ export default function ProximaApp() {
     try { const r = await fn(); markWriteEnd(key, true); return r; }
     catch (e) { markWriteEnd(key, false); throw e; }
   }, [markWriteStart, markWriteEnd]);
+
+  async function flushQueuedModelFavorites(scope) {
+    favoriteSyncChainRef.current = favoriteSyncChainRef.current
+      .catch(() => {})
+      .then(async () => {
+        // Read inside the serialized callback. A click may have replaced an older
+        // retry while this callback was waiting, and only the newest snapshot wins.
+        const pending = getFailedSyncs().find(f => f.kind === "model-favorites" && f.scope === scope);
+        if (!pending?.data) return;
+        await syncSetting(MODEL_FAVORITES_SETTING, pending.data, scope);
+        const latest = getFailedSyncs().find(f => f.kind === "model-favorites" && f.scope === scope);
+        if (latest?.data?.updatedAt === pending.data.updatedAt) removeFailedSync("model-favorites", scope);
+      });
+    try {
+      await favoriteSyncChainRef.current;
+    } finally {
+      setFailedSyncCount(getFailedSyncs().length);
+    }
+  }
   const multiImageFileRef = useRef(null);
   const [activeCount, setActiveCount] = useState(0);
   const pollRefs = useRef({});
@@ -1241,14 +1297,22 @@ export default function ProximaApp() {
     return false;
   }
 
-  function handleLogout() {
+  async function handleLogout() {
     if (!confirm("Sign out? Your data will remain safely in the cloud — sign back in any time.")) return;
+    // Let an already-queued favorites write finish while the current account scope
+    // is still active. A failed write remains in the scoped retry queue.
+    try { await favoriteSyncChainRef.current; } catch {}
     try { localStorage.removeItem("proximaai-user"); } catch {}
     resetDeviceIdCache();
     // Clear in-memory state so next login re-fetches fresh
     setIsAuthed(false);
     setTasks([]);
     setLogs([]);
+    setSelectedModels([]);
+    const emptyFavorites = emptyModelFavorites();
+    favoriteModelsRef.current = emptyFavorites;
+    favoriteModelsUpdatedAtRef.current = 0;
+    setFavoriteModelsByType(emptyFavorites);
     setApiKey("");
     setBalance(null);
     setPage("cockpit");
@@ -1267,6 +1331,14 @@ export default function ProximaApp() {
       if (cancelled) return;
 
       // Load local data first (fast)
+      const favoriteScope = getDeviceId();
+      const localFavoriteValue = await getSetting(localModelFavoritesKey(favoriteScope));
+      const localFavoriteSnapshot = readModelFavoritesSetting(localFavoriteValue);
+      if (!cancelled) {
+        favoriteModelsRef.current = localFavoriteSnapshot.byType;
+        favoriteModelsUpdatedAtRef.current = localFavoriteSnapshot.updatedAt;
+        setFavoriteModelsByType(localFavoriteSnapshot.byType);
+      }
       const key = await getSetting("apiKey");
       if (key && !cancelled) {
         setApiKey(key);
@@ -1345,6 +1417,24 @@ export default function ProximaApp() {
           });
         }
 
+        // Favorites are a versioned per-category setting. A queued local write is
+        // always newest; otherwise the latest timestamp wins across devices.
+        const pendingFavoriteWrite = getFailedSyncs().find(f => f.kind === "model-favorites" && f.scope === favoriteScope);
+        const remoteFavoriteValue = remote.settings?.[MODEL_FAVORITES_SETTING];
+        const remoteFavoriteSnapshot = readModelFavoritesSetting(remoteFavoriteValue);
+        let chosenFavoriteSnapshot = localFavoriteSnapshot;
+        if (pendingFavoriteWrite?.data) {
+          chosenFavoriteSnapshot = readModelFavoritesSetting(pendingFavoriteWrite.data);
+        } else if (remoteFavoriteValue != null && (localFavoriteValue == null || remoteFavoriteSnapshot.updatedAt > localFavoriteSnapshot.updatedAt)) {
+          chosenFavoriteSnapshot = remoteFavoriteSnapshot;
+        }
+        favoriteModelsRef.current = chosenFavoriteSnapshot.byType;
+        favoriteModelsUpdatedAtRef.current = chosenFavoriteSnapshot.updatedAt;
+        setFavoriteModelsByType(chosenFavoriteSnapshot.byType);
+        if (pendingFavoriteWrite?.data || (remoteFavoriteValue != null && chosenFavoriteSnapshot === remoteFavoriteSnapshot)) {
+          setSetting(localModelFavoritesKey(favoriteScope), createModelFavoritesSetting(chosenFavoriteSnapshot.byType, chosenFavoriteSnapshot.updatedAt));
+        }
+
         // Merge settings: cloud wins for keys not set locally
         if (remote.settings) {
           if (!key && remote.settings.apiKey) {
@@ -1386,6 +1476,10 @@ export default function ProximaApp() {
           const settingRetries = failed.filter(f => f.kind === "setting");
           for (const s of settingRetries) {
             try { await syncSetting(s.id, s.data); removeFailedSync("setting", s.id); } catch {}
+          }
+          const favoriteRetries = failed.filter(f => f.kind === "model-favorites" && f.scope === favoriteScope);
+          if (favoriteRetries.length > 0) {
+            try { await flushQueuedModelFavorites(favoriteScope); } catch {}
           }
           // Replay deferred bulk-deletes. The bootstrap pull above may have re-fetched
           // these rows from the cloud, so on a confirmed remote delete we also scrub them
@@ -1652,6 +1746,16 @@ export default function ProximaApp() {
   }, [isAuthed]);
 
   const models = MODELS[genType] || [];
+  const categoryFavoriteIds = getCategoryFavoriteIds(favoriteModelsByType, genType);
+  const favoriteModelCount = Object.keys(MODELS).reduce(
+    (total, type) => total + getCategoryFavoriteIds(favoriteModelsByType, type).length,
+    0,
+  );
+  const categoryFavoriteSet = new Set(categoryFavoriteIds);
+  const selectedFavoriteSet = new Set(selectedModels);
+  const categoryFavoritesSelected = categoryFavoriteIds.length > 0
+    && selectedModels.length === categoryFavoriteIds.length
+    && categoryFavoriteIds.every(id => selectedFavoriteSet.has(id));
   const estCost = selectedModels.reduce((sum, id) => {
     const m = models.find(x => x.id === id);
     const count = m?.params?.maxBatchImages > 1 ? Math.min(numImages || 1, m.params.maxBatchImages) : 1;
@@ -1660,6 +1764,38 @@ export default function ProximaApp() {
 
   function toggleModel(id) {
     setSelectedModels(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  function persistModelFavorites(nextByType) {
+    const scope = getDeviceId();
+    const updatedAt = Math.max(Date.now(), favoriteModelsUpdatedAtRef.current + 1);
+    const snapshot = createModelFavoritesSetting(nextByType, updatedAt);
+    favoriteModelsRef.current = snapshot.byType;
+    favoriteModelsUpdatedAtRef.current = updatedAt;
+    setFavoriteModelsByType(snapshot.byType);
+    setSetting(localModelFavoritesKey(scope), snapshot);
+
+    // Queue before the cloud call so a refresh, lost connection, or tab close can
+    // never silently lose the user's latest favorite selection.
+    addFailedSync({ kind: "model-favorites", id: scope, scope, data: snapshot });
+    setFailedSyncCount(getFailedSyncs().length);
+
+    favoriteSyncChainRef.current = favoriteSyncChainRef.current
+      .catch(() => {})
+      .then(() => trackedSync(`model-favorites:${updatedAt}`, async () => {
+        await syncSetting(MODEL_FAVORITES_SETTING, snapshot, scope);
+        const pending = getFailedSyncs().find(f => f.kind === "model-favorites" && f.scope === scope);
+        if (pending?.data?.updatedAt === updatedAt) removeFailedSync("model-favorites", scope);
+        setFailedSyncCount(getFailedSyncs().length);
+        if (pending && pending.data?.updatedAt !== updatedAt) {
+          throw new Error("A newer favorites update is still waiting to sync");
+        }
+      }))
+      .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
+  }
+
+  function toggleFavoriteModel(type, modelId) {
+    persistModelFavorites(toggleFavoriteInMap(favoriteModelsRef.current, type, modelId));
   }
 
   // ─── FILE UPLOAD ───
@@ -2770,44 +2906,54 @@ export default function ProximaApp() {
 
                   {/* Model Selector */}
                   <div className="card">
-                    <div className="card-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span>Models — {selectedModels.length} selected</span>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        {(genType === "image" || genType === "i2i") && selectedModels.some(id => models.find(m => m.id === id)?.params?.maxBatchImages > 1) && (
-                          <button title="Select favorites (Nano Banana Pro, Seedream 5.0 Lite, Qwen 2.0 Pro)" onClick={() => {
-                            const favIds = genType === "image"
-                              ? ["google/nano-banana-pro/text-to-image", "bytedance/seedream-v5.0-lite", "wavespeed-ai/qwen-image-2.0-pro/text-to-image"]
-                              : ["google/nano-banana-2/edit", "google/nano-banana-pro/edit", "bytedance/seedream-v5.0-lite/edit", "wavespeed-ai/qwen-image-2.0-pro/edit"];
-                            const available = favIds.filter(id => models.some(m => m.id === id));
-                            setSelectedModels(available);
-                          }} style={{ background: "transparent", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontSize: 13, color: "var(--warning)", transition: "all 0.2s", lineHeight: 1 }}
-                            onMouseOver={e => { e.currentTarget.style.background = "rgba(245,158,11,0.1)"; }}
-                            onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}>⭐</button>
-                        )}
-                        <button title="Select all" onClick={() => setSelectedModels(models.map(m => m.id))}
-                          style={{ background: selectedModels.length === models.length ? "rgba(99,102,241,0.15)" : "transparent", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontSize: 10, color: "var(--accent)", fontFamily: font, fontWeight: 600, transition: "all 0.2s", lineHeight: 1.4 }}
-                          onMouseOver={e => { e.currentTarget.style.background = "rgba(99,102,241,0.15)"; }}
-                          onMouseOut={e => { e.currentTarget.style.background = selectedModels.length === models.length ? "rgba(99,102,241,0.15)" : "transparent"; }}>ALL</button>
-                        <button title="Deselect all" onClick={() => setSelectedModels([])}
-                          disabled={selectedModels.length === 0}
-                          style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, padding: "2px 7px", cursor: selectedModels.length === 0 ? "default" : "pointer", fontSize: 10, color: selectedModels.length === 0 ? "var(--text-muted)" : "var(--error)", fontFamily: font, fontWeight: 600, transition: "all 0.2s", lineHeight: 1.4, opacity: selectedModels.length === 0 ? 0.4 : 1 }}
-                          onMouseOver={e => { if (selectedModels.length > 0) e.currentTarget.style.background = "rgba(239,68,68,0.1)"; }}
-                          onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}>✕</button>
+                    <div className="card-title model-selector-header">
+                      <span aria-live="polite">Models — {selectedModels.length} selected</span>
+                      <div className="model-actions">
+                        <button type="button"
+                          className={`model-action-btn favorites ${categoryFavoritesSelected ? "active" : ""}`}
+                          title={categoryFavoriteIds.length > 0 ? `Select ${categoryFavoriteIds.length} favorite model${categoryFavoriteIds.length === 1 ? "" : "s"} in ${TYPE_LABELS[genType]}` : `No favorite models saved in ${TYPE_LABELS[genType]}`}
+                          aria-label={categoryFavoriteIds.length > 0 ? `Select all ${categoryFavoriteIds.length} favorite models in ${TYPE_LABELS[genType]}` : `No favorite models in ${TYPE_LABELS[genType]}`}
+                          aria-pressed={categoryFavoritesSelected}
+                          disabled={categoryFavoriteIds.length === 0}
+                          onClick={() => setSelectedModels(categoryFavoriteIds)}>
+                          ★ FAV {categoryFavoriteIds.length}
+                        </button>
+                        <button type="button" className="model-action-btn" title="Select all models"
+                          aria-label={`Select all ${models.length} models in ${TYPE_LABELS[genType]}`}
+                          onClick={() => setSelectedModels(models.map(m => m.id))}>ALL</button>
+                        <button type="button" className="model-action-btn clear" title="Deselect all models"
+                          aria-label={`Deselect all models in ${TYPE_LABELS[genType]}`}
+                          onClick={() => setSelectedModels([])} disabled={selectedModels.length === 0}>NONE</button>
                       </div>
                     </div>
                     <div className="model-grid">
-                      {models.map(m => (
-                        <div key={m.id} className={`model-item ${selectedModels.includes(m.id)?"selected":""}`} onClick={() => toggleModel(m.id)}>
-                          <div className="model-check">{selectedModels.includes(m.id) ? "✓" : ""}</div>
-                          <span className="model-name">{m.name}</span>
-                          <div className="model-meta">
-                            {m.hot && <span className="hot-badge">HOT</span>}
-                            {m.flagship && <span className="hot-badge" style={{ background: "var(--accent)" }}>★</span>}
-                            <span className="model-provider" style={{ background: (PROVIDER_COLORS[m.provider]||"#666")+"22", color: PROVIDER_COLORS[m.provider]||"#aaa" }}>{m.provider}</span>
-                            <span className="model-price">{formatCost(m.price)}</span>
+                      {models.map(m => {
+                        const isSelected = selectedModels.includes(m.id);
+                        const isFavorite = categoryFavoriteSet.has(m.id);
+                        return (
+                          <div key={m.id} className={`model-item ${isSelected ? "selected" : ""}`}>
+                            <button type="button" className="model-choice" aria-pressed={isSelected}
+                              aria-label={`${isSelected ? "Deselect" : "Select"} ${m.name}`}
+                              onClick={() => toggleModel(m.id)}>
+                              <span className="model-check" aria-hidden="true">{isSelected ? "✓" : ""}</span>
+                              <span className="model-name">{m.name}</span>
+                              <span className="model-meta">
+                                {m.hot && <span className="hot-badge">HOT</span>}
+                                {m.flagship && <span className="hot-badge" style={{ background: "var(--accent)" }}>★</span>}
+                                <span className="model-provider" style={{ background: (PROVIDER_COLORS[m.provider]||"#666")+"22", color: PROVIDER_COLORS[m.provider]||"#aaa" }}>{m.provider}</span>
+                                <span className="model-price">{formatCost(m.price)}</span>
+                              </span>
+                            </button>
+                            <button type="button" className={`model-favorite-btn ${isFavorite ? "active" : ""}`}
+                              aria-pressed={isFavorite}
+                              aria-label={`${isFavorite ? "Remove" : "Add"} ${m.name} ${isFavorite ? "from" : "to"} favorites`}
+                              title={`${isFavorite ? "Remove from" : "Add to"} ${TYPE_LABELS[genType]} favorites`}
+                              onClick={() => toggleFavoriteModel(genType, m.id)}>
+                              <span aria-hidden="true">{isFavorite ? "★" : "☆"}</span>
+                            </button>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -3522,7 +3668,7 @@ export default function ProximaApp() {
                     <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: font, lineHeight: 1.8, marginBottom: 10 }}>
                       <div>Saved Outputs: <strong style={{ color: "var(--text-primary)" }}>{storageStats.tasks}</strong></div>
                       <div>Generation Logs: <strong style={{ color: "var(--text-primary)" }}>{storageStats.history}</strong></div>
-                      <div>Favorites: <strong style={{ color: "var(--text-primary)" }}>{storageStats.favorites}</strong></div>
+                      <div>Favorite Models: <strong style={{ color: "var(--text-primary)" }}>{favoriteModelCount}</strong></div>
                       {storageStats.usedMB && <div>Disk Usage: <strong style={{ color: "var(--text-primary)" }}>{storageStats.usedMB} MB</strong></div>}
                     </div>
                   )}
@@ -3553,8 +3699,17 @@ export default function ProximaApp() {
                       if (!confirm("Clear ALL data? This removes everything locally AND from the cloud.\n\nA full safety backup will be created first so you can restore it from the Backups panel.")) return;
                       setSaveStatus("saving");
                       // Full pre-destructive snapshot
+                      try { await favoriteSyncChainRef.current; } catch {}
                       await createBackup("pre-reset", "Before Reset Everything");
                       // Clear local state
+                      const favoriteScope = getDeviceId();
+                      const emptyFavorites = emptyModelFavorites();
+                      favoriteModelsRef.current = emptyFavorites;
+                      favoriteModelsUpdatedAtRef.current = Date.now();
+                      setFavoriteModelsByType(emptyFavorites);
+                      setSelectedModels([]);
+                      removeFailedSync("model-favorites", favoriteScope);
+                      await setSetting(localModelFavoritesKey(favoriteScope), createModelFavoritesSetting(emptyFavorites, favoriteModelsUpdatedAtRef.current));
                       setLogs([]); setTasks([]);
                       savedLogIds.current.clear();
                       savedTaskIds.current.clear();
