@@ -15,7 +15,7 @@ import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent } from "./lib/batchLog.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -2090,7 +2090,9 @@ export default function ProximaApp() {
         const action = pollErrorAction(e);
         if (action === "stop") {
           delete pollRefs.current[task.id];
-          if (e.noKey) setKeyStatus("missing"); // saving a key flips keyBlocked back, and the resume effect restarts this poll
+          // No key, or WaveSpeed rejected it: saving a working key flips keyBlocked back, and the resume effect restarts this poll.
+          const ks = keyStatusAfter(e);
+          if (ks) setKeyStatus(ks);
         }
         else if (action === "retry") schedule(wait() * 2 + Math.random() * 2000);
         else finish(t => ({ ...t, status: "failed", error: e.message || (resumed ? "Poll error (resumed)" : "Poll error"), endTime: Date.now() }));
@@ -2135,8 +2137,10 @@ export default function ProximaApp() {
       try {
         for (const w of orphanWindows(orphans)) items.push(...await listPredictions(w));
       } catch (e) {
-        // Network trouble, a rate limit, a 5xx or a stopped session: ask again on the next pass. Only a refusal of
-        // the lookup itself leaves the grace alone to decide, as before this lookup existed.
+        // Network trouble, a rate limit, a 5xx, a stopped session or a rejected key: ask again on the next pass. Only a
+        // refusal of the lookup itself leaves the grace alone to decide, as before this lookup existed.
+        const ks = keyStatusAfter(e);
+        if (ks) setKeyStatus(ks);
         if (pollErrorAction(e) !== "fail") return;
       }
       const owned = new Set(tasksRef.current.map(t => t.taskId).filter(Boolean));
@@ -2220,6 +2224,20 @@ export default function ProximaApp() {
       window.removeEventListener("online", kick);
     };
   }, [isAuthed, keyBlocked, recoverOrphans]);
+
+  // Back in the app: re-check the key, at most once a minute. It may have been saved or rotated on another device;
+  // a phone whose key was rejected would otherwise stay blocked (and its stopped polls stopped) until a reload.
+  useEffect(() => {
+    if (!isAuthed) return;
+    let last = Date.now();
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || Date.now() - last < 60000) return;
+      last = Date.now();
+      refreshBalance().catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [isAuthed, refreshBalance]);
 
   // Clean up pollUrl from IndexedDB once a task reaches terminal state.
   // Reuses the saveTask call that already runs in the persistence effect —
@@ -2510,7 +2528,8 @@ export default function ProximaApp() {
         } catch (e) {
           // The response was lost, not refused: WaveSpeed may have the task. It stays pending for the history lookup.
           if (sent && submitMayHaveLanded(e)) { setTimeout(recoverOrphans, 2000); return; }
-          if (e.noKey) setKeyStatus("missing");
+          const ks = keyStatusAfter(e);
+          if (ks) setKeyStatus(ks);
           let errMsg = e.message || "Submit failed";
           if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
           if (e.code === 402) errMsg = "Insufficient balance";
@@ -2614,7 +2633,8 @@ export default function ProximaApp() {
         startPolling(newTask, pollUrl, { genType: taskGenType });
       } catch (e) {
         if (sent && submitMayHaveLanded(e)) { setTimeout(recoverOrphans, 2000); return; }
-        if (e.noKey) setKeyStatus("missing");
+        const ks = keyStatusAfter(e);
+        if (ks) setKeyStatus(ks);
         let errMsg = e.message || "Regenerate failed";
         if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
         if (e.code === 402) errMsg = "Insufficient balance";

@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -237,6 +237,23 @@ test("poll error: rate limits, network drops and server errors retry instead of 
 test("poll error: a request timeout or abort (DOMException, which carries a numeric legacy code) retries", () => {
   assert.equal(pollErrorAction(new DOMException("signal timed out", "TimeoutError")), "retry");
   assert.equal(pollErrorAction(new DOMException("The operation was aborted.", "AbortError")), "retry");
+});
+
+// WaveSpeed rejecting the key (401/403 — e.g. the server still holds a revoked key) says nothing about the task. Failing
+// it would lose it for good: "Unauthorized" is not a recoverable error. The loop stops, the key shows as rejected, and
+// saving a working key restarts every stopped poll (the resume effect re-runs when keyBlocked clears).
+test("poll error: a rejected key stops the poll without failing the task", () => {
+  assert.equal(pollErrorAction({ code: 401, message: "Unauthorized" }), "stop");
+  assert.equal(pollErrorAction({ code: 403, message: "Forbidden" }), "stop");
+  assert.equal(keyStatusAfter({ code: 401 }), "invalid");
+  assert.equal(keyStatusAfter({ code: 403 }), "invalid");
+  assert.equal(keyStatusAfter({ code: 400, noKey: true }), "missing");
+  assert.equal(keyStatusAfter({ code: 401, session: true }), null, "a dead session is not the key's fault");
+  assert.equal(keyStatusAfter(new TypeError("Failed to fetch")), null);
+});
+
+test("poll error: a 408 request timeout retries", () => {
+  assert.equal(pollErrorAction({ code: 408 }), "retry");
 });
 
 test("poll error: WaveSpeed refusing the poll (4xx) fails the task", () => {

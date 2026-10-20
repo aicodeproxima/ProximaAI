@@ -149,16 +149,25 @@ export function settlePoll(task, fn) {
 }
 export const isInFlight = (task) => IN_FLIGHT.has(task?.status);
 
-// What a failed poll means: "stop" (signed out / no key saved: the resume effect restarts it later),
-// "retry" (rate limit, network drop, proxy/WaveSpeed 5xx), or "fail" (WaveSpeed refused the poll).
-// A phone that loses signal mid-poll used to fail the task on the first fetch error.
+// What a failed poll means: "stop" (signed out, no key saved, or WaveSpeed rejected the key: the resume effect restarts
+// it once that is fixed), "retry" (rate limit, request timeout, network drop, proxy/WaveSpeed 5xx), or "fail"
+// (WaveSpeed refused the poll itself). A phone that loses signal mid-poll used to fail the task on the first fetch
+// error, and a rejected key failed every running task as "Unauthorized", which no recovery picks up again.
+const isHttp = (e) => !(e instanceof Error) && typeof e?.code === "number";
 export function pollErrorAction(e) {
   if (e?.session || e?.noKey) return "stop";
   // HTTP refusals from api.js are plain objects {code: status}. Anything fetch itself throws is transient: a TypeError
   // on a network drop, or a DOMException TimeoutError/AbortError, whose legacy numeric .code is not an HTTP status.
-  if (e instanceof Error || typeof e?.code !== "number") return "retry";
-  if (e.code === 429 || e.code >= 500) return "retry";
+  if (!isHttp(e)) return "retry";
+  if (e.code === 401 || e.code === 403) return "stop";
+  if (e.code === 408 || e.code === 429 || e.code >= 500) return "retry";
   return "fail";
+}
+// The key status a failed WaveSpeed call implies: "missing" (none saved), "invalid" (WaveSpeed rejected it), or null.
+export function keyStatusAfter(e) {
+  if (e?.noKey) return "missing";
+  if (e?.session || !isHttp(e)) return null;
+  return e.code === 401 || e.code === 403 ? "invalid" : null;
 }
 
 // How often to poll. There is no client-side give-up: a task with a prediction id ends only on WaveSpeed's answer or
