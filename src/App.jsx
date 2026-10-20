@@ -27,27 +27,44 @@ const loginInputStyle = {
 const loginFocus = e => { e.target.style.borderColor = "#6366f1"; e.target.style.boxShadow = "0 0 0 3px rgba(99,102,241,0.1)"; };
 const loginBlur = e => { e.target.style.borderColor = "rgba(99,102,241,0.15)"; e.target.style.boxShadow = "none"; };
 
+// Server answers from unlock_admin_with_backup_code, in words (shared by the sign-in screen and Account settings).
+function backupCodeError(r) {
+  if (r?.reason === "backup_locked") return `Too many wrong backup codes — try again in ${Math.max(1, Math.ceil((r.retry_after || 900) / 60))} min.`;
+  if (r?.reason === "no_backup_code") return "No backup code is set, so a reset needs a database change.";
+  if (r?.reason === "weak_password") return "New password must be at least 8 characters";
+  return `Wrong backup code · ${r?.attempts_left ?? 0} tr${r?.attempts_left === 1 ? "y" : "ies"} left before a 15-minute pause`;
+}
+
+// The backup code is masked like a password but is NOT a password field, so password managers never offer to save it.
+const maskedCodeStyle = (shown) => (shown ? {} : { WebkitTextSecurity: "disc" });
+
 function LoginScreen({ onSignedIn, notice = "" }) {
-  const [mode, setMode] = useState("signin"); // "signin" | "unlock"
+  const [mode, setMode] = useState("signin"); // "signin" | "reset" (forgot password) | "unlock" (locked out)
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [backupCode, setBackupCode] = useState("");
+  const [showCode, setShowCode] = useState(false);
   const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [info, setInfo] = useState(notice);
   const [loading, setLoading] = useState(false);
   const font = `'JetBrains Mono', 'Fira Code', monospace`;
   const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
 
-  async function handleSubmit(e) {
+  // Secrets never outlive the attempt or the mode they were typed in.
+  function clearSecrets() { setPassword(""); setBackupCode(""); setNewPassword(""); setConfirmPassword(""); setShowCode(false); }
+  function switchMode(next) { clearSecrets(); setError(""); setInfo(""); setMode(next); }
+
+  async function handleSignIn(e) {
     e.preventDefault();
     if (!username.trim() || !password || loading) return;
     setLoading(true); setError(""); setInfo("");
     try {
       const r = await signIn(username.trim(), password);
-      if (r.ok) { onSignedIn({ token: r.token, expires_at: r.expires_at, username: r.username }); return; }
+      if (r.ok) { clearSecrets(); onSignedIn({ token: r.token, expires_at: r.expires_at, username: r.username }); return; }
       setPassword("");
-      if (r.reason === "locked") { setMode("unlock"); setError("Sign-in is locked after 3 failed attempts. Unlock it with your backup code."); }
+      if (r.reason === "locked") { switchMode("unlock"); setError("Sign-in is locked after 3 failed attempts. Unlock it with your backup code, or use “Forgot password?” to set a new one."); }
       else if (r.reason === "not_provisioned") setError("This account isn't set up on the server yet.");
       else setError(`Invalid username or password · ${r.attempts_left ?? 0} attempt${r.attempts_left === 1 ? "" : "s"} left before lockout`);
     } catch {
@@ -57,22 +74,24 @@ function LoginScreen({ onSignedIn, notice = "" }) {
     }
   }
 
-  async function handleUnlock(e) {
+  async function handleBackupCode(e) {
     e.preventDefault();
     if (!backupCode.trim() || loading) return;
-    if (newPassword && newPassword.length < 8) { setError("New password must be at least 8 characters"); return; }
+    const resetting = mode === "reset";
+    if (resetting && newPassword.length < 8) { setError("New password must be at least 8 characters"); return; }
+    if (resetting && newPassword !== confirmPassword) { setError("New passwords don't match"); return; }
     setLoading(true); setError(""); setInfo("");
     try {
-      const r = await unlockWithBackupCode(backupCode.trim(), newPassword || null);
+      const r = await unlockWithBackupCode(backupCode.trim(), resetting ? newPassword : null);
       if (r.ok) {
-        setMode("signin"); setBackupCode(""); setNewPassword("");
-        setInfo(r.password_changed ? "Unlocked and password changed — sign in with the new password." : "Unlocked — sign in again.");
+        switchMode("signin");
+        setInfo(r.password_changed
+          ? "Password reset. Every device was signed out — sign in with your new password."
+          : "Unlocked. Every device was signed out — sign in again.");
         return;
       }
-      if (r.reason === "backup_locked") setError(`Too many wrong backup codes — try again in ${Math.max(1, Math.ceil((r.retry_after || 900) / 60))} min.`);
-      else if (r.reason === "no_backup_code") setError("No backup code was ever set, so unlocking needs a database reset.");
-      else if (r.reason === "weak_password") setError("New password must be at least 8 characters");
-      else setError(`Wrong backup code · ${r.attempts_left ?? 0} tr${r.attempts_left === 1 ? "y" : "ies"} left`);
+      setBackupCode(""); setShowCode(false);   // a wrong code is not kept around; the new password stays for a retry
+      setError(backupCodeError(r));
     } catch {
       setError("Can't reach the server — check your connection and try again.");
     } finally {
@@ -81,7 +100,8 @@ function LoginScreen({ onSignedIn, notice = "" }) {
   }
 
   const labelStyle = { display: "block", fontSize: 11, color: "#94a3b8", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 };
-  const canSubmit = mode === "signin" ? (username.trim() && password && !loading) : (backupCode.trim() && !loading);
+  const canSubmit = !loading && (mode === "signin" ? (username.trim() && password)
+    : mode === "reset" ? (backupCode.trim() && newPassword && confirmPassword) : backupCode.trim());
   const buttonStyle = {
     width: "100%", padding: "14px", border: "none", borderRadius: 12,
     fontFamily: font, fontSize: 14, fontWeight: 700, letterSpacing: 0.5,
@@ -93,10 +113,12 @@ function LoginScreen({ onSignedIn, notice = "" }) {
     marginTop: 4, minHeight: 44,
   };
   const linkStyle = { background: "transparent", border: "none", color: "#818cf8", fontFamily: font, fontSize: 12, cursor: "pointer", padding: "10px 4px", minHeight: 44 };
+  const subtitle = mode === "signin" ? "PARALLEL AI GENERATION COCKPIT" : mode === "reset" ? "RESET PASSWORD WITH BACKUP CODE" : "UNLOCK WITH BACKUP CODE";
+  const submitLabel = loading ? "CHECKING…" : mode === "signin" ? "SIGN IN" : mode === "reset" ? "RESET PASSWORD" : "UNLOCK";
 
   return (
     <div style={{ width: "100%", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, boxSizing: "border-box" }}>
-      <form onSubmit={mode === "signin" ? handleSubmit : handleUnlock} style={{
+      <form onSubmit={mode === "signin" ? handleSignIn : handleBackupCode} style={{
         background: "rgba(8,12,25,0.6)",
         border: "1px solid rgba(99,102,241,0.2)",
         borderRadius: 18,
@@ -112,7 +134,7 @@ function LoginScreen({ onSignedIn, notice = "" }) {
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ fontSize: 48, marginBottom: 10, color: "#a78bfa", filter: "drop-shadow(0 0 20px rgba(167,139,250,0.4))" }}>◈</div>
           <div style={{ fontFamily: font, fontSize: 20, fontWeight: 700, color: "#f1f5f9", letterSpacing: 1.5 }}>ProximaAI</div>
-          <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontFamily: font, letterSpacing: 0.5 }}>{mode === "signin" ? "PARALLEL AI GENERATION COCKPIT" : "UNLOCK WITH BACKUP CODE"}</div>
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontFamily: font, letterSpacing: 0.5 }}>{subtitle}</div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -129,32 +151,47 @@ function LoginScreen({ onSignedIn, notice = "" }) {
             </div>
           </>) : (<>
             <div>
-              <label htmlFor="login-backup-code" style={labelStyle}>Backup code</label>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <label htmlFor="login-backup-code" style={{ ...labelStyle, marginBottom: 0 }}>Backup code</label>
+                <button type="button" onClick={() => setShowCode(s => !s)} aria-pressed={showCode} aria-controls="login-backup-code"
+                  style={{ ...linkStyle, padding: "0 4px", fontSize: 11 }}>{showCode ? "Hide" : "Show"}</button>
+              </div>
               <input id="login-backup-code" type="text" value={backupCode} onChange={e => { setBackupCode(e.target.value); setError(""); }}
-                autoFocus autoComplete="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+                autoFocus autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                style={{ ...loginInputStyle, ...maskedCodeStyle(showCode) }} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
-            <div>
-              <label htmlFor="login-new-password" style={labelStyle}>New password (optional, 8+ characters)</label>
-              <input id="login-new-password" type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }}
-                autoComplete="new-password" placeholder="Leave empty to keep the current one" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
-            </div>
+            {mode === "reset" && (<>
+              <div>
+                <label htmlFor="login-new-password" style={labelStyle}>New password (8+ characters)</label>
+                <input id="login-new-password" type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }}
+                  autoComplete="new-password" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+              </div>
+              <div>
+                <label htmlFor="login-confirm-password" style={labelStyle}>Confirm new password</label>
+                <input id="login-confirm-password" type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setError(""); }}
+                  autoComplete="new-password" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+              </div>
+            </>)}
           </>)}
           {info && (
-            <div style={{ fontSize: 12, color: "#22c55e", padding: "10px 14px", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 10, fontFamily: font }}>
+            <div role="status" style={{ fontSize: 12, color: "#22c55e", padding: "10px 14px", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 10, fontFamily: font }}>
               ✓ {info}
             </div>
           )}
           {error && (
-            <div style={{ fontSize: 12, color: "#ef4444", padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 10, fontFamily: font }}>
+            <div role="alert" style={{ fontSize: 12, color: "#ef4444", padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 10, fontFamily: font }}>
               ✗ {error}
             </div>
           )}
-          <button type="submit" disabled={!canSubmit} style={buttonStyle}>
-            {loading ? "CHECKING…" : mode === "signin" ? "SIGN IN" : "UNLOCK"}
-          </button>
-          <button type="button" style={linkStyle} onClick={() => { setMode(mode === "signin" ? "unlock" : "signin"); setError(""); setInfo(""); }}>
-            {mode === "signin" ? "Locked out? Use your backup code" : "← Back to sign in"}
-          </button>
+          <button type="submit" disabled={!canSubmit} style={buttonStyle}>{submitLabel}</button>
+          {mode === "signin" ? (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <button type="button" style={linkStyle} onClick={() => switchMode("reset")}>Forgot password?</button>
+              <button type="button" style={linkStyle} onClick={() => switchMode("unlock")}>Locked out?</button>
+            </div>
+          ) : (
+            <button type="button" style={linkStyle} onClick={() => switchMode("signin")}>← Back to sign in</button>
+          )}
         </div>
 
         <div style={{ textAlign: "center", marginTop: 16, fontSize: 10, color: "#64748b", fontFamily: font, letterSpacing: 0.5 }}>
@@ -278,7 +315,7 @@ function makeBackupCode() {
   return chars.match(/.{4}/g).join("-");
 }
 
-function AccountModal({ onClose, onSaved }) {
+function AccountModal({ onClose, onSaved, onPasswordReset }) {
   // Steps: load → menu → set-email → verify-email → change-username → change-password → change-email-verify-new → done
   const [step, setStep] = useState("load");
   const [creds, setCreds] = useState(null);
@@ -295,6 +332,8 @@ function AccountModal({ onClose, onSaved }) {
   const [pendingVerifyEmail, setPendingVerifyEmail] = useState("");
   const [backupCode, setBackupCodeInput] = useState("");
   const [confirmBackupCode, setConfirmBackupCode] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [showResetCode, setShowResetCode] = useState(false);
   const saveAccount = (fields) => setMyAccount(fields).catch(() => false);
 
   useEffect(() => {
@@ -426,6 +465,24 @@ function AccountModal({ onClose, onSaved }) {
     finally { setBusy(false); setCurrentPassword(""); }
   }
 
+  // Forgot the password while still signed in here: the backup code sets a new one. The server then signs out every
+  // device (this one too), so the app returns to the sign-in screen.
+  async function submitResetWithCode(e) {
+    e.preventDefault();
+    const code = resetCode.trim();
+    if (!code) { setError("Enter your backup code"); return; }
+    if (newPassword.length < 8) { setError("New password must be at least 8 characters"); return; }
+    if (newPassword !== confirmPassword) { setError("New passwords don't match"); return; }
+    setBusy(true); setError("");
+    try {
+      const r = await unlockWithBackupCode(code, newPassword);
+      if (!r?.ok) { setResetCode(""); setShowResetCode(false); setError(backupCodeError(r)); return; }
+      setResetCode(""); setNewPassword(""); setConfirmPassword("");
+      onPasswordReset?.();
+    } catch { setError("Can't reach the server — check your connection and try again."); }
+    finally { setBusy(false); }
+  }
+
   async function submitNewEmail(e) {
     e.preventDefault();
     if (!newEmail.includes("@")) { setError("Enter a valid email"); return; }
@@ -499,6 +556,7 @@ function AccountModal({ onClose, onSaved }) {
               <button disabled={busy} style={btn()} onClick={() => startAction("password")}>Change Password</button>
               <button disabled={busy} style={btn()} onClick={() => startAction("email")}>{creds?.email ? "Change Email" : "Set Email"}</button>
               <button disabled={busy} style={btn()} onClick={() => { setError(""); setCurrentPassword(""); setStep("set-backup"); }}>{creds?.has_backup_code ? "Replace Backup Code" : "Set Backup Code"}</button>
+              {creds?.has_backup_code && <button disabled={busy} style={btn()} onClick={() => { setError(""); setResetCode(""); setShowResetCode(false); setNewPassword(""); setConfirmPassword(""); setStep("reset-with-code"); }}>Forgot Password? Use Backup Code</button>}
               <button style={{ ...btn(), marginTop: 8, background: "transparent" }} onClick={onClose}>Close</button>
             </div>
             <div style={{ marginTop: 18, paddingTop: 12, borderTop: "1px solid rgba(148,163,184,0.15)", textAlign: "center", fontSize: 11, color: "#64748b", letterSpacing: 0.4 }}>
@@ -578,6 +636,29 @@ function AccountModal({ onClose, onSaved }) {
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
               <button type="submit" disabled={busy} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Saving..." : "Save"}</button>
+            </div>
+          </form>
+        )}
+
+        {step === "reset-with-code" && (
+          <form onSubmit={submitResetWithCode}>
+            <div style={title}>Reset Password</div>
+            <div style={subtitle}>For a forgotten password. Your backup code sets a new one and signs out every device, this one included.</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <label htmlFor="acct-reset-code" style={{ ...label, marginBottom: 0 }}>Backup Code</label>
+              <button type="button" onClick={() => setShowResetCode(v => !v)} aria-pressed={showResetCode} aria-controls="acct-reset-code"
+                style={{ background: "transparent", border: "none", color: "#818cf8", fontFamily: font, fontSize: 11, cursor: "pointer", minHeight: 44, padding: "0 4px" }}>{showResetCode ? "Hide" : "Show"}</button>
+            </div>
+            <input id="acct-reset-code" type="text" value={resetCode} onChange={e => { setResetCode(e.target.value); setError(""); }}
+              style={{ ...input, ...maskedCodeStyle(showResetCode) }} autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} autoFocus />
+            <label htmlFor="acct-reset-new-password" style={{ ...label, marginTop: 12 }}>New Password (8+ characters)</label>
+            <input id="acct-reset-new-password" type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} style={input} autoComplete="new-password" />
+            <label htmlFor="acct-reset-confirm-password" style={{ ...label, marginTop: 12 }}>Confirm New Password</label>
+            <input id="acct-reset-confirm-password" type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setError(""); }} style={input} autoComplete="new-password" />
+            {error && <div role="alert" style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button type="button" style={btn()} onClick={() => { setResetCode(""); setNewPassword(""); setConfirmPassword(""); setStep("menu"); }}>Cancel</button>
+              <button type="submit" disabled={busy} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Resetting..." : "Reset Password"}</button>
             </div>
           </form>
         )}
@@ -4032,6 +4113,11 @@ export default function ProximaApp() {
         {showAccountModal && (
           <AccountModal
             onClose={() => setShowAccountModal(false)}
+            onPasswordReset={() => {
+              setShowAccountModal(false);
+              signOutLocal();
+              setSessionNotice("Password reset. Every device was signed out — sign in with your new password.");
+            }}
             onSaved={(msg) => {
               setAccountToast(msg);
               setTimeout(() => setAccountToast(""), 5000);
