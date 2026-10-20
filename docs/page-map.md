@@ -17,7 +17,8 @@ Reusable scripts are in `scripts/browser/`.
 | What | Selector |
 |---|---|
 | Fields | `#login-username`, `#login-password`; submit is the form's `button[type=submit]` ("SIGN IN") |
-| Unlock mode | button text "Locked out? Use your backup code" → `#login-backup-code`, `#login-new-password` |
+| Reset / unlock | under SIGN IN two equal buttons (135×44 at 384): "Forgot password?" → `#login-backup-code` (masked text field, Show/Hide button), `#login-new-password`, `#login-confirm-password`, submit "RESET PASSWORD"; "Locked out?" → `#login-backup-code` only, "UNLOCK". Back: "← Back to sign in" |
+| Account reset (signed in) | Account menu "Forgot Password? Use Backup Code" → `#acct-reset-code`, `#acct-reset-new-password`, `#acct-reset-confirm-password`; success signs every device out |
 | Signed in? | `localStorage["proximaai-session"]` (JSON `{token, expires_at, username}`, 12 h); `proximaai-user` alone no longer signs in |
 | Account modal ids | `#acct-current-password`, `#acct-new-password`, `#acct-confirm-password`, `#acct-new-username`, `#acct-backup-code`, `#acct-type-it-again`, `#acct-email-address`, `#acct-verification-code` |
 Never type the owner's password or key. Server-side checks without signing in: mint a 3-minute token in SQL
