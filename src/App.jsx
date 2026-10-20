@@ -14,7 +14,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems } from "./lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -1841,6 +1841,17 @@ export default function ProximaApp() {
         tombstones: ids?.historyTombstones ?? null, pending: pendingLogs, deleting: deletingLogIds.current, since });
       const rmTasks = new Set(taskPlan.remove), rmLogs = new Set(logPlan.remove);
       const updates = new Map(taskPlan.update.map(u => [u.id, u]));
+
+      // History entries still open here that another device already finished take that outcome first, so the steps
+      // below never close or finish them from this device's stale tasks (batchLog.js takeFinishedFromCloud). The
+      // cloud has them already: stored locally only.
+      const logsFromCloud = takeFinishedFromCloud(logsRef.current, remote.history || []).filter(l => !deletingLogIds.current.has(l.id));
+      if (logsFromCloud.length) {
+        const byId = new Map(logsFromCloud.map(l => [l.id, l]));
+        logsRef.current = logsRef.current.map(l => byId.get(l.id) || l); // closeLogsFor below reads the ref
+        setLogs(prev => prev.map(l => byId.get(l.id) || l));
+        for (const l of logsFromCloud) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
+      }
 
       // Tasks: the cloud's additions + archive updates + outcomes other devices saved, and the server's recorded deletions.
       if (taskPlan.add.length || updates.size || rmTasks.size) {

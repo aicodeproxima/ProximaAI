@@ -47,6 +47,19 @@ export function finishLogs(logs, tasks, now) {
   return out;
 }
 
+// Entries still open here whose cloud copy another device already finished: that outcome wins (merged over the local
+// entry, which keeps fields the cloud row does not store, such as the source audio and video URLs replay uses). A
+// stale local copy would otherwise close or finish the entry from its own out-of-date tasks and overwrite the cloud.
+export function takeFinishedFromCloud(local, cloud) {
+  const byId = new Map(cloud.map(c => [c.id, c]));
+  const out = [];
+  for (const l of local) {
+    const c = isOpenLog(l) ? byId.get(l.id) : null;
+    if (c && !isOpenLog(c) && (c.tasks || []).length) out.push({ ...l, tasks: c.tasks, totalCost: c.totalCost ?? totalOf(c.tasks) });
+  }
+  return out;
+}
+
 // Tasks being deleted (here, by Clear, or because another device deleted them) close their items in open entries with
 // their last known state; one deleted while still running is recorded as removed. Without this the entry waited 48 h
 // for a task that was never coming back. Returns the entries that changed.

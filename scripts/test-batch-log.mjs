@@ -1,6 +1,6 @@
 // Tests for src/lib/batchLog.js — the History entry of a generation batch. Run: node scripts/test-batch-log.mjs
 import assert from "node:assert/strict";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems } from "../src/lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud } from "../src/lib/batchLog.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -82,6 +82,18 @@ test("a closed entry follows a task that later turns out completed (result from 
   assert.deepEqual(finishLogs([fixed], [task("a", { status: "completed", outputs: ["https://cdn/a.png"] })], NOW), [], "settles");
   const stillFailed = finishLogs([closed], [task("a", { status: "failed", error: "Expired" })], NOW);
   assert.deepEqual(stillFailed, [], "a failure that stays a failure changes nothing");
+});
+
+// Regression review wf_9ad3cd3b-5c8 #3: another device finished the batch (and the entry) while this one was frozen;
+// a stale local copy must take that outcome instead of closing the entry from its own stale tasks and overwriting it.
+test("an entry still open here takes the finished outcome another device saved, keeping local-only fields", () => {
+  const open = log(batchLogItems([task("a"), task("b")]), { sourceAudioUrl: "https://cdn/voice.mp3" });
+  const cloudDone = { ...log([{ id: "a", status: "completed", cost: 0.04, outputs: ["x"] }, { id: "b", status: "completed", cost: 0.04, outputs: ["y"] }]), totalCost: 0.08 };
+  const [merged] = takeFinishedFromCloud([open], [cloudDone]);
+  assert.deepEqual([merged.tasks.map(i => i.status), merged.totalCost, merged.sourceAudioUrl], [["completed", "completed"], 0.08, "https://cdn/voice.mp3"]);
+  assert.deepEqual(takeFinishedFromCloud([cloudDone], [open]), [], "a finished entry here never takes an open cloud copy");
+  assert.deepEqual(takeFinishedFromCloud([{ ...cloudDone, totalCost: 0.04 }], [cloudDone]), [], "both finished: no ping-pong");
+  assert.deepEqual(takeFinishedFromCloud([open], []), []);
 });
 
 test("queue bookkeeping: an upload clears only the version it sent", () => {
