@@ -733,6 +733,9 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 /* Lightbox */
 .lightbox { position: fixed; inset: 0; background: rgba(5,8,22,0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 1000; display: flex; align-items: center; justify-content: center; cursor: pointer; animation: fadeIn 0.25s ease; }
 .lightbox img, .lightbox video { max-width: 92vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
+.lightbox-close { position: fixed; top: max(16px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right)); z-index: 1001; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,0.3); border-radius: 50%; background: rgba(8,12,25,0.88); color: white; font-size: 28px; line-height: 1; cursor: pointer; box-shadow: 0 4px 20px rgba(0,0,0,0.45); }
+.lightbox-close:hover { background: var(--accent); border-color: var(--accent); }
+.lightbox-close:focus-visible { outline: 3px solid white; outline-offset: 3px; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
@@ -1082,6 +1085,12 @@ export default function ProximaApp() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [logs, setLogs] = useState([]);
   const [lightbox, setLightbox] = useState(null);
+  useEffect(() => {
+    if (!lightbox) return;
+    const closeOnEscape = (event) => { if (event.key === "Escape") setLightbox(null); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [lightbox]);
   const [defaultImageRes, setDefaultImageRes] = useState("1k");
   const [defaultVideoDur, setDefaultVideoDur] = useState(5);
   const [galleryTabState, setGalleryTabState] = useState("completed");
@@ -3887,6 +3896,8 @@ export default function ProximaApp() {
           const isVid = lbUrl?.includes(".mp4") || lbUrl?.includes("video");
           return (
             <div className="lightbox" onClick={() => setLightbox(null)}>
+              <button type="button" className="lightbox-close" aria-label="Close full-screen preview" title="Close preview"
+                autoFocus onClick={e => { e.stopPropagation(); setLightbox(null); }}>×</button>
               <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "94vw", maxHeight: "94vh" }}>
                 {isVid
                   ? <video src={lbUrl} controls autoPlay muted style={{ maxWidth: "92vw", maxHeight: lbTask ? "70vh" : "92vh", borderRadius: 10 }} />
