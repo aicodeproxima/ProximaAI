@@ -2,7 +2,7 @@
 // Optimized for: tasks with outputs, generation history, settings, favorites, presets
 // Falls back to localStorage if IndexedDB unavailable.
 
-import { planResume, rememberReleased, liveReleased } from "./taskResume.js";
+import { planResume, rememberReleased, liveReleased, rememberClaimants, liveClaimants, dropClaimants } from "./taskResume.js";
 
 const DB_NAME = "proximaai";
 const DB_VERSION = 3;
@@ -433,6 +433,18 @@ export function releasePredictions(ids) {
   try { localStorage.setItem(RELEASED_KEY, JSON.stringify(rememberReleased(readReleased(), list, Date.now()))); } catch {}
 }
 export const releasedPredictions = () => liveReleased(readReleased(), Date.now());
+
+// Tasks cancelled or cleared before their submit gave a prediction id: the lost-submit lookup pairs them with their
+// prediction so no other task adopts it (taskResume.js planOrphans `claimants`).
+const CLAIMANTS_KEY = "proximaai-orphan-claimants";
+const readClaimants = () => { try { return JSON.parse(localStorage.getItem(CLAIMANTS_KEY) || "{}") || {}; } catch { return {}; } };
+const writeClaimants = (m) => { try { localStorage.setItem(CLAIMANTS_KEY, JSON.stringify(m)); } catch {} };
+export function recordClaimants(tasks) {
+  const list = (tasks || []).filter(t => t?.status === "pending" && !t.taskId);
+  if (list.length) writeClaimants(rememberClaimants(readClaimants(), list, Date.now()));
+}
+export const storedClaimants = () => liveClaimants(readClaimants(), Date.now());
+export function resolveClaimants(ids) { if (ids?.length) writeClaimants(dropClaimants(readClaimants(), ids)); }
 
 const FAILED_KEY = "proximaai-failed-syncs";
 

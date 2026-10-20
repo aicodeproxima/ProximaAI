@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, rememberReleased, liveReleased, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, rememberReleased, liveReleased, rememberClaimants, liveClaimants, dropClaimants, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -352,7 +352,8 @@ test("no match: fails the task once the grace has passed, keeps waiting before",
   assert.equal(late.fail.length, 1);
   assert.equal(late.fail[0].status, "failed");
   assert.match(late.fail[0].error, /before WaveSpeed/i);
-  assert.deepEqual(planOrphans([orphan("o", { startTime: NOW - 10_000 })], [], new Set(), NOW), { adopt: [], fail: [] });
+  const early = planOrphans([orphan("o", { startTime: NOW - 10_000 })], [], new Set(), NOW);
+  assert.deepEqual([early.adopt, early.fail], [[], []]);
 });
 
 // Cancel while the submit is on the wire: its response must not turn the cancelled task back into a running one.
@@ -385,6 +386,32 @@ test("two same-model orphans keep their own predictions when the device clock ru
     const { adopt } = planOrphans([b, a], items, new Set(), NOW);
     assert.deepEqual(adopt.map(t => [t.id, t.taskId]), [["A", "PA"], ["B", "PB"]], `clock ${skew} ms ahead`);
   }
+});
+
+// Round-3 review wf_393b4699-2d7 #1: a task cancelled while its submit was on the wire, whose response never came, has no
+// prediction id to release. It stays a claimant: paired in time order like an orphan, never adopted. Only while there are
+// at least as many predictions as tasks (otherwise one of them never reached WaveSpeed, and live tasks come first).
+const claimant = (id, startTime, extra = {}) => ({ id, modelId: "bytedance/seedream-v4", startTime, ...extra });
+test("a cancelled submit's prediction goes to its claimant, not to the next same-model lost submit", () => {
+  const a = claimant("A", NOW - 68_000), b = orphan("B", { startTime: NOW - 60_000 });
+  const items = [item("PA", { created_at: new Date(NOW - 67_800).toISOString() }), item("PB", { created_at: new Date(NOW - 59_700).toISOString() })];
+  const r = planOrphans([b], items, new Set(), NOW, [a]);
+  assert.deepEqual(r.adopt.map(t => [t.id, t.taskId]), [["B", "PB"]]);
+  assert.deepEqual(r.claimed, ["PA"]);
+  assert.deepEqual(r.resolved, ["A"]);
+});
+test("when the cancelled submit never reached WaveSpeed, the live task still gets its own prediction", () => {
+  const r = planOrphans([orphan("B", { startTime: NOW - 60_000 })], [item("PB", { created_at: new Date(NOW - 59_700).toISOString() })],
+    new Set(), NOW, [claimant("A", NOW - 68_000)]);
+  assert.deepEqual(r.adopt.map(t => t.taskId), ["PB"]);
+  assert.deepEqual(r.claimed, []);
+});
+test("claimants are kept an hour and dropped once resolved", () => {
+  let m = rememberClaimants({}, [claimant("A", NOW - 1000), { id: "noModel", startTime: NOW }], NOW);
+  assert.deepEqual(liveClaimants(m, NOW + 59 * 60_000).map(c => c.id), ["A", "noModel"]);
+  assert.deepEqual(liveClaimants(m, NOW + 61 * 60_000), []);
+  m = dropClaimants(m, ["A"]);
+  assert.deepEqual(liveClaimants(m, NOW).map(c => c.id), ["noModel"]);
 });
 
 test("a released leftover from just before is skipped by ownership, not by timing", () => {

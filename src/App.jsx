@@ -8,7 +8,7 @@ import { submitTask, pollResult, listPredictions, checkBalance, uploadMedia, API
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, releasePredictions, releasedPredictions, sentVersion } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants } from "./lib/storage.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
@@ -2153,6 +2153,7 @@ export default function ProximaApp() {
   function keepLateSubmitId(id, predictionId) {
     if (!predictionId) return;
     releasePredictions([predictionId]);
+    resolveClaimants([id]); // its prediction is known now: as a claimant it would take a sibling's instead
     const cur = tasksRef.current.find(t => t.id === id);
     if (!cur || cur.taskId) return;
     setTasks(prev => prev.map(t => t.id === id && !t.taskId ? { ...t, taskId: predictionId } : t));
@@ -2168,9 +2169,12 @@ export default function ProximaApp() {
     if (!orphans.length) return;
     orphanLookupRunning.current = true;
     try {
+      // Tasks cancelled before their submit gave an id pair with their own prediction too (never adopted).
+      const claimants = storedClaimants();
+      const windows = orphanWindows([...orphans, ...claimants]);
       let items = [];
       try {
-        for (const w of orphanWindows(orphans)) items.push(...await listPredictions(w));
+        for (const w of windows) items.push(...await listPredictions(w));
       } catch (e) {
         // Network trouble, a rate limit, a 5xx, a stopped session or a rejected key: ask again on the next pass. Only a
         // refusal of the lookup itself leaves the grace alone to decide, as before this lookup existed.
@@ -2181,13 +2185,15 @@ export default function ProximaApp() {
       // Owned = predictions any task holds: here, on another device (its row may not have reached this one yet), or
       // released by a delete or a cancel. Without the cloud's answer nothing is decided this pass.
       const cloudOwned = [];
-      for (const w of orphanWindows(orphans)) {
+      for (const w of windows) {
         const ids = await pullTaskIdsInWindow(w.after - ORPHAN_GRACE_MS, w.before);
         if (!ids) return;
         cloudOwned.push(...ids);
       }
       const owned = new Set([...tasksRef.current.map(t => t.taskId).filter(Boolean), ...releasedPredictions(), ...cloudOwned]);
-      const { adopt, fail } = planOrphans(orphans, items, owned, Date.now());
+      const { adopt, fail, claimed, resolved } = planOrphans(orphans, items, owned, Date.now(), claimants);
+      releasePredictions(claimed);
+      resolveClaimants(resolved);
       const decided = new Map([...adopt, ...fail].map(t => [t.id, t]));
       if (!decided.size) return;
       // Only a task still waiting takes the outcome (not one cancelled while the lookup ran).
@@ -2611,6 +2617,9 @@ export default function ProximaApp() {
   }
 
   const cancelTask = useCallback((taskId) => {
+    // A submit without a prediction id yet may still land: the task stays a claimant, so no other lost submit of the
+    // same model adopts its result (taskResume.js planOrphans).
+    recordClaimants([tasksRef.current.find(t => t.id === taskId)]);
     // Removing the timer also ends a loop whose request is in flight (startPolling checks it after the await).
     if (pollRefs.current[taskId]) clearTimeout(pollRefs.current[taskId]);
     delete pollRefs.current[taskId];
@@ -4179,7 +4188,7 @@ export default function ProximaApp() {
                       if (!confirm("Clear all saved outputs? (local + cloud)\n\nA safety backup will be created first so you can restore it from the Backups panel.")) return;
                       setSaveStatus("saving");
                       await createBackup("pre-clear-outputs", "Before Clear Outputs");
-                      releasePredictions(tasksRef.current.map(t => t.taskId));
+                      releasePredictions(tasksRef.current.map(t => t.taskId)); recordClaimants(tasksRef.current);
                       closeLogsFor(tasksRef.current);
                       setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
                       getStorageStats().then(s => setStorageStats(s));
@@ -4202,7 +4211,7 @@ export default function ProximaApp() {
                       setSelectedModels([]);
                       removeFailedSync("model-favorites", favoriteScope);
                       await setSetting(localModelFavoritesKey(favoriteScope), createModelFavoritesSetting(emptyFavorites, favoriteModelsUpdatedAtRef.current));
-                      releasePredictions(tasksRef.current.map(t => t.taskId));
+                      releasePredictions(tasksRef.current.map(t => t.taskId)); recordClaimants(tasksRef.current);
                       setLogs([]); setTasks([]);
                       savedLogIds.current.clear();
                       savedTaskIds.current.clear();

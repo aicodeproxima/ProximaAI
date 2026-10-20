@@ -100,26 +100,57 @@ export function orphanWindows(orphans) {
 // Matches lost submits to history items: same model, created inside the task's submit window, not owned by another
 // task. Oldest task takes the oldest match, so a batch of the same model gets one prediction each. `items` must be
 // from a lookup that answered; a task without a match fails once ORPHAN_GRACE_MS has passed.
-export function planOrphans(orphans, items, owned, now) {
+// `claimants`: tasks cancelled (or cleared) while their submit had no prediction id yet ({id, modelId, startTime}). A
+// claimant pairs in time order like an orphan but is never adopted: its prediction is returned in `claimed` (to
+// release) and the claimant in `resolved` (to drop). Claimants of a model take part only while that model has at least
+// as many predictions in the window as tasks; with fewer, one of them never reached WaveSpeed, and live tasks come
+// first rather than lose their own result to a submit that may never have landed.
+export function planOrphans(orphans, items, owned, now, claimants = []) {
   // created_at carries nanoseconds ("2025-05-19T06:09:15.948268264Z"); trimmed to ms so every engine parses it.
   const pool = items
     .map(i => ({ i, at: Date.parse(String(i?.created_at || "").replace(/(\.\d{3})\d+/, "$1")) }))
     .filter(x => x.i?.id && !owned.has(x.i.id) && Number.isFinite(x.at))
     .sort((a, b) => a.at - b.at);
-  const used = new Set(), adopt = [], fail = [];
-  const sameModel = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
-  for (const t of [...orphans].sort((a, b) => a.startTime - b.startTime)) {
-    // Oldest orphan takes the oldest fit: right under any uniform clock skew between this device and WaveSpeed (a
-    // "prefer created after the start" rule swapped same-model siblings when the device clock ran ahead). Leftovers of
-    // deleted or cancelled tasks never get here: they are in `owned` (released ids, cloud ids).
-    const hit = pool.find(x => !used.has(x.i.id) && sameModel(x.i.model, t.modelId)
-      && x.at >= t.startTime - LOOKUP_SKEW_MS && x.at <= t.startTime + ORPHAN_GRACE_MS);
-    if (hit) {
-      used.add(hit.i.id);
-      adopt.push({ ...t, status: "processing", taskId: hit.i.id, pollUrl: hit.i.urls?.get || pollUrlFor({ taskId: hit.i.id }) });
-    } else if (now - t.startTime > ORPHAN_GRACE_MS) fail.push(failTask(t, now, UNSUBMITTED_ERROR));
+  const used = new Set(), adopt = [], fail = [], claimed = [], resolved = [];
+  const model = (m) => String(m || "").toLowerCase();
+  const inWindow = (x, t) => x.at >= t.startTime - LOOKUP_SKEW_MS && x.at <= t.startTime + ORPHAN_GRACE_MS;
+  const groups = new Map();
+  for (const [t, claim] of [...orphans.map(t => [t, false]), ...claimants.map(c => [c, true])]) {
+    const k = model(t.modelId);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push({ t, claim });
   }
-  return { adopt, fail };
+  for (const [k, parts] of groups) {
+    const fits = pool.filter(x => model(x.i.model) === k && parts.some(p => inWindow(x, p.t)));
+    const withClaimants = fits.length >= parts.length;
+    // Oldest takes the oldest fit: right under any uniform clock skew between this device and WaveSpeed (a "prefer
+    // created after the start" rule swapped same-model siblings when the device clock ran ahead). Leftovers of deleted
+    // tasks are in `owned`; cancelled ones without an id are claimants.
+    for (const { t, claim } of parts.sort((a, b) => a.t.startTime - b.t.startTime)) {
+      if (claim && !withClaimants) continue;
+      const hit = fits.find(x => !used.has(x.i.id) && inWindow(x, t));
+      if (hit) used.add(hit.i.id);
+      if (claim) { if (hit) { claimed.push(hit.i.id); resolved.push(t.id); } continue; }
+      if (hit) adopt.push({ ...t, status: "processing", taskId: hit.i.id, pollUrl: hit.i.urls?.get || pollUrlFor({ taskId: hit.i.id }) });
+      else if (now - t.startTime > ORPHAN_GRACE_MS) fail.push(failTask(t, now, UNSUBMITTED_ERROR));
+    }
+  }
+  return { adopt, fail, claimed, resolved };
+}
+
+// Claimants kept across reloads, as {taskId: {modelId, startTime, at}}; an hour, like released ids.
+export function rememberClaimants(map, tasks, now) {
+  const out = {};
+  for (const [id, c] of Object.entries(map || {})) if (now - c.at <= RELEASED_TTL_MS) out[id] = c;
+  for (const t of tasks) if (t?.id) out[t.id] = { modelId: t.modelId, startTime: t.startTime, at: now };
+  return out;
+}
+export const liveClaimants = (map, now) => Object.entries(map || {}).filter(([, c]) => now - c.at <= RELEASED_TTL_MS)
+  .map(([id, c]) => ({ id, modelId: c.modelId, startTime: c.startTime }));
+export function dropClaimants(map, ids) {
+  const out = { ...(map || {}) };
+  for (const id of ids) delete out[id];
+  return out;
 }
 
 // "completed" | "failed" | "gone" (purged, never coming back) | "running" (poll again).
