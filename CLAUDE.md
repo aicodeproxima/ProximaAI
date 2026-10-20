@@ -9,7 +9,11 @@ Auto-loaded when any Claude session works in this repo.
   - Storage bucket: `generations` (manual per-task archive via ☁ button)
   - pg_cron job `auto-backup-2day` runs every 2 days
 - Client-side triple-layer persistence: React state → IndexedDB → Supabase
-- Auth: Supabase-stored creds + email OTP verification (creds scoped under device_id=`_account`)
+- Auth (since 2026-10-20): server-side sign-in via the `verify_admin` RPC (bcrypt in `app_secrets`), returning a
+  12-hour HMAC session token (`src/lib/session.js`). 3 failed sign-ins lock it; the backup code (Settings →
+  Account) unlocks it. Password/username/backup-code changes need the current password. Email OTP remains a UI step.
+- WaveSpeed key: only in `user_secrets` (server). All WaveSpeed calls go through `/api/wavespeed-v2` (`api/ws-proxy.ts`)
+  with header `X-Proxima-Session`; the proxy adds the key. The browser never stores or syncs it.
 - Theme system: `src/lib/{themes,useTheme,BackgroundLayer}.{js,jsx}` (ported from
   `C:\Users\aicod\Projects\templates\mission-control-themes`)
 
@@ -59,8 +63,8 @@ tests on the live URL. User's primary device is a 6.7" iPhone Pro Max (19.5:9).
 
 ## Architectural decisions already made — don't relitigate
 - Separate Supabase tables per data type (not a generic `user_data` KV store)
-- Device scope = username (`user:admin`, `user:Steph101`) so creds can change
-  without moving data; `_account` scope holds global login creds
+- Device scope = username (`user:admin`, `user:Steph101`); a rename moves every row server-side
+  (`rename_my_account`). Login creds live in `app_secrets` (no browser access), not in `settings`
 - Failed-sync retry queue in localStorage (not IDB — tiny records, faster)
 - Cloud archive is **manual per-generation** via ☁ button on each task card
   (user explicitly removed auto-on-completion)

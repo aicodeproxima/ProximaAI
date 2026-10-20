@@ -24,7 +24,7 @@ Reusable scripts are in `scripts/browser/`.
 | Select a model | click `item.querySelector('input,button,[role=checkbox]') \|\| item.firstElementChild` — clicking the row container does nothing |
 | Prompt | `textarea[placeholder^="Describe"]` — React-controlled: use the native value setter + `input` event |
 | Batch count | the `.settings-row` whose `label` is "Batch" → its `select` (native setter + `change`) |
-| Generate | `.gen-btn` (disabled until a model, a prompt and an API key are set) |
+| Generate | `.gen-btn` (disabled until a model and a prompt are set, and while the server reports no/rejected key) |
 | Running / done | `.task-progress-fill` exists while running; `.task-status` reads DONE / FAILED / PROCESSING |
 | Batch position badge | `.task-batch-index` ("2/4") inside `.task-model` |
 
@@ -39,8 +39,9 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
 
 ## Money
 - `.balance-pill` shows the WaveSpeed balance rounded to cents.
-- Raw balance (6 decimals) from inside the page: `fetch("/wavespeed/api/v3/balance", { headers: { Authorization:
-  "Bearer " + key } })` with `key` from IndexedDB `proximaai` → store `settings` → `get("apiKey")`. Never print the key.
+- Raw balance (6 decimals) from inside a signed-in page: `fetch("/api/wavespeed-v2/api/v3/balance", { headers:
+  { "X-Proxima-Session": JSON.parse(localStorage["proximaai-session"]).token } })`. The key never reaches the browser
+  (since 2026-10-20); proxy refusals carry `X-Proxima-Auth: session | no-key`.
 - Cheapest live tests: Flux Schnell $0.003/image (native batch), P-Image $0.005/image (fan-out batch),
   Nano Banana 2.1 $0.036. Billing check 2026-10-20: estimate = logged cost = actual charge for both batch kinds.
 - Prices follow the settings sent (`src/lib/pricing.js`). Billing check 2026-10-20 (bundle BptSS0uN), estimate =
