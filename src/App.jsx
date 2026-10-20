@@ -14,6 +14,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -1924,21 +1925,35 @@ export default function ProximaApp() {
     };
   }, [isAuthed, reconcileWithCloud]);
 
-  // Save NEW logs to IndexedDB (and sync to Supabase) — skip already-saved entries
+  // Stores a History entry locally and in the cloud, queued first like every cloud write. A confirmed upload clears
+  // only the version it sent: a batch's open entry can resolve after its finished version replaced it in the queue.
+  const persistLog = useCallback((entry) => {
+    savedLogIds.current.add(entry.id);
+    addHistoryEntry(entry);
+    addFailedSync({ kind: "history", id: entry.id, data: entry });
+    setFailedSyncCount(getFailedSyncs().length);
+    trackedSync(`history-${entry.id}${isOpenLog(entry) ? "-open" : ""}`, () => syncHistoryEntry(entry))
+      .then(() => { removeFailedSync("history", entry.id, e => sameLogContent(e.data, entry)); setFailedSyncCount(getFailedSyncs().length); })
+      .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
+  }, [trackedSync]);
+
+  // Save NEW logs to IndexedDB (and sync to Supabase): every entry not saved yet, not only the newest (two batches
+  // logged in one render used to leave the second unsaved).
   useEffect(() => {
-    if (logs.length > 0) {
-      const latest = logs[0];
-      if (latest?.id && !savedLogIds.current.has(latest.id) && !deletingLogIds.current.has(latest.id)) {
-        savedLogIds.current.add(latest.id);
-        addHistoryEntry(latest);
-        addFailedSync({ kind: "history", id: latest.id, data: latest });
-        setFailedSyncCount(getFailedSyncs().length);
-        trackedSync(`history-${latest.id}`, () => syncHistoryEntry(latest))
-          .then(() => { removeFailedSync("history", latest.id); setFailedSyncCount(getFailedSyncs().length); })
-          .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
-      }
+    for (const l of logs) {
+      if (l?.id && !savedLogIds.current.has(l.id) && !deletingLogIds.current.has(l.id)) persistLog(l);
     }
-  }, [logs]);
+  }, [logs, persistLog]);
+
+  // A batch's entry is written when it starts and finished here once all its tasks have finished, in this tab, after
+  // a reload or with results another device saved (rules in batchLog.js).
+  useEffect(() => {
+    const done = finishLogs(logs, tasks, Date.now()).filter(l => !deletingLogIds.current.has(l.id));
+    if (!done.length) return;
+    const byId = new Map(done.map(l => [l.id, l]));
+    setLogs(prev => prev.map(l => byId.get(l.id) || l));
+    for (const l of done) persistLog(l);
+  }, [tasks, logs, persistLog]);
 
   // Track active count
   useEffect(() => {
@@ -2441,6 +2456,14 @@ export default function ProximaApp() {
     setTasks(prev => [...newTasks, ...prev]);
     // Stored before the submit fires: a refresh or a phone leaving the app mid-submit used to lose the task entirely.
     saveTasks(newTasks);
+    // The History entry too; it is finished with every outcome once all its tasks have finished (batchLog.js).
+    setLogs(prev => [{
+      id: batchId, timestamp: Date.now(), prompt, negPrompt, genType,
+      models: newTasks.map(t => t.modelName), resolution, duration, seed, aspectRatio,
+      sourceImageUrl, sourceImageUrls: sourceImageUrls.length > 0 ? [...sourceImageUrls] : [],
+      sourceAudioUrl, sourceVideoUrl, endFrameUrl, refVideoUrl, numImages,
+      tasks: batchLogItems(newTasks), totalCost: 0,
+    }, ...prev]);
 
     // Fire all in parallel
     for (const task of newTasks) {
@@ -2506,19 +2529,7 @@ export default function ProximaApp() {
             isGeneratingRef.current = false;
             setIsGenerating(false);
           }
-          // Log the batch
-          const batch = prev.filter(t => t.batchId === batchId);
-          if (batch.length > 0) {
-            const logEntry = {
-              id: batchId, timestamp: Date.now(), prompt, negPrompt, genType,
-              models: batch.map(t => t.modelName), resolution, duration, seed, aspectRatio,
-              sourceImageUrl, sourceImageUrls: sourceImageUrls.length > 0 ? [...sourceImageUrls] : [],
-              sourceAudioUrl, sourceVideoUrl, endFrameUrl, refVideoUrl, numImages,
-              tasks: batch.map(t => ({ model: t.modelName, status: t.status, wallClockMs: t.wallClockMs, cost: t.price, outputs: t.outputs, error: t.error })),
-              totalCost: batch.reduce((s, t) => s + (t.status === "completed" ? t.price : 0), 0)
-            };
-            setLogs(prev => [logEntry, ...prev]);
-          }
+          // (The batch's History entry is finished by the effect over tasks, which also runs after a reload.)
           // Refresh balance
           refreshBalance().catch(() => {});
         }
