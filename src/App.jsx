@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useReducer, memo } from "reac
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload, getEffectiveImageBatchCount, getImageBatchLimit, planImageBatchRequests } from "./lib/payloadBuilder.js";
 import { quoteRequest, requestCost } from "./lib/pricing.js";
+import { probeMediaDuration } from "./lib/mediaDuration.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
@@ -1086,6 +1087,23 @@ export default function ProximaApp() {
   const [sourceAudioStatus, setSourceAudioStatus] = useState("");
   const [sourceVideoUrl, setSourceVideoUrl] = useState("");
   const [sourceVideoStatus, setSourceVideoStatus] = useState("");
+  // Input media URL -> seconds (null = unreadable). Models priced by input length (get_duration) need it.
+  const [mediaDurations, setMediaDurations] = useState({});
+  const mediaDurationsRef = useRef(mediaDurations);
+  mediaDurationsRef.current = mediaDurations;
+  const probedMediaRef = useRef(new Set());
+  useEffect(() => {
+    const urls = [genType === "v2v" ? sourceImageUrl : "", sourceVideoUrl, sourceAudioUrl, refVideoUrl]
+      .map(url => url?.trim() || "").filter(url => /^https?:\/\/\S+$/.test(url) && !probedMediaRef.current.has(url));
+    if (urls.length === 0) return;
+    const timer = setTimeout(() => { // pasted URLs change per keystroke: measure once typing settles
+      for (const url of urls) {
+        probedMediaRef.current.add(url);
+        probeMediaDuration(url).then(seconds => setMediaDurations(prev => ({ ...prev, [url]: seconds })));
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [genType, sourceImageUrl, sourceVideoUrl, sourceAudioUrl, refVideoUrl]);
   const [uploadStatus, setUploadStatus] = useState(""); // "" | "uploading" | "done" | "error"
   const [testStatus, setTestStatus] = useState(null); // null | "testing" | {ok, msg}
   const fileInputRef = useRef(null);
@@ -1919,7 +1937,7 @@ export default function ProximaApp() {
       optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl,
       actualRes: actualResOpt?.label || null, actualDur
     };
-    const quote = quoteRequest(model, buildPayload(model, taskUserSettings(task), genType), { imagesPerRequest });
+    const quote = quoteRequest(model, buildPayload(model, taskUserSettings(task), genType), { imagesPerRequest, mediaDuration: url => mediaDurations[url] });
     task.price = quote.cost;
     return { task, quote };
   }
@@ -2258,7 +2276,7 @@ export default function ProximaApp() {
     const regenType = newTask.genType || genType;
     const regenModel = (MODELS[regenType] || []).find(m => m.id === newTask.modelId);
     if (regenModel?.params) {
-      newTask.price = requestCost(regenModel, buildPayload(regenModel, taskUserSettings(newTask, regenType), regenType), { imagesPerRequest: newTask.numImages || 1 });
+      newTask.price = requestCost(regenModel, buildPayload(regenModel, taskUserSettings(newTask, regenType), regenType), { imagesPerRequest: newTask.numImages || 1, mediaDuration: url => mediaDurationsRef.current[url] });
     }
     setTasks(prev => [newTask, ...prev]);
 
