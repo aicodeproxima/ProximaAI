@@ -965,7 +965,8 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 
   .results-grid { grid-template-columns: 1fr; gap: 14px; }
 
-  .log-row { grid-template-columns: 1fr 60px 50px; gap: 6px; padding: 12px 14px; font-size: 13px; }
+  .log-row { grid-template-columns: minmax(0, 1fr) 128px 50px; gap: 6px; padding: 12px 14px; font-size: 13px; }
+  .log-models { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* fixed column: "12 models · 48 images" fits at 384, rows stay aligned */
   .log-row > :nth-child(1) { display: none; }
   .log-row > :nth-child(5), .log-row > :nth-child(6) { display: none; }
   .log-header > :nth-child(1) { display: none; }
