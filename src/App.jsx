@@ -3844,7 +3844,9 @@ export default function ProximaApp() {
 
                 <div className="setting-group">
                   <div className="setting-label">WaveSpeed API Key</div>
-                  <input type="password" className="setting-input" autoComplete="off"
+                  {/* Masked text field, not type=password: Chrome would otherwise offer to save the API key in its password manager. */}
+                  <input id="settings-wavespeed-key" type="text" className="setting-input" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                    style={maskedCodeStyle(false)} aria-label="WaveSpeed API key"
                     placeholder={keyStatus === "ok" ? "Saved on the server — paste a new key to replace it" : "Paste your WaveSpeed API key..."}
                     value={keyInput} onChange={e => { setKeyInput(e.target.value); setTestStatus(null); }} />
                   <div className="setting-hint">Get your key at <span style={{ color: "var(--accent)" }}>wavespeed.ai/settings</span>. It is saved to ProximaAI's protected server store, never kept in this browser, and added to each request by ProximaAI's server.{keyStatus === "ok" ? " ✓ A working key is saved." : keyStatus === "missing" ? " No key saved yet." : keyStatus === "invalid" ? " ✗ WaveSpeed rejects the saved key." : ""}</div>
