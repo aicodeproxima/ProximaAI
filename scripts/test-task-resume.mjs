@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, pollTiming, pollErrorAction, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, pollErrorAction, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -175,6 +175,23 @@ test("never recovers answers WaveSpeed gave, a cancel, a task without a predicti
     task("done", { status: "completed", outputs: ["https://cdn/x.png"] }),
   ];
   assert.deepEqual(planResume(rows, NOW).resume, []);
+});
+
+test("a Retry starts clean: no WaveSpeed ids, backup files or flags from the original", () => {
+  const original = task("orig", { status: "completed", outputs: ["https://cdn/a.png"], endTime: NOW - 1000, wallClockMs: 9000,
+    isArchived: true, archivedOutputs: ["https://x/a.png"], archivedPaths: ["user/orig-0.png"], nsfw: [false], recovered: true });
+  const r = retryTask(original, { id: "retry1", now: NOW, seed: "42" });
+  for (const k of ["taskId", "pollUrl", "isArchived", "archivedOutputs", "archivedPaths", "nsfw", "recovered"]) assert.equal(r[k], undefined, k);
+  assert.deepEqual({ id: r.id, status: r.status, startTime: r.startTime, endTime: r.endTime, outputs: r.outputs, error: r.error, seed: r.seed },
+    { id: "retry1", status: "pending", startTime: NOW, endTime: null, outputs: [], error: null, seed: "42" });
+  assert.equal(r.modelId, original.modelId, "keeps what defines the generation");
+  assert.equal(original.taskId, "p1", "does not mutate the original");
+});
+
+test("a Retry whose submit failed is never 'recovered' with the original's result", () => {
+  const r = retryTask(task("orig"), { id: "retry2", now: NOW, seed: "1" });
+  const failed = { ...r, status: "failed", error: "Failed to fetch", endTime: NOW + 1000 };
+  assert.deepEqual(planResume([failed], NOW + 2000).resume, []);
 });
 
 test("a late poll answer never overwrites a task that is no longer in flight (cancelled while the request ran)", () => {

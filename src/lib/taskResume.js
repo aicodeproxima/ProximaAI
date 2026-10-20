@@ -71,6 +71,17 @@ export function applyPoll(task, data, now) {
   }
 }
 
+// A Retry is a new generation. It must not inherit the original's WaveSpeed ids or backup files: a failed retry
+// would otherwise be "recovered" with the original's result, and deleting the retry would delete the original's
+// backed-up files.
+const PER_RUN_FIELDS = ["taskId", "pollUrl", "isArchived", "archivedOutputs", "archivedPaths", "nsfw", "recovered", "submitUnknown"];
+export function retryTask(original, { id, now, seed }) {
+  const t = { ...original, id, status: "pending", startTime: now, endTime: null, wallClockMs: 0, inferenceMs: 0,
+    outputs: [], error: null, seed };
+  for (const k of PER_RUN_FIELDS) delete t[k];
+  return t;
+}
+
 // Applies a poll loop's update only while the task is still in flight. A request already on the wire when the
 // user cancels (or another path finishes the task) must not overwrite that outcome when it resolves.
 export function settlePoll(task, fn) {

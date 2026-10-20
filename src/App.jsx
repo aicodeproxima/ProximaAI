@@ -14,7 +14,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, pollTiming, pollErrorAction, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, pollErrorAction, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -2427,18 +2427,7 @@ export default function ProximaApp() {
   // Wrapped in useCallback so CockpitTaskCard memo equality holds. Deps: keyBlocked (used inside).
   const regenerateTask = useCallback(function regenerateTask(originalTask) {
     if (keyBlocked) return;
-    const newTask = {
-      ...originalTask,
-      id: genId(),
-      status: "pending",
-      startTime: Date.now(),
-      endTime: null,
-      wallClockMs: 0,
-      inferenceMs: 0,
-      outputs: [],
-      error: null,
-      seed: Math.floor(Math.random() * 999999).toString(),
-    };
+    const newTask = retryTask(originalTask, { id: genId(), now: Date.now(), seed: Math.floor(Math.random() * 999999).toString() });
     // Re-price from the payload this run sends (a task made before formula pricing carries a default-settings price).
     const regenType = newTask.genType || genType;
     const regenModel = (MODELS[regenType] || []).find(m => m.id === newTask.modelId);
