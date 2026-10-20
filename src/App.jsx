@@ -118,24 +118,24 @@ function LoginScreen({ onSignedIn, notice = "" }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {mode === "signin" ? (<>
             <div>
-              <label style={labelStyle}>Username</label>
-              <input type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
+              <label htmlFor="login-username" style={labelStyle}>Username</label>
+              <input id="login-username" type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
                 autoFocus autoComplete="username" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
             <div>
-              <label style={labelStyle}>Password</label>
-              <input type="password" value={password} onChange={e => { setPassword(e.target.value); setError(""); }}
+              <label htmlFor="login-password" style={labelStyle}>Password</label>
+              <input id="login-password" type="password" value={password} onChange={e => { setPassword(e.target.value); setError(""); }}
                 autoComplete="current-password" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
           </>) : (<>
             <div>
-              <label style={labelStyle}>Backup code</label>
-              <input type="text" value={backupCode} onChange={e => { setBackupCode(e.target.value); setError(""); }}
+              <label htmlFor="login-backup-code" style={labelStyle}>Backup code</label>
+              <input id="login-backup-code" type="text" value={backupCode} onChange={e => { setBackupCode(e.target.value); setError(""); }}
                 autoFocus autoComplete="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
             <div>
-              <label style={labelStyle}>New password (optional, 8+ characters)</label>
-              <input type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }}
+              <label htmlFor="login-new-password" style={labelStyle}>New password (optional, 8+ characters)</label>
+              <input id="login-new-password" type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }}
                 autoComplete="new-password" placeholder="Leave empty to keep the current one" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
           </>)}
@@ -519,8 +519,8 @@ function AccountModal({ onClose, onSaved }) {
           <form onSubmit={submitSetEmail}>
             <div style={title}>Verify Your Email</div>
             <div style={subtitle}>We'll send a 6-digit code to confirm it's really you before making account changes.</div>
-            <label style={label}>Email Address</label>
-            <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError(""); }} style={input} placeholder="you@example.com" autoFocus />
+            <label htmlFor="acct-email-address" style={label}>Email Address</label>
+            <input id="acct-email-address" type="email" value={email} onChange={e => { setEmail(e.target.value); setError(""); }} style={input} placeholder="you@example.com" autoFocus />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Back</button>
@@ -533,8 +533,8 @@ function AccountModal({ onClose, onSaved }) {
           <form onSubmit={submitVerifyOtp}>
             <div style={title}>Enter Verification Code</div>
             <div style={subtitle}>Sent to <b style={{ color: "#e2e8f0" }}>{pendingVerifyEmail}</b>. Check spam if you don't see it.</div>
-            <label style={label}>Verification Code</label>
-            <input type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code"
+            <label htmlFor="acct-verification-code" style={label}>Verification Code</label>
+            <input id="acct-verification-code" type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code"
               value={otp}
               onChange={e => { setOtp(e.target.value.replace(/\D/g, "").slice(0, 10)); setError(""); }}
               onPaste={e => { e.preventDefault(); const t = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 10); setOtp(t); }}
@@ -552,10 +552,10 @@ function AccountModal({ onClose, onSaved }) {
           <form onSubmit={submitNewUsername}>
             <div style={title}>New Username</div>
             <div style={subtitle}>Current: <b>{creds?.username || "admin"}</b>. Your data moves to the new name.</div>
-            <label style={label}>Current Password</label>
-            <input type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
-            <label style={{ ...label, marginTop: 12 }}>New Username</label>
-            <input type="text" value={newUsername} onChange={e => { setNewUsername(e.target.value); setError(""); }} style={input} autoComplete="username" />
+            <label htmlFor="acct-current-password" style={label}>Current Password</label>
+            <input id="acct-current-password" type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
+            <label htmlFor="acct-new-username" style={{ ...label, marginTop: 12 }}>New Username</label>
+            <input id="acct-new-username" type="text" value={newUsername} onChange={e => { setNewUsername(e.target.value); setError(""); }} style={input} autoComplete="username" />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
@@ -568,12 +568,12 @@ function AccountModal({ onClose, onSaved }) {
           <form onSubmit={submitNewPassword}>
             <div style={title}>New Password</div>
             <div style={subtitle}>Minimum 8 characters.</div>
-            <label style={label}>Current Password</label>
-            <input type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
-            <label style={{ ...label, marginTop: 12 }}>New Password</label>
-            <input type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} style={input} autoComplete="new-password" />
-            <label style={{ ...label, marginTop: 12 }}>Confirm Password</label>
-            <input type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setError(""); }} style={input} />
+            <label htmlFor="acct-current-password" style={label}>Current Password</label>
+            <input id="acct-current-password" type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
+            <label htmlFor="acct-new-password" style={{ ...label, marginTop: 12 }}>New Password</label>
+            <input id="acct-new-password" type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} style={input} autoComplete="new-password" />
+            <label htmlFor="acct-confirm-password" style={{ ...label, marginTop: 12 }}>Confirm Password</label>
+            <input id="acct-confirm-password" type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setError(""); }} style={input} autoComplete="new-password" />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
@@ -586,14 +586,14 @@ function AccountModal({ onClose, onSaved }) {
           <form onSubmit={submitBackupCode}>
             <div style={title}>Backup Code</div>
             <div style={subtitle}>Unlocks sign-in after 3 failed attempts, and can set a new password if you forget it. Write it down and keep it somewhere safe: the server stores only a hash, so it can't be shown again.</div>
-            <label style={label}>Current Password</label>
-            <input type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
-            <label style={{ ...label, marginTop: 12 }}>Backup Code (12+ characters)</label>
+            <label htmlFor="acct-current-password" style={label}>Current Password</label>
+            <input id="acct-current-password" type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
+            <label htmlFor="acct-backup-code" style={{ ...label, marginTop: 12 }}>Backup Code (12+ characters)</label>
             {/* Full-width field: a generated code (24 chars) must be readable in full at 384px to be written down */}
-            <input type="text" value={backupCode} onChange={e => { setBackupCodeInput(e.target.value); setError(""); }} style={input} autoComplete="off" spellCheck={false} />
+            <input id="acct-backup-code" type="text" value={backupCode} onChange={e => { setBackupCodeInput(e.target.value); setError(""); }} style={input} autoComplete="off" spellCheck={false} />
             <button type="button" style={{ ...btn(), width: "100%", marginTop: 8, minHeight: 44 }} onClick={() => { const c = makeBackupCode(); setBackupCodeInput(c); setConfirmBackupCode(""); setError(""); }}>Generate a strong code</button>
-            <label style={{ ...label, marginTop: 12 }}>Type It Again</label>
-            <input type="text" value={confirmBackupCode} onChange={e => { setConfirmBackupCode(e.target.value); setError(""); }} style={input} autoComplete="off" spellCheck={false} />
+            <label htmlFor="acct-type-it-again" style={{ ...label, marginTop: 12 }}>Type It Again</label>
+            <input id="acct-type-it-again" type="text" value={confirmBackupCode} onChange={e => { setConfirmBackupCode(e.target.value); setError(""); }} style={input} autoComplete="off" spellCheck={false} />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
@@ -606,8 +606,8 @@ function AccountModal({ onClose, onSaved }) {
           <form onSubmit={submitNewEmail}>
             <div style={title}>New Email</div>
             <div style={subtitle}>We'll send a verification code to the new address.</div>
-            <label style={label}>New Email Address</label>
-            <input type="email" value={newEmail} onChange={e => { setNewEmail(e.target.value); setError(""); }} style={input} autoFocus />
+            <label htmlFor="acct-new-email-address" style={label}>New Email Address</label>
+            <input id="acct-new-email-address" type="email" value={newEmail} onChange={e => { setNewEmail(e.target.value); setError(""); }} style={input} autoFocus />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" style={btn()} onClick={() => setStep("menu")}>Cancel</button>
@@ -620,8 +620,8 @@ function AccountModal({ onClose, onSaved }) {
           <form onSubmit={submitVerifyNewEmail}>
             <div style={title}>Confirm New Email</div>
             <div style={subtitle}>Code sent to <b style={{ color: "#e2e8f0" }}>{pendingVerifyEmail}</b></div>
-            <label style={label}>Verification Code</label>
-            <input type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code"
+            <label htmlFor="acct-verification-code" style={label}>Verification Code</label>
+            <input id="acct-verification-code" type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code"
               value={otp}
               onChange={e => { setOtp(e.target.value.replace(/\D/g, "").slice(0, 10)); setError(""); }}
               onPaste={e => { e.preventDefault(); const t = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 10); setOtp(t); }}
@@ -3178,8 +3178,8 @@ export default function ProximaApp() {
                           // Different schemes — show per-model dropdowns
                           return selectedWithRes.map(m => (
                             <div className="settings-row" key={m.id}>
-                              <label style={{ fontSize: 10, minWidth: 80 }}>{m.name}</label>
-                              <select className="settings-select" value={perModelRes[m.id] || m.params.resolution.default}
+                              <label htmlFor={`res-${m.id}`} style={{ fontSize: 10, minWidth: 80 }}>{m.name}</label>
+                              <select id={`res-${m.id}`} className="settings-select" value={perModelRes[m.id] || m.params.resolution.default}
                                 onChange={e => setPerModelRes(prev => ({ ...prev, [m.id]: e.target.value }))}>
                                 {m.params.resolution.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                               </select>
@@ -3798,15 +3798,15 @@ export default function ProximaApp() {
                   <div className="setting-label">Default Settings</div>
                   <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
                     <div>
-                      <label style={{ fontSize: 11, color: "var(--text-muted)" }}>Image Resolution</label>
-                      <select className="settings-select" style={{ display: "block", marginTop: 4 }}
+                      <label htmlFor="settings-image-res" style={{ fontSize: 11, color: "var(--text-muted)" }}>Image Resolution</label>
+                      <select id="settings-image-res" className="settings-select" style={{ display: "block", marginTop: 4 }}
                         value={defaultImageRes} onChange={e => { setDefaultImageRes(e.target.value); setSetting("defaultImageRes", e.target.value); trackedSync("defaultImageRes", () => syncSetting("defaultImageRes", e.target.value)).catch(() => {}); }}>
                         <option value="1k">1K</option><option value="2k">2K</option><option value="4k">4K</option>
                       </select>
                     </div>
                     <div>
-                      <label style={{ fontSize: 11, color: "var(--text-muted)" }}>Video Duration</label>
-                      <select className="settings-select" style={{ display: "block", marginTop: 4 }}
+                      <label htmlFor="settings-video-dur" style={{ fontSize: 11, color: "var(--text-muted)" }}>Video Duration</label>
+                      <select id="settings-video-dur" className="settings-select" style={{ display: "block", marginTop: 4 }}
                         value={defaultVideoDur} onChange={e => { setDefaultVideoDur(Number(e.target.value)); setSetting("defaultVideoDur", e.target.value); trackedSync("defaultVideoDur", () => syncSetting("defaultVideoDur", e.target.value)).catch(() => {}); }}>
                         <option value={5}>5s</option><option value={10}>10s</option><option value={15}>15s</option>
                       </select>
