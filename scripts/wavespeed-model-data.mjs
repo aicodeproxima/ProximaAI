@@ -114,6 +114,8 @@ export function compare(model, category, schema) {
     for (const d of model.params.duration.options || []) if (!properties.duration.enum.includes(d)) issues.push(`duration option ${d} is not public-schema valid`);
   }
   for (const config of Object.values(model.params?.optional || {})) {
+    const apiDefault = properties[config.paramName]?.default;
+    if (config.payload !== false && apiDefault !== undefined && apiDefault !== config.default) issues.push(`${config.paramName} default ${JSON.stringify(config.default)} differs from API default ${JSON.stringify(apiDefault)} (defaults are not sent, so the API value runs)`);
     const endpointEnum = properties[config.paramName]?.enum;
     if (!endpointEnum) continue;
     for (const v of config.values || config.options?.map(o => o.value) || []) {

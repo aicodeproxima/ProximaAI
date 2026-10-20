@@ -114,6 +114,8 @@ function compare(model, category, schema) {
     }
   }
   for (const config of Object.values(model.params?.optional || {})) {
+    const apiDefault = properties[config.paramName]?.default;
+    if (config.payload !== false && apiDefault !== undefined && apiDefault !== config.default) issues.push(`${config.paramName} default ${JSON.stringify(config.default)} differs from API default ${JSON.stringify(apiDefault)} (defaults are not sent, so the API value runs)`);
     const endpointEnum = properties[config.paramName]?.enum;
     const configured = config.values || config.options?.map(option => option.value) || [];
     if (!endpointEnum) continue;
