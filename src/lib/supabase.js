@@ -618,6 +618,13 @@ export async function unlockWithBackupCode(code, newPassword = null) {
   return data || { ok: false, reason: "invalid" };
 }
 
+// A token-checked no-op. Throws (and signs this device out) once the server stops accepting the session —
+// e.g. after a rename or password change on another device.
+export async function checkSession() {
+  const r = await sessionRpc("get_my_account");
+  return !!r?.ok;
+}
+
 export async function getMyAccount() {
   return sessionRpc("get_my_account");
 }

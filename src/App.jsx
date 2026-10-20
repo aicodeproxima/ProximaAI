@@ -8,7 +8,7 @@ import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE } from "./l
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
@@ -1689,6 +1689,9 @@ export default function ProximaApp() {
     if (!isSupabaseConfigured() || !initialLoadDone.current || bootstrapInProgress.current || reconcileRunningRef.current) return;
     reconcileRunningRef.current = true;
     try {
+      // The server must still accept this session before anything uploads: after a rename on another device,
+      // this one would otherwise re-upload its rows under the old name (the server also refuses to move them).
+      if (!(await checkSession())) return;
       const since = Date.now();
       const [remote, ids] = await Promise.all([pullAllRemoteData(), pullCloudIds()]);
       if (!remote) return;
