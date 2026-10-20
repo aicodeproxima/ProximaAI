@@ -42,11 +42,17 @@ async function wsFetch(url, options = {}) {
   return res;
 }
 
+const timeoutSignal = (ms) => (typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined);
+
+// A submit that hangs on a connection Android killed gives up after 60 s (a slow phone upload still fits). The
+// proxy finishes the submit anyway, so the task then waits for the history lookup instead of failing.
+const SUBMIT_TIMEOUT_MS = 60_000;
 export async function submitTask(modelSlug, payload) {
   const res = await wsFetch(`${API_BASE}/${modelSlug}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal: timeoutSignal(SUBMIT_TIMEOUT_MS),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -60,10 +66,33 @@ export async function submitTask(modelSlug, payload) {
 // so the loop treats it as a network drop and retries.
 const POLL_TIMEOUT_MS = 15_000;
 export async function pollResult(pollUrl) {
-  const signal = typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(POLL_TIMEOUT_MS) : undefined;
+  const signal = timeoutSignal(POLL_TIMEOUT_MS);
   const res = await wsFetch(toProxyUrl(pollUrl), signal ? { signal } : {});
   if (!res.ok) throw { code: res.status, message: res.statusText };
   return res.json();
+}
+
+// WaveSpeed's prediction history (POST /api/v3/predictions): the documented way to find a submit whose response never
+// arrived, since submits carry no idempotency key. Used only for that; WaveSpeed asks clients not to poll it for
+// status. `after` / `before` are ms timestamps; reads up to 5 pages of 100.
+export async function listPredictions({ after, before }) {
+  const items = [];
+  for (let page = 1; page <= 5; page++) {
+    const res = await wsFetch(`${API_BASE}/predictions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page, page_size: 100, created_after: new Date(after).toISOString(), created_before: new Date(before).toISOString() }),
+      signal: timeoutSignal(POLL_TIMEOUT_MS),
+    });
+    if (!res.ok) throw { code: res.status, message: res.statusText };
+    const json = await res.json();
+    if (typeof json?.code === "number" && json.code !== 200) throw { code: json.code, message: json.message || "History lookup refused" };
+    const got = json?.data?.items;
+    if (!Array.isArray(got)) throw { code: 0, message: "Unexpected history response" };
+    items.push(...got);
+    if (got.length < 100) break;
+  }
+  return items;
 }
 
 // keyStatus: "ok" (key works), "missing" (none saved on the server), "invalid" (WaveSpeed rejected it),

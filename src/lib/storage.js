@@ -290,13 +290,15 @@ export async function getCompletedTasks(limit = 200) {
   } catch { return []; }
 }
 
-// Returns in-flight tasks whose poll can still be resumed after a page refresh, tab close or OS kill
-// (see taskResume.js). The ones past WaveSpeed's retention are failed by getCompletedTasks on the same load.
+// Returns in-flight tasks whose poll can still be resumed after a page refresh, tab close or OS kill, plus lost
+// submits (no prediction id) for the history lookup (see taskResume.js). The ones past WaveSpeed's retention are
+// failed by getCompletedTasks on the same load.
 export async function getPendingTasks() {
   try {
     const store = await tx("tasks");
     const all = await wrapRequest(store.getAll());
-    return planResume(all, Date.now()).resume;
+    const { resume, orphans } = planResume(all, Date.now());
+    return [...resume, ...orphans];
   } catch { return []; }
 }
 

@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -46,16 +46,27 @@ test("expires an in-flight task with no start time (age unknown)", () => {
   assert.deepEqual(p.expire.map(t => t.id), ["x"]);
 });
 
-test("fails a task that never got a provider id once the submit grace has passed", () => {
-  const p = planResume([task("ns", { status: "pending", pollUrl: undefined, taskId: undefined, startTime: NOW - SUBMIT_GRACE_MS - 1 })], NOW);
-  assert.deepEqual(p.resume, []);
-  assert.equal(p.expire[0].status, "failed");
-  assert.match(p.expire[0].error, /never reached WaveSpeed|before WaveSpeed/i);
+// A row still "pending" without a prediction id lost its submit response (refresh or app left mid-submit). WaveSpeed
+// may have accepted it anyway, so it loads as an orphan for the history lookup, which adopts the id or fails it.
+test("loads a task whose submit response was lost as an orphan to look up, at any age inside the window", () => {
+  const rows = [task("fresh", { status: "pending", pollUrl: undefined, taskId: undefined, startTime: NOW - 1000 }),
+    task("hour", { status: "pending", pollUrl: undefined, taskId: undefined, startTime: NOW - HOUR })];
+  const p = planResume(rows, NOW);
+  assert.deepEqual(p.orphans.map(t => t.id), ["fresh", "hour"]);
+  assert.deepEqual([p.resume, p.expire], [[], []]);
+  assert.equal(p.orphans[1].status, "pending");
 });
 
-test("leaves a just-submitted task without a provider id alone (another tab may be submitting it)", () => {
-  const p = planResume([task("fresh", { status: "pending", pollUrl: undefined, startTime: NOW - 1000 })], NOW);
-  assert.deepEqual([p.resume, p.expire], [[], []]);
+test("fails a lost submit past the 48 h window without looking it up", () => {
+  const p = planResume([task("ns", { status: "pending", pollUrl: undefined, taskId: undefined, startTime: NOW - RESUME_WINDOW_MS - 1 })], NOW);
+  assert.deepEqual([p.resume, p.orphans], [[], []]);
+  assert.equal(p.expire[0].status, "failed");
+  assert.match(p.expire[0].error, /before WaveSpeed/i);
+});
+
+test("resumes an in-flight row that kept its prediction id but not its poll URL", () => {
+  const p = planResume([task("cloud", { pollUrl: undefined, taskId: "pred-7" })], NOW);
+  assert.deepEqual(p.resume.map(t => t.pollUrl), ["/api/v3/predictions/pred-7/result"]);
 });
 
 test("ignores finished tasks", () => {
@@ -273,6 +284,82 @@ test("re-poll on return: focus + visibility + online firing together re-poll onc
 });
 test("re-poll on return: nothing running leaves the throttle untouched", () => {
   assert.deepEqual(planRepoll([task("d", { status: "completed" })], NOW, 0), { kick: [], at: 0 });
+});
+
+// ─── Lost submits: WaveSpeed's history lookup (POST /api/v3/predictions) ───
+// No idempotency key exists, so the documented recovery is: find a prediction for the same model created when the
+// task was submitted, adopt its id, and fail the task only once a lookup that answered shows nothing.
+const orphan = (id, extra = {}) => task(id, { status: "pending", pollUrl: undefined, taskId: undefined, modelId: "bytedance/seedream-v4", startTime: NOW - 60_000, ...extra });
+const item = (id, extra = {}) => ({ id, model: "bytedance/seedream-v4", status: "processing", created_at: new Date(NOW - 58_000).toISOString(),
+  urls: { get: `https://api.wavespeed.ai/api/v3/predictions/${id}/result` }, ...extra });
+
+test("orphan: a pending task without an id, not being submitted right now", () => {
+  const busy = new Set(["sub"]);
+  assert.equal(isOrphan(orphan("o"), busy, NOW), true);
+  assert.equal(isOrphan(orphan("sub"), busy, NOW), false, "its submit is still in flight in this tab");
+  assert.equal(isOrphan(orphan("p", { taskId: "x" }), busy, NOW), false, "has an id: the poll loop owns it");
+  assert.equal(isOrphan(orphan("c", { status: "failed" }), busy, NOW), false);
+  assert.equal(isOrphan(orphan("old", { startTime: NOW - RESUME_WINDOW_MS - 1 }), busy, NOW), false);
+});
+
+test("lookup windows: one per cluster of submits, padded for clock skew and a slow submit", () => {
+  const w = orphanWindows([orphan("a"), orphan("b", { startTime: NOW - 59_000 }), orphan("c", { startTime: NOW - 3 * HOUR })]);
+  assert.equal(w.length, 2, "a and b share a window");
+  assert.deepEqual(w[0], { after: NOW - 3 * HOUR - LOOKUP_SKEW_MS, before: NOW - 3 * HOUR + ORPHAN_GRACE_MS });
+  assert.deepEqual(w[1], { after: NOW - 60_000 - LOOKUP_SKEW_MS, before: NOW - 59_000 + ORPHAN_GRACE_MS });
+});
+
+test("adopts the matching prediction and polls its result URL", () => {
+  const { adopt, fail } = planOrphans([orphan("o")], [item("pred-1")], new Set(), NOW);
+  assert.deepEqual(fail, []);
+  assert.equal(adopt.length, 1);
+  const t = adopt[0];
+  assert.deepEqual([t.id, t.status, t.taskId, t.pollUrl], ["o", "processing", "pred-1", "https://api.wavespeed.ai/api/v3/predictions/pred-1/result"]);
+});
+
+test("never adopts a prediction another task owns, another model's, or one from outside the submit window", () => {
+  const items = [item("owned"), item("other-model", { model: "kwaivgi/kling-v2" }), item("too-early", { created_at: new Date(NOW - 60_000 - LOOKUP_SKEW_MS - 1).toISOString() }),
+    item("too-late", { created_at: new Date(NOW - 60_000 + ORPHAN_GRACE_MS + 1).toISOString() }), item("bad-date", { created_at: "soon" }), { model: "bytedance/seedream-v4" }];
+  const { adopt } = planOrphans([orphan("o")], items, new Set(["owned"]), NOW);
+  assert.deepEqual(adopt, []);
+});
+
+test("two lost submits of the same model get one prediction each, oldest first", () => {
+  const { adopt } = planOrphans([orphan("second", { startTime: NOW - 59_000 }), orphan("first")],
+    [item("p-late", { created_at: new Date(NOW - 57_000).toISOString() }), item("p-early")], new Set(), NOW);
+  assert.deepEqual(adopt.map(t => [t.id, t.taskId]), [["first", "p-early"], ["second", "p-late"]]);
+});
+
+test("no match: fails the task once the grace has passed, keeps waiting before", () => {
+  const late = planOrphans([orphan("o", { startTime: NOW - ORPHAN_GRACE_MS - 1 })], [], new Set(), NOW);
+  assert.equal(late.fail.length, 1);
+  assert.equal(late.fail[0].status, "failed");
+  assert.match(late.fail[0].error, /before WaveSpeed/i);
+  assert.deepEqual(planOrphans([orphan("o", { startTime: NOW - 10_000 })], [], new Set(), NOW), { adopt: [], fail: [] });
+});
+
+test("matches the history item shape WaveSpeed documents (slug model, nanosecond created_at)", () => {
+  // Verbatim item from wavespeed.ai/docs/predictions-api (checked 2026-10-20), moved to this task's submit time.
+  const doc = { id: "e6832d4abffb4d79bfbca19783fca133", model: "wavespeed-ai/z-image/turbo", outputs: ["https://example.com/output/example.jpeg"],
+    urls: { get: "https://api.wavespeed.ai/api/v3/predictions/e6832d4abffb4d79bfbca19783fca133/result" }, status: "completed",
+    created_at: "2025-05-19T06:09:15.948268264Z", error: "", timings: { inference: 25729 } };
+  const start = Date.parse("2025-05-19T06:09:14.000Z");
+  const { adopt } = planOrphans([orphan("o", { modelId: "wavespeed-ai/z-image/turbo", startTime: start })], [doc], new Set(), start + 5000);
+  assert.equal(adopt[0]?.taskId, "e6832d4abffb4d79bfbca19783fca133");
+});
+
+test("a failed submit may have reached WaveSpeed on a network drop, timeout or 5xx, never on a refusal", () => {
+  assert.equal(submitMayHaveLanded(new TypeError("Failed to fetch")), true, "the phone left the app mid-submit");
+  assert.equal(submitMayHaveLanded(new DOMException("signal timed out", "TimeoutError")), true, "numeric legacy .code is not an HTTP status");
+  assert.equal(submitMayHaveLanded(new SyntaxError("Unexpected end of JSON input")), true, "response cut off mid-body");
+  assert.equal(submitMayHaveLanded({ code: 502, message: "Upstream error" }), true);
+  for (const e of [{ code: 402 }, { code: 400 }, { code: 429 }, { code: 401, session: true }, { code: 400, noKey: true }])
+    assert.equal(submitMayHaveLanded(e), false, JSON.stringify(e));
+});
+
+test("a prediction without a result URL is polled by its id", () => {
+  const { adopt } = planOrphans([orphan("o")], [item("pred-2", { urls: undefined })], new Set(), NOW);
+  assert.equal(adopt[0].pollUrl, "/api/v3/predictions/pred-2/result");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

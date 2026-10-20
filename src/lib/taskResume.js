@@ -9,7 +9,11 @@
 // although its docs say outputs expire "within 7 days".
 
 export const RESUME_WINDOW_MS = 48 * 60 * 60 * 1000; // inside the youngest purge measured (54 h)
-export const SUBMIT_GRACE_MS = 10 * 60 * 1000;       // a row without a poll URL may still be mid-submit in another tab
+// A lost submit (no prediction id) is looked up in WaveSpeed's history for a prediction created between LOOKUP_SKEW_MS
+// before its start (device vs WaveSpeed clock) and ORPHAN_GRACE_MS after it (a slow submit); it fails only when a
+// lookup that answered finds nothing and the grace has passed.
+export const LOOKUP_SKEW_MS = 30 * 1000;
+export const ORPHAN_GRACE_MS = 2 * 60 * 1000;
 
 export const EXPIRED_ERROR = "Expired: the app closed before this finished, and WaveSpeed no longer keeps the result";
 export const GONE_ERROR = "Expired: WaveSpeed deleted the result before the app could fetch it";
@@ -33,21 +37,74 @@ export function isRecoverableFailure(t, now) {
 }
 
 // Splits stored rows into in-flight tasks whose poll can resume (plus wrongly failed ones to recover, flagged
-// `recovered`) and failed copies of in-flight tasks that cannot resume.
+// `recovered`), orphans whose submit response was lost (no prediction id: the history lookup decides them), and
+// failed copies of in-flight tasks past the window.
 export function planResume(rows, now) {
-  const resume = [], expire = [];
+  const resume = [], expire = [], orphans = [];
   for (const t of rows) {
     if (isRecoverableFailure(t, now)) {
       resume.push({ ...t, status: "processing", error: null, endTime: null, pollUrl: pollUrlFor(t), recovered: true });
       continue;
     }
     if (!IN_FLIGHT.has(t.status)) continue;
-    const age = now - (t.startTime || 0);
-    if (!t.pollUrl) { if (age > SUBMIT_GRACE_MS) expire.push(failTask(t, now, UNSUBMITTED_ERROR)); }
-    else if (age > RESUME_WINDOW_MS) expire.push(failTask(t, now, EXPIRED_ERROR));
-    else resume.push(t);
+    const pollUrl = pollUrlFor(t);
+    if (now - (t.startTime || 0) > RESUME_WINDOW_MS) expire.push(failTask(t, now, pollUrl ? EXPIRED_ERROR : UNSUBMITTED_ERROR));
+    else if (!pollUrl) orphans.push(t);
+    else resume.push(t.pollUrl === pollUrl ? t : { ...t, pollUrl });
   }
-  return { resume, expire };
+  return { resume, expire, orphans };
+}
+
+// ─── Lost submits ───
+// A submit cut off by a refresh or by the phone leaving the app has no prediction id, but WaveSpeed may have accepted
+// (and billed) it. WaveSpeed has no idempotency key; its documented recovery is the history endpoint: find a prediction
+// for the same model created when the task was submitted and adopt its id. A task whose submit is still in flight in
+// this tab (`submitting`) is not an orphan yet.
+export function isOrphan(t, submitting, now) {
+  return t?.status === "pending" && !t.taskId && !submitting.has(t.id) && now - (t.startTime || 0) <= RESUME_WINDOW_MS;
+}
+
+// Whether a failed submit may still have reached WaveSpeed, so the task waits for the history lookup instead of
+// failing: anything fetch itself threw (network drop, timeout, a body cut off mid-read) or a 5xx without an id.
+// A refusal (4xx: balance, validation, rate limit) or a missing session or key never did.
+export function submitMayHaveLanded(e) {
+  if (e?.session || e?.noKey) return false;
+  if (e instanceof Error || typeof e?.code !== "number") return true;
+  return e.code >= 500;
+}
+
+// The history ranges to fetch: one per cluster of lost submits (a batch shares one), as {after, before} in ms.
+export function orphanWindows(orphans) {
+  const spans = orphans.map(t => [t.startTime - LOOKUP_SKEW_MS, t.startTime + ORPHAN_GRACE_MS]).sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [after, before] of spans) {
+    const last = out[out.length - 1];
+    if (last && after <= last.before) last.before = Math.max(last.before, before);
+    else out.push({ after, before });
+  }
+  return out;
+}
+
+// Matches lost submits to history items: same model, created inside the task's submit window, not owned by another
+// task. Oldest task takes the oldest match, so a batch of the same model gets one prediction each. `items` must be
+// from a lookup that answered; a task without a match fails once ORPHAN_GRACE_MS has passed.
+export function planOrphans(orphans, items, owned, now) {
+  // created_at carries nanoseconds ("2025-05-19T06:09:15.948268264Z"); trimmed to ms so every engine parses it.
+  const pool = items
+    .map(i => ({ i, at: Date.parse(String(i?.created_at || "").replace(/(\.\d{3})\d+/, "$1")) }))
+    .filter(x => x.i?.id && !owned.has(x.i.id) && Number.isFinite(x.at))
+    .sort((a, b) => a.at - b.at);
+  const used = new Set(), adopt = [], fail = [];
+  const sameModel = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
+  for (const t of [...orphans].sort((a, b) => a.startTime - b.startTime)) {
+    const hit = pool.find(x => !used.has(x.i.id) && sameModel(x.i.model, t.modelId)
+      && x.at >= t.startTime - LOOKUP_SKEW_MS && x.at <= t.startTime + ORPHAN_GRACE_MS);
+    if (hit) {
+      used.add(hit.i.id);
+      adopt.push({ ...t, status: "processing", taskId: hit.i.id, pollUrl: hit.i.urls?.get || pollUrlFor({ taskId: hit.i.id }) });
+    } else if (now - t.startTime > ORPHAN_GRACE_MS) fail.push(failTask(t, now, UNSUBMITTED_ERROR));
+  }
+  return { adopt, fail };
 }
 
 // "completed" | "failed" | "gone" (purged, never coming back) | "running" (poll again).

@@ -4,7 +4,7 @@ import { buildPayload, getEffectiveImageBatchCount, getImageBatchLimit, planImag
 import { requestCost } from "./lib/pricing.js";
 import { draftTask, unitQuote, taskUserSettings } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
-import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE } from "./lib/api.js";
+import { submitTask, pollResult, listPredictions, checkBalance, uploadMedia, API_BASE } from "./lib/api.js";
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
@@ -14,7 +14,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -2061,6 +2061,50 @@ export default function ProximaApp() {
     schedule(delay ?? wait());
   }
 
+  // ─── LOST SUBMITS: find them in WaveSpeed's history (rules in taskResume.js) ───
+  // A submit cut off by a refresh or by the phone leaving the app leaves a "pending" task without a prediction id,
+  // though WaveSpeed may have accepted it. This looks such tasks up, adopts the prediction it finds and polls it, and
+  // fails a task only when a lookup that answered shows nothing after the grace. Runs on load, on return to the app,
+  // after a cut-off submit and every 20 s while one waits.
+  const submittingIds = useRef(new Set());
+  const orphanLookupRunning = useRef(false);
+  const recoverOrphans = useCallback(async () => {
+    // A submit still in flight could own the very prediction an orphan would match: wait until none is.
+    if (orphanLookupRunning.current || submittingIds.current.size) return;
+    const orphans = tasksRef.current.filter(t => isOrphan(t, submittingIds.current, Date.now()));
+    if (!orphans.length) return;
+    orphanLookupRunning.current = true;
+    try {
+      let items = [];
+      try {
+        for (const w of orphanWindows(orphans)) items.push(...await listPredictions(w));
+      } catch (e) {
+        // Network trouble, a rate limit, a 5xx or a stopped session: ask again on the next pass. Only a refusal of
+        // the lookup itself leaves the grace alone to decide, as before this lookup existed.
+        if (pollErrorAction(e) !== "fail") return;
+      }
+      const owned = new Set(tasksRef.current.map(t => t.taskId).filter(Boolean));
+      const { adopt, fail } = planOrphans(orphans, items, owned, Date.now());
+      const decided = new Map([...adopt, ...fail].map(t => [t.id, t]));
+      if (!decided.size) return;
+      // Only a task still waiting takes the outcome (not one cancelled while the lookup ran).
+      const waiting = (t) => t?.status === "pending" && !t.taskId;
+      const adoptNow = adopt.filter(t => waiting(tasksRef.current.find(x => x.id === t.id)));
+      setTasks(prev => prev.map(t => decided.has(t.id) && waiting(t) ? decided.get(t.id) : t));
+      for (const t of adoptNow) {
+        saveTask(t);
+        startPolling(t, t.pollUrl, { genType: t.genType, resumed: true, delay: 0 });
+      }
+    } finally {
+      orphanLookupRunning.current = false;
+    }
+  }, []);
+  useEffect(() => {
+    if (!isAuthed || keyBlocked) return;
+    const id = setInterval(() => { if (document.visibilityState === "visible") recoverOrphans(); }, 20000);
+    return () => clearInterval(id);
+  }, [isAuthed, keyBlocked, recoverOrphans]);
+
   // ─── RESUME POLLING for in-flight tasks after refresh/close/OS-kill ───
   // On mount (after auth), load any pending/processing tasks from IndexedDB
   // with their saved pollUrl, inject them into state, and restart their polls.
@@ -2088,6 +2132,8 @@ export default function ProximaApp() {
         // Start polling almost immediately (the task has been waiting)
         startPolling(task, task.pollUrl, { genType: task.genType, resumed: true, delay: 500 });
       }
+      // Lost submits (no prediction id) loaded as pending: look them up once state holds them.
+      if (pending.some(t => !t.pollUrl)) setTimeout(recoverOrphans, 1000);
     })();
     return () => { cancelled = true; };
   }, [isAuthed, keyBlocked]);
@@ -2105,6 +2151,7 @@ export default function ProximaApp() {
         clearTimeout(pollRefs.current[t.id]); // the new loop replaces the old one; a request it has in flight is ignored
         startPolling(t, t.pollUrl, { genType: t.genType, resumed: true, delay: 0 });
       }
+      recoverOrphans();
     };
     const onPageShow = (e) => { if (e.persisted) kick(); };
     document.addEventListener("visibilitychange", kick);
@@ -2115,7 +2162,7 @@ export default function ProximaApp() {
       window.removeEventListener("pageshow", onPageShow);
       window.removeEventListener("online", kick);
     };
-  }, [isAuthed, keyBlocked]);
+  }, [isAuthed, keyBlocked, recoverOrphans]);
 
   // Clean up pollUrl from IndexedDB once a task reaches terminal state.
   // Reuses the saveTask call that already runs in the persistence effect —
@@ -2355,10 +2402,13 @@ export default function ProximaApp() {
     const newTasks = batchPlan.map(plan => draftTask(plan, draftForm, { id: genId(), batchId, mediaDuration }).task);
 
     setTasks(prev => [...newTasks, ...prev]);
+    // Stored before the submit fires: a refresh or a phone leaving the app mid-submit used to lose the task entirely.
+    saveTasks(newTasks);
 
     // Fire all in parallel
     for (const task of newTasks) {
       (async () => {
+        let sent = false;
         try {
           // Build per-model payload using model's params config
           const modelConfig = models.find(m => m.id === task.modelId);
@@ -2366,7 +2416,9 @@ export default function ProximaApp() {
             ? buildPayload(modelConfig, taskUserSettings(task, task.genType || genType), task.genType || genType)
             : { prompt: task.prompt, resolution: task.resolution };
 
-          const submitRes = await submitTask(task.modelId, payload);
+          sent = true;
+          submittingIds.current.add(task.id);
+          const submitRes = await submitTask(task.modelId, payload).finally(() => submittingIds.current.delete(task.id));
           const taskId = submitRes?.data?.id;
           const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
 
@@ -2388,6 +2440,8 @@ export default function ProximaApp() {
           startPolling(task, pollUrl, { genType: task.genType || genType });
 
         } catch (e) {
+          // The response was lost, not refused: WaveSpeed may have the task. It stays pending for the history lookup.
+          if (sent && submitMayHaveLanded(e)) { setTimeout(recoverOrphans, 2000); return; }
           if (e.noKey) setKeyStatus("missing");
           let errMsg = e.message || "Submit failed";
           if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
@@ -2457,6 +2511,7 @@ export default function ProximaApp() {
       newTask.price = requestCost(regenModel, buildPayload(regenModel, taskUserSettings(newTask, regenType), regenType), { imagesPerRequest: newTask.numImages || 1, mediaDuration: url => mediaDurationsRef.current[url] });
     }
     setTasks(prev => [newTask, ...prev]);
+    saveTask(newTask); // stored before the submit fires, like handleGenerate
 
     // Timer for live wallClock display on regenerated task
     const regenTimer = setInterval(() => {
@@ -2469,6 +2524,7 @@ export default function ProximaApp() {
 
     // Fire the regenerated task — use task's own genType, not current UI tab
     (async () => {
+      let sent = false;
       try {
         const taskGenType = newTask.genType || genType;
         const taskModels = MODELS[taskGenType] || [];
@@ -2478,7 +2534,9 @@ export default function ProximaApp() {
           ? buildPayload(modelConfig, taskUserSettings(newTask, taskGenType), taskGenType)
           : { prompt: newTask.prompt };
 
-        const submitRes = await submitTask(newTask.modelId, payload);
+        sent = true;
+        submittingIds.current.add(newTask.id);
+        const submitRes = await submitTask(newTask.modelId, payload).finally(() => submittingIds.current.delete(newTask.id));
         const taskId = submitRes?.data?.id;
         const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
 
@@ -2497,6 +2555,7 @@ export default function ProximaApp() {
         saveTask({ ...newTask, status: "processing", taskId, pollUrl });
         startPolling(newTask, pollUrl, { genType: taskGenType });
       } catch (e) {
+        if (sent && submitMayHaveLanded(e)) { setTimeout(recoverOrphans, 2000); return; }
         if (e.noKey) setKeyStatus("missing");
         let errMsg = e.message || "Regenerate failed";
         if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
