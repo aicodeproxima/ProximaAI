@@ -125,3 +125,7 @@ No engineering work remains for this rollout. A signed-in visual smoke test may 
 - Vidu Q3 Drama and Drama Clip: require structured `assets` objects plus name/content fields; the current generator UI cannot form a valid request without a dedicated drama-builder interface.
 
 These are product-surface gaps, not missing Lite/Pro/Fast/Reference variants.
+
+## Follow-up: configurable model favorites
+
+On 2026-10-20, commit `c741656` replaced the hard-coded image/image-edit shortcut with user-controlled favorites across all seven workflows. Each model now has an independent add/remove star, and the category-level star selects every saved favorite for the active workflow. Account-scoped persistence, durable retry behavior, mobile tap targets, accessibility details, and validation evidence are documented in [`../model-favorites-2026-10-20.md`](../model-favorites-2026-10-20.md).
