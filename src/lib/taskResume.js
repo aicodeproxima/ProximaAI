@@ -57,6 +57,12 @@ export function applyPoll(task, data, now) {
   }
 }
 
+// Applies a poll loop's update only while the task is still in flight. A request already on the wire when the
+// user cancels (or another path finishes the task) must not overwrite that outcome when it resolves.
+export function settlePoll(task, fn) {
+  return IN_FLIGHT.has(task?.status) ? fn(task) : task;
+}
+
 // What a failed poll means: "stop" (signed out / no key saved: the resume effect restarts it later),
 // "retry" (rate limit, network drop, proxy/WaveSpeed 5xx), or "fail" (WaveSpeed refused the poll).
 // A phone that loses signal mid-poll used to fail the task on the first fetch error.

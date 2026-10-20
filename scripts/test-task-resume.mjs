@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, pollTiming, pollErrorAction, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, pollTiming, pollErrorAction, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -136,6 +136,17 @@ test("poll answer: failed keeps WaveSpeed's error", () => {
 
 test("poll answer: still running returns null (poll again)", () => {
   assert.equal(applyPoll(task("a"), { status: "processing" }, NOW), null);
+});
+
+test("a late poll answer never overwrites a task that is no longer in flight (cancelled while the request ran)", () => {
+  const cancelled = task("a", { status: "failed", error: "Cancelled", endTime: NOW - 1000 });
+  const after = settlePoll(cancelled, t => applyPoll(t, { status: "completed", outputs: ["https://cdn/a.png"] }, NOW));
+  assert.equal(after, cancelled);
+});
+
+test("a poll answer still applies to an in-flight task", () => {
+  const after = settlePoll(task("a"), t => applyPoll(t, { status: "completed", outputs: ["https://cdn/a.png"] }, NOW));
+  assert.equal(after.status, "completed");
 });
 
 test("poll error: signed out or no key stops the loop without failing the task", () => {

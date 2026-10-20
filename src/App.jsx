@@ -13,7 +13,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
-import { mergeLoadedTasks, applyPoll, pollTiming, pollErrorAction, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, pollTiming, pollErrorAction, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -1899,19 +1899,27 @@ export default function ProximaApp() {
   function startPolling(task, pollUrl, { genType, resumed = false, delay } = {}) {
     const { interval, maxPollMs } = pollTiming(genType);
     const deadline = (resumed ? (task.startTime || Date.now()) : Date.now()) + maxPollMs;
-    const update = (fn) => setTasks(prev => prev.map(t => t.id === task.id ? fn(t) : t));
-    const finish = (fn) => { delete pollRefs.current[task.id]; update(fn); };
+    // This loop is live while pollRefs holds its own timer: cancel, sign-out or a newer loop for the same task
+    // removes or replaces it, and the loop then stops even if a request was already in flight.
+    let timer = null;
+    const schedule = (ms) => { timer = setTimeout(poll, ms); pollRefs.current[task.id] = timer; };
+    const live = () => pollRefs.current[task.id] === timer;
+    const update = (fn) => setTasks(prev => prev.map(t => t.id === task.id ? settlePoll(t, fn) : t));
+    const finish = (fn) => { if (live()) delete pollRefs.current[task.id]; update(fn); };
     const timeout = () => finish(t => ({ ...t, status: "failed", error: resumed ? "Timeout (resumed)" : "Timeout", endTime: Date.now() }));
     const poll = async () => {
+      if (!live()) return;
       if (Date.now() - (task.startTime || 0) > RESUME_WINDOW_MS) { finish(t => failTask(t, Date.now(), EXPIRED_ERROR)); return; }
       try {
         const result = await pollResult(pollUrl);
+        if (!live()) return;
         const data = result?.data || result;
         const now = Date.now();
         if (applyPoll(task, data, now)) finish(t => applyPoll(t, data, now));
         else if (now > deadline) timeout();
-        else pollRefs.current[task.id] = setTimeout(poll, interval);
+        else schedule(interval);
       } catch (e) {
+        if (!live()) return;
         const action = pollErrorAction(e);
         if (action === "stop") {
           delete pollRefs.current[task.id];
@@ -1919,11 +1927,11 @@ export default function ProximaApp() {
         }
         else if (action === "retry") {
           if (Date.now() > deadline) timeout();
-          else pollRefs.current[task.id] = setTimeout(poll, interval * 2 + Math.random() * 2000);
+          else schedule(interval * 2 + Math.random() * 2000);
         } else finish(t => ({ ...t, status: "failed", error: e.message || (resumed ? "Poll error (resumed)" : "Poll error"), endTime: Date.now() }));
       }
     };
-    pollRefs.current[task.id] = setTimeout(poll, delay ?? interval);
+    schedule(delay ?? interval);
   }
 
   // ─── RESUME POLLING for in-flight tasks after refresh/close/OS-kill ───
@@ -2275,7 +2283,9 @@ export default function ProximaApp() {
   }
 
   const cancelTask = useCallback((taskId) => {
+    // Removing the timer also ends a loop whose request is in flight (startPolling checks it after the await).
     if (pollRefs.current[taskId]) clearTimeout(pollRefs.current[taskId]);
+    delete pollRefs.current[taskId];
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: "failed", error: "Cancelled", endTime: Date.now() } : t));
   }, []);
 
