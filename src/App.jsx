@@ -67,7 +67,7 @@ function LoginScreen({ onSignedIn, notice = "" }) {
       const r = await signIn(username.trim(), password);
       if (r.ok) { clearSecrets(); onSignedIn({ token: r.token, expires_at: r.expires_at, username: r.username }); return; }
       setPassword("");
-      if (r.reason === "locked") { switchMode("unlock"); setError("Sign-in is locked after 3 failed attempts. Unlock it with your backup code, or use “Forgot password?” to set a new one."); }
+      if (r.reason === "locked") { switchMode("unlock"); setError("Sign-in is locked after 3 failed attempts. Unlock it with your backup code below, or tap “Forgot password?” to set a new one."); }
       else if (r.reason === "not_provisioned") setError("This account isn't set up on the server yet.");
       else setError(`Invalid username or password · ${r.attempts_left ?? 0} attempt${r.attempts_left === 1 ? "" : "s"} left before lockout`);
     } catch {
@@ -198,6 +198,12 @@ function LoginScreen({ onSignedIn, notice = "" }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <button type="button" style={linkStyle} onClick={() => switchMode("reset")}>Forgot password?</button>
               <button type="button" style={linkStyle} onClick={() => switchMode("unlock")}>Locked out?</button>
+            </div>
+          ) : mode === "unlock" ? (
+            // Locked out because the password is forgotten: the reset path must be one tap away from here.
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <button type="button" style={linkStyle} onClick={() => switchMode("signin")}>← Sign in</button>
+              <button type="button" style={linkStyle} onClick={() => switchMode("reset")}>Forgot password?</button>
             </div>
           ) : (
             <button type="button" style={linkStyle} onClick={() => switchMode("signin")}>← Back to sign in</button>
