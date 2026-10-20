@@ -1822,9 +1822,17 @@ export default function ProximaApp() {
   const logsRef = useRef(logs);
   logsRef.current = logs;
   const reconcileRunningRef = useRef(false);
-  // True once this session's first reconcile pass has run (answered or not): History entries are finished only then.
+  // True once a reconcile pass this session got History from the cloud (or 2 minutes passed without an answer):
+  // History entries are finished only then.
   const [historySyncReady, setHistorySyncReady] = useState(false);
   useEffect(() => { if (!isAuthed) setHistorySyncReady(false); }, [isAuthed]); // a later sign-in waits for its own sync
+  // A session whose cloud never answers (offline, bootstrap failed) still finishes its entries after 2 minutes; the
+  // server keeps any item the cloud records as completed, and the next pass that answers heals this copy.
+  useEffect(() => {
+    if (!isAuthed || historySyncReady) return;
+    const id = setTimeout(() => setHistorySyncReady(true), 120000);
+    return () => clearTimeout(id);
+  }, [isAuthed, historySyncReady]);
   const reconcileWithCloud = useCallback(async () => {
     if (!isSupabaseConfigured() || !initialLoadDone.current || bootstrapInProgress.current || reconcileRunningRef.current) return;
     reconcileRunningRef.current = true;
@@ -1855,6 +1863,8 @@ export default function ProximaApp() {
         setLogs(prev => prev.map(l => byId.get(l.id) || l));
         for (const l of logsFromCloud) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
       }
+      // History answered and the cloud's finished entries are merged: this device may finish entries now.
+      if (remote.historyOk) setHistorySyncReady(true);
 
       // Tasks: the cloud's additions + archive updates + outcomes other devices saved, and the server's recorded deletions.
       if (taskPlan.add.length || updates.size || rmTasks.size) {
@@ -1925,7 +1935,6 @@ export default function ProximaApp() {
       console.warn("[sync] reconcile failed", err);
     } finally {
       reconcileRunningRef.current = false;
-      setHistorySyncReady(true);
     }
   }, []);
 

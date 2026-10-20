@@ -50,12 +50,18 @@ export function finishLogs(logs, tasks, now) {
 // Entries still open here whose cloud copy another device already finished: that outcome wins (merged over the local
 // entry, which keeps fields the cloud row does not store, such as the source audio and video URLs replay uses). A
 // stale local copy would otherwise close or finish the entry from its own out-of-date tasks and overwrite the cloud.
+// A closed entry here takes, item by item, what the cloud records as completed where this copy says failed (the server
+// keeps the same rule): a device that closed it from stale copies while the cloud did not answer heals on the next pass.
 export function takeFinishedFromCloud(local, cloud) {
   const byId = new Map(cloud.map(c => [c.id, c]));
   const out = [];
   for (const l of local) {
-    const c = isOpenLog(l) ? byId.get(l.id) : null;
-    if (c && !isOpenLog(c) && (c.tasks || []).length) out.push({ ...l, tasks: c.tasks, totalCost: c.totalCost ?? totalOf(c.tasks) });
+    const c = byId.get(l.id);
+    if (!c || isOpenLog(c) || !(c.tasks || []).length) continue;
+    if (isOpenLog(l)) { out.push({ ...l, tasks: c.tasks, totalCost: c.totalCost ?? totalOf(c.tasks) }); continue; }
+    const cloudItems = new Map(c.tasks.filter(i => i?.id).map(i => [i.id, i]));
+    const items = (l.tasks || []).map(i => (i?.id && i.status === "failed" && cloudItems.get(i.id)?.status === "completed") ? cloudItems.get(i.id) : i);
+    if (items.some((i, k) => i !== l.tasks[k])) out.push({ ...l, tasks: items, totalCost: totalOf(items) });
   }
   return out;
 }

@@ -96,6 +96,17 @@ test("an entry still open here takes the finished outcome another device saved, 
   assert.deepEqual(takeFinishedFromCloud([open], []), []);
 });
 
+// Round-4 review wf_f0f800c6-0ab #4: a device that closed an entry from stale copies while the cloud did not answer
+// keeps that wrong version unless it also takes completed items from the cloud for closed entries (the server rule
+// per item, mirrored here).
+test("a closed entry here takes items the cloud records as completed, item by item", () => {
+  const mine = { ...log([{ id: "a", status: "failed", error: "Expired", cost: 0.04, outputs: [] }, { id: "b", status: "completed", cost: 0.05, outputs: ["y"] }]), totalCost: 0.05 };
+  const cloud = { ...log([{ id: "a", status: "completed", cost: 0.04, outputs: ["x"] }, { id: "b", status: "completed", cost: 0.05, outputs: ["y"] }]), totalCost: 0.09 };
+  const [fixed] = takeFinishedFromCloud([mine], [cloud]);
+  assert.deepEqual([fixed?.tasks.map(i => i.status), fixed?.totalCost], [["completed", "completed"], 0.09]);
+  assert.deepEqual(takeFinishedFromCloud([cloud], [mine]), [], "a cloud failure never replaces a completed item here");
+});
+
 test("queue bookkeeping: an upload clears only the version it sent", () => {
   const open = log(batchLogItems([task("a")]));
   const [done] = finishLogs([open], [task("a", { status: "completed", outputs: ["x"] })], NOW);

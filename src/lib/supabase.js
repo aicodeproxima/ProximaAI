@@ -268,15 +268,17 @@ export async function syncHistoryEntry(entry) {
   } catch (err) { warnOnce("syncHistoryEntry", err); throw err; }
 }
 
+// null when the read failed (an empty History and a failed read used to look the same: [] either way).
 export async function pullHistory(limit = 500) {
   if (!supabase) return [];
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("history")
       .select("*")
       .eq("device_id", getDeviceId())
       .order("timestamp", { ascending: false })
       .limit(limit);
+    if (error) throw error;
     return (data || []).map(row => ({
       id: row.id,
       timestamp: row.timestamp,
@@ -294,7 +296,7 @@ export async function pullHistory(limit = 500) {
       tasks: row.tasks || [],
       totalCost: row.total_cost,
     }));
-  } catch (err) { warnOnce("pullHistory", err); return []; }
+  } catch (err) { warnOnce("pullHistory", err); return null; }
 }
 
 // Bulk-delete specific history (log) ids from the cloud, scoped to this device/user.
@@ -487,7 +489,9 @@ export async function pullAllRemoteData() {
   ]);
   return {
     tasks: results[0].status === "fulfilled" ? results[0].value : [],
-    history: results[1].status === "fulfilled" ? results[1].value : [],
+    history: results[1].status === "fulfilled" && Array.isArray(results[1].value) ? results[1].value : [],
+    // Whether History really answered: entries are finished locally only after a pass that saw the cloud's copies.
+    historyOk: results[1].status === "fulfilled" && Array.isArray(results[1].value),
     settings: results[2].status === "fulfilled" ? results[2].value : {},
     favorites: results[3].status === "fulfilled" ? results[3].value : [],
   };
