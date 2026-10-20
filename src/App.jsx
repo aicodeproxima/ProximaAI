@@ -1175,6 +1175,8 @@ export default function ProximaApp() {
   const refreshBalance = useCallback(async () => {
     const r = await checkBalance();
     if (r.balance !== null) setBalance(r.balance);
+    // A missing or rejected key has no balance: never leave the old key's amount next to the warning.
+    else if (r.keyStatus === "missing" || r.keyStatus === "invalid") setBalance(null);
     if (r.keyStatus !== "unknown") setKeyStatus(r.keyStatus);
     return r;
   }, []);
@@ -2735,7 +2737,7 @@ export default function ProximaApp() {
           <div className="topbar">
             <div className="topbar-title">ProximaAI — {page === "cockpit" ? "GENERATION COCKPIT" : page === "gallery" ? "SAVED OUTPUTS" : page === "logs" ? "GENERATION LOG" : "SETTINGS"}</div>
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              {balance !== null && <div className="balance-pill">${Number(balance).toFixed(2)}</div>}
+              {balance !== null && !keyBlocked && <div className="balance-pill">${Number(balance).toFixed(2)}</div>}
               {keyBlocked && <span style={{ fontSize: 11, color: "var(--error)" }}>⚠ {keyStatus === "invalid" ? "API key rejected" : "No API Key"}</span>}
             </div>
           </div>
