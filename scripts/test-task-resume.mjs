@@ -138,6 +138,45 @@ test("poll answer: still running returns null (poll again)", () => {
   assert.equal(applyPoll(task("a"), { status: "processing" }, NOW), null);
 });
 
+// Older builds failed a task on the first network drop ("Failed to fetch" when the phone left the app) or declared an
+// image "Timeout" before polling once more. WaveSpeed had accepted it (prediction id saved), so the result can still
+// be fetched while WaveSpeed keeps it.
+const dropped = (id, extra = {}) => task(id, { status: "failed", error: "Failed to fetch", endTime: NOW - 60_000, ...extra });
+
+test("recovers a task an older build failed on a network drop: it polls again as processing", () => {
+  const p = planResume([dropped("r1")], NOW);
+  assert.deepEqual(p.resume.map(t => t.id), ["r1"]);
+  const [t] = p.resume;
+  assert.equal(t.status, "processing");
+  assert.equal(t.error, null);
+  assert.equal(t.endTime, null);
+  assert.equal(t.pollUrl, POLL);
+  assert.equal(t.recovered, true);
+  assert.deepEqual(p.expire, []);
+});
+
+test("recovers the other network-drop and early-timeout messages", () => {
+  const errors = ["Load failed", "NetworkError when attempting to fetch resource.", "Poll error", "Poll error (resumed)", "Timeout", "Timeout (resumed)"];
+  const p = planResume(errors.map((error, i) => dropped(`e${i}`, { error })), NOW);
+  assert.equal(p.resume.length, errors.length);
+});
+
+test("rebuilds the poll URL from the prediction id when only the cloud copy exists (no pollUrl)", () => {
+  const [t] = planResume([dropped("r2", { pollUrl: undefined, taskId: "pred-9" })], NOW).resume;
+  assert.equal(t.pollUrl, "/api/v3/predictions/pred-9/result");
+});
+
+test("never recovers answers WaveSpeed gave, a cancel, a task without a prediction id, or one past the window", () => {
+  const rows = [
+    dropped("flagged", { error: "Content flagged as potentially sensitive. Please try different prompts" }),
+    dropped("cancel", { error: "Cancelled" }),
+    dropped("noid", { taskId: null, pollUrl: undefined }),
+    dropped("old", { startTime: NOW - RESUME_WINDOW_MS - 1 }),
+    task("done", { status: "completed", outputs: ["https://cdn/x.png"] }),
+  ];
+  assert.deepEqual(planResume(rows, NOW).resume, []);
+});
+
 test("a late poll answer never overwrites a task that is no longer in flight (cancelled while the request ran)", () => {
   const cancelled = task("a", { status: "failed", error: "Cancelled", endTime: NOW - 1000 });
   const after = settlePoll(cancelled, t => applyPoll(t, { status: "completed", outputs: ["https://cdn/a.png"] }, NOW));

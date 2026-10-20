@@ -20,10 +20,24 @@ const GONE = new Set(["deleted", "expired", "canceled", "cancelled"]);
 
 export const failTask = (task, now, error) => ({ ...task, status: "failed", error, endTime: now });
 
-// Splits stored rows into in-flight tasks whose poll can resume and failed copies of those that cannot.
+// Failures that older builds recorded for a network drop (the phone leaving the app aborts the poll request) or for an
+// image "Timeout" declared before one last poll. WaveSpeed had already accepted these tasks, so while it keeps the
+// result they can be fetched; errors WaveSpeed itself returned (flagged content, failed generation) stay final.
+const NETWORK_FAILURE = /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?|Network request failed|Poll error( \(resumed\))?|Timeout( \(resumed\))?)$/;
+export const pollUrlFor = (t) => t.pollUrl || (t.taskId ? `/api/v3/predictions/${t.taskId}/result` : null);
+export function isRecoverableFailure(t, now) {
+  return t?.status === "failed" && !!t.taskId && NETWORK_FAILURE.test(t.error || "") && now - (t.startTime || 0) <= RESUME_WINDOW_MS;
+}
+
+// Splits stored rows into in-flight tasks whose poll can resume (plus wrongly failed ones to recover, flagged
+// `recovered`) and failed copies of in-flight tasks that cannot resume.
 export function planResume(rows, now) {
   const resume = [], expire = [];
   for (const t of rows) {
+    if (isRecoverableFailure(t, now)) {
+      resume.push({ ...t, status: "processing", error: null, endTime: null, pollUrl: pollUrlFor(t), recovered: true });
+      continue;
+    }
     if (!IN_FLIGHT.has(t.status)) continue;
     const age = now - (t.startTime || 0);
     if (!t.pollUrl) { if (age > SUBMIT_GRACE_MS) expire.push(failTask(t, now, UNSUBMITTED_ERROR)); }

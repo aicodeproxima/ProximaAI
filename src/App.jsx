@@ -1490,6 +1490,9 @@ export default function ProximaApp() {
   const pollRefs = useRef({});
   const savedLogIds = useRef(new Set());
   const savedTaskIds = useRef(new Set());
+  // Tasks being recovered after an older build wrongly failed them: their next outcome must be saved and synced even
+  // though their failed copy already was (savedTaskIds would otherwise skip it).
+  const recoveringIds = useRef(new Set());
   const isGeneratingRef = useRef(false);
   const timerRefs = useRef({});
   const initialLoadDone = useRef(false);
@@ -1908,12 +1911,13 @@ export default function ProximaApp() {
     const deferUpload = bootstrapInProgress.current;
     const toSave = tasks.filter(t =>
       (t.status === "completed" || t.status === "failed") &&
-      !savedTaskIds.current.has(t.id) &&
+      (!savedTaskIds.current.has(t.id) || recoveringIds.current.has(t.id)) &&
       !deletingIds.current.has(t.id) // never re-upsert a task being deleted
     );
     if (toSave.length === 0) return;
     for (const t of toSave) {
       savedTaskIds.current.add(t.id);
+      recoveringIds.current.delete(t.id);
       saveTask(t); // Local IndexedDB always succeeds first — cloud sync is separate
       if (!deferUpload) taskSyncQueueRef.current.push(t);
       // Also record in failed-queue preemptively so if the tab closes mid-debounce,
@@ -2047,10 +2051,14 @@ export default function ProximaApp() {
       const pending = await getPendingTasks();
       if (cancelled || !pending?.length) return;
       // Merge into state (de-duped by id)
+      for (const t of pending) if (t.recovered) recoveringIds.current.add(t.id);
       setTasks(prev => {
+        const byId = new Map(pending.map(t => [t.id, t]));
+        // A recovered task replaces its failed copy in state, so the poll's result can land on it.
+        const kept = prev.map(t => (t.status === "failed" && byId.get(t.id)?.recovered) ? byId.get(t.id) : t);
         const ids = new Set(prev.map(t => t.id));
         const fresh = pending.filter(t => !ids.has(t.id));
-        return [...fresh, ...prev].sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+        return [...fresh, ...kept].sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
       });
       // Restart polling for each
       for (const task of pending) {
