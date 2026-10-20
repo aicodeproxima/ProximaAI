@@ -647,7 +647,7 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .cost-bar .cost-amount { font-family: ${font}; color: var(--amber); font-weight: 600; }
 
 /* Progress + Results */
-.task-card { background: var(--bg-card); border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px; margin-bottom: 12px; transition: border-color 0.3s; animation: fadeSlideIn 0.4s ease; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.task-card { min-width: 0; overflow: hidden; background: var(--bg-card); border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px; margin-bottom: 12px; transition: border-color 0.3s; animation: fadeSlideIn 0.4s ease; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .task-card:hover { border-color: rgba(99,102,241,0.2); }
 .task-card.card-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(99,102,241,0.25); }
 .task-card.card-unselectable { opacity: 0.55; }
@@ -692,8 +692,11 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .result-img { width: 100%; border-radius: 8px; margin-top: 10px; cursor: pointer; transition: transform 0.2s; max-height: 300px; object-fit: cover; }
 .result-img:hover { transform: scale(1.01); }
 .result-video { width: 100%; border-radius: 8px; margin-top: 10px; max-height: 300px; }
-.result-actions { display: flex; gap: 6px; margin-top: 8px; }
-.result-action-btn { padding: 5px 10px; font-size: 11px; border-radius: 6px; border: 1px solid var(--glass-border); background: var(--bg-input); color: var(--text-secondary); cursor: pointer; font-family: ${font}; transition: all 0.25s cubic-bezier(0.4,0,0.2,1); }
+.result-actions { display: grid; gap: 6px; margin-top: 8px; width: 100%; }
+.result-actions-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.result-actions-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.result-actions-1 { grid-template-columns: 1fr; }
+.result-action-btn { min-width: 0; width: 100%; min-height: 38px; display: flex; align-items: center; justify-content: center; padding: 5px 4px; font-size: 11px; line-height: 1.15; text-align: center; overflow-wrap: anywhere; border-radius: 6px; border: 1px solid var(--glass-border); background: var(--bg-input); color: var(--text-secondary); cursor: pointer; font-family: ${font}; transition: all 0.25s cubic-bezier(0.4,0,0.2,1); }
 .result-action-btn:hover { background: rgba(99,102,241,0.12); color: var(--text-primary); border-color: rgba(99,102,241,0.4); box-shadow: 0 2px 10px rgba(99,102,241,0.15); }
 .result-action-btn:active { transform: scale(0.96); }
 
@@ -823,8 +826,8 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 
   .result-img { border-radius: 10px; max-height: 400px; }
   .result-video { border-radius: 10px; max-height: 400px; }
-  .result-actions { gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  .result-action-btn { padding: 10px 14px; font-size: 13px; border-radius: 8px; }
+  .result-actions { gap: 8px; margin-top: 12px; }
+  .result-action-btn { min-height: 44px; padding: 8px 6px; font-size: 12px; border-radius: 8px; }
 
   .results-grid { grid-template-columns: 1fr; gap: 14px; }
 
@@ -914,6 +917,8 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
   onToggleSelect,
 }) {
   const tType = task.genType || currentGenType;
+  const actionCount = task.status === "completed" && (tType === "image" || tType === "i2i") ? 6
+    : task.status === "completed" ? 4 : 1;
   // Only terminal generations are selectable — deleting an in-flight task would race
   // its still-running poll loop (which calls saveTask/syncTask) and resurrect it.
   const deletable = task.status === "completed" || task.status === "failed";
@@ -994,7 +999,7 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
       })}
 
       {!selectMode && (task.status === "completed" || task.status === "failed") && (
-        <div className="result-actions">
+        <div className={`result-actions result-actions-${actionCount}`}>
           <button className="result-action-btn" style={{ color: "var(--accent)", borderColor: "rgba(99,102,241,0.3)" }}
             onClick={() => onRegenerate(task)}>🔄 Regenerate</button>
           {task.status === "completed" && <>
