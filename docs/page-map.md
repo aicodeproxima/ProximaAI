@@ -21,8 +21,11 @@ Reusable scripts are in `scripts/browser/`.
 | Account reset (signed in) | Account menu "Forgot Password? Use Backup Code" → `#acct-reset-code`, `#acct-reset-new-password`, `#acct-reset-confirm-password`; success signs every device out |
 | Signed in? | `localStorage["proximaai-session"]` (JSON `{token, expires_at, username}`, 12 h); `proximaai-user` alone no longer signs in |
 | Account modal ids | `#acct-current-password`, `#acct-new-password`, `#acct-confirm-password`, `#acct-new-username`, `#acct-backup-code`, `#acct-type-it-again`, `#acct-email-address`, `#acct-verification-code` |
-Never type the owner's password or key. Server-side checks without signing in: mint a 3-minute token in SQL
-(`_sign_session_token('admin:'||username, now()+interval '3 minutes')`) and curl the proxy's `/api/v3/balance` (no billing).
+Never type the owner's password or key. A minted token (`_sign_session_token('admin:'||username, <exp>)`) is also
+revoked when exp − 12 h is before `app_secrets.admin_sessions_valid_after` (bumped by every password change or
+backup-code unlock; 20:36 UTC on 2026-10-20), so a short token only works until the first such bump; after it, any
+working token lives about 12 h and only "sign out everywhere" ends it — ask the owner first. Preferred: the owner signs
+in to the Chrome tab, then drive the app.
 
 ## Navigation (no deep links: pages are React state)
 | What | Selector / action |
@@ -70,6 +73,19 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   `File` and inject it into `input[type=file][accept='video/*']` with `DataTransfer` + `change`; the app uploads it
   to WaveSpeed. Do NOT paste `static.wavespeed.ai` example URLs: that CDN 403s any foreign Referer, so the browser
   reports "Format error" and nothing can be measured (the app's own uploads on `*.cloudfront.net` work).
+
+## Result webhook (since 2026-10-20)
+- The proxy adds `standard_webhook=<site>/api/ws-webhook` to model submits; WaveSpeed's signed delivery is written into
+  the cloud `tasks` row by task_id (`ws_webhook_apply`; waiting deliveries in `ws_webhook_events`, swept every 5 min by
+  pg_cron `ws-webhook-sweep`). Code: `api/ws-webhook.ts`, `src/lib/wsWebhook.js`; tests `scripts/test-ws-webhook.mjs`,
+  `scripts/test-ws-webhook-db.sql`.
+- "App closed" test without leaving the page: before Generate, wrap `window.fetch` so GETs matching
+  `/api/v3/predictions/<id>/result` throw `TypeError("Failed to fetch")` (the app retries, never fails), record the
+  submit's `data.id` from the flux POST, then close the tab. supabase-js captured `fetch` at start, so its uploads
+  pass. Proof: Vercel runtime log `[ws-webhook] 200 applied` (or `queued`) and an aggregate
+  `select status, count(*) from tasks where start_time >= <t0 ms> group by status` (no prompts or outputs).
+  Verified 2026-10-20 21:37 UTC: Flux Schnell, tab closed ~4 s after Generate, delivery 7 s later, row completed.
+- Network tracking in Claude in Chrome starts at its first `read_network_requests` call; call it before Generate.
 
 ## Storage
 - IndexedDB `proximaai`: stores `settings` (key), `tasks` (id), `history` (id), `favorites`, `presets`.
