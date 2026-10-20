@@ -154,7 +154,7 @@ function LoginScreen({ onSignedIn, notice = "" }) {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <label htmlFor="login-backup-code" style={{ ...labelStyle, marginBottom: 0 }}>Backup code</label>
                 <button type="button" onClick={() => setShowCode(s => !s)} aria-pressed={showCode} aria-controls="login-backup-code"
-                  style={{ ...linkStyle, padding: "0 4px", fontSize: 11 }}>{showCode ? "Hide" : "Show"}</button>
+                  style={{ ...linkStyle, padding: "0 4px", fontSize: 11, minWidth: 44 }}>{showCode ? "Hide" : "Show"}</button>
               </div>
               <input id="login-backup-code" type="text" value={backupCode} onChange={e => { setBackupCode(e.target.value); setError(""); }}
                 autoFocus autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
@@ -647,7 +647,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <label htmlFor="acct-reset-code" style={{ ...label, marginBottom: 0 }}>Backup Code</label>
               <button type="button" onClick={() => setShowResetCode(v => !v)} aria-pressed={showResetCode} aria-controls="acct-reset-code"
-                style={{ background: "transparent", border: "none", color: "#818cf8", fontFamily: font, fontSize: 11, cursor: "pointer", minHeight: 44, padding: "0 4px" }}>{showResetCode ? "Hide" : "Show"}</button>
+                style={{ background: "transparent", border: "none", color: "#818cf8", fontFamily: font, fontSize: 11, cursor: "pointer", minHeight: 44, minWidth: 44, padding: "0 4px" }}>{showResetCode ? "Hide" : "Show"}</button>
             </div>
             <input id="acct-reset-code" type="text" value={resetCode} onChange={e => { setResetCode(e.target.value); setError(""); }}
               style={{ ...input, ...maskedCodeStyle(showResetCode) }} autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} autoFocus />
