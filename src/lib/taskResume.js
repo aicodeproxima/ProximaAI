@@ -120,19 +120,36 @@ export function planOrphans(orphans, items, owned, now, claimants = []) {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push({ t, claim });
   }
+  const closed = (t) => now - t.startTime > ORPHAN_GRACE_MS;
   for (const [k, parts] of groups) {
-    const fits = pool.filter(x => model(x.i.model) === k && parts.some(p => inWindow(x, p.t)));
-    const withClaimants = fits.length >= parts.length;
-    // Oldest takes the oldest fit: right under any uniform clock skew between this device and WaveSpeed (a "prefer
-    // created after the start" rule swapped same-model siblings when the device clock ran ahead). Leftovers of deleted
-    // tasks are in `owned`; cancelled ones without an id are claimants.
-    for (const { t, claim } of parts.sort((a, b) => a.t.startTime - b.t.startTime)) {
-      if (claim && !withClaimants) continue;
-      const hit = fits.find(x => !used.has(x.i.id) && inWindow(x, t));
-      if (hit) used.add(hit.i.id);
-      if (claim) { if (hit) { claimed.push(hit.i.id); resolved.push(t.id); } continue; }
-      if (hit) adopt.push({ ...t, status: "processing", taskId: hit.i.id, pollUrl: hit.i.urls?.get || pollUrlFor({ taskId: hit.i.id }) });
-      else if (now - t.startTime > ORPHAN_GRACE_MS) fail.push(failTask(t, now, UNSUBMITTED_ERROR));
+    // The count rule applies per cluster of overlapping windows: a claimant from half an hour ago must not decide
+    // whether the current batch's claimants take part.
+    parts.sort((a, b) => a.t.startTime - b.t.startTime);
+    const clusters = [];
+    for (const p of parts) {
+      const last = clusters[clusters.length - 1];
+      if (last && p.t.startTime - LOOKUP_SKEW_MS <= last.until) {
+        last.parts.push(p);
+        last.until = Math.max(last.until, p.t.startTime + ORPHAN_GRACE_MS);
+      } else clusters.push({ parts: [p], until: p.t.startTime + ORPHAN_GRACE_MS });
+    }
+    for (const c of clusters) {
+      const fits = pool.filter(x => model(x.i.model) === k && c.parts.some(p => inWindow(x, p.t)));
+      const withClaimants = fits.length >= c.parts.length;
+      // Oldest takes the oldest fit: right under any uniform clock skew between this device and WaveSpeed (a "prefer
+      // created after the start" rule swapped same-model siblings when the device clock ran ahead). Leftovers of
+      // deleted tasks are in `owned`; cancelled ones without an id are claimants.
+      for (const { t, claim } of c.parts) {
+        const hit = claim && !withClaimants ? null : fits.find(x => !used.has(x.i.id) && inWindow(x, t));
+        if (hit) used.add(hit.i.id);
+        if (claim) {
+          if (hit) { claimed.push(hit.i.id); resolved.push(t.id); }
+          else if (closed(t)) resolved.push(t.id);   // its window closed with nothing to claim: done
+          continue;
+        }
+        if (hit) adopt.push({ ...t, status: "processing", taskId: hit.i.id, pollUrl: hit.i.urls?.get || pollUrlFor({ taskId: hit.i.id }) });
+        else if (closed(t)) fail.push(failTask(t, now, UNSUBMITTED_ERROR));
+      }
     }
   }
   return { adopt, fail, claimed, resolved };

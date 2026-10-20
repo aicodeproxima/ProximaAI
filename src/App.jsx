@@ -2158,9 +2158,9 @@ export default function ProximaApp() {
   // A submit that answers after its task was cancelled or deleted: the prediction id stays on the task (if it still
   // exists) and is released, so a lost submit of the same model can never adopt it (review wf_d4a468a3-746 #1).
   function keepLateSubmitId(id, predictionId) {
+    resolveClaimants([id]); // its outcome is known now: as a claimant it would take a sibling's prediction instead
     if (!predictionId) return;
     releasePredictions([predictionId]);
-    resolveClaimants([id]); // its prediction is known now: as a claimant it would take a sibling's instead
     const cur = tasksRef.current.find(t => t.id === id);
     if (!cur || cur.taskId) return;
     setTasks(prev => prev.map(t => t.id === id && !t.taskId ? { ...t, taskId: predictionId } : t));
@@ -2584,6 +2584,7 @@ export default function ProximaApp() {
         } catch (e) {
           // The response was lost, not refused: WaveSpeed may have the task. It stays pending for the history lookup.
           if (sent && submitMayHaveLanded(e)) { setTimeout(recoverOrphans, 2000); return; }
+          resolveClaimants([task.id]); // refused: it never reached WaveSpeed, so a cancel left nothing to claim
           const ks = keyStatusAfter(e);
           if (ks) setKeyStatus(ks);
           let errMsg = e.message || "Submit failed";
@@ -2692,6 +2693,7 @@ export default function ProximaApp() {
         startPolling(newTask, pollUrl, { genType: taskGenType });
       } catch (e) {
         if (sent && submitMayHaveLanded(e)) { setTimeout(recoverOrphans, 2000); return; }
+        resolveClaimants([newTask.id]); // refused: it never reached WaveSpeed
         const ks = keyStatusAfter(e);
         if (ks) setKeyStatus(ks);
         let errMsg = e.message || "Regenerate failed";

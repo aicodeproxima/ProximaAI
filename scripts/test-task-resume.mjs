@@ -406,6 +406,22 @@ test("when the cancelled submit never reached WaveSpeed, the live task still get
   assert.deepEqual(r.adopt.map(t => t.taskId), ["PB"]);
   assert.deepEqual(r.claimed, []);
 });
+// Round-4 review wf_f0f800c6-0ab #1: the "enough predictions" count was per model across every window, so a dead
+// claimant from half an hour ago switched claimant protection off for the current batch. It is per cluster of
+// overlapping windows now, and a claimant whose window has closed is dropped.
+test("an old dead claimant does not switch off protection for the current batch, and is dropped", () => {
+  const dead = claimant("D", NOW - 30 * 60_000), c = claimant("C", NOW - 70_000), o = orphan("O", { startTime: NOW - 60_000 });
+  const items = [item("Pc", { created_at: new Date(NOW - 69_000).toISOString() }), item("Po", { created_at: new Date(NOW - 59_000).toISOString() })];
+  const r = planOrphans([o], items, new Set(), NOW, [dead, c]);
+  assert.deepEqual(r.adopt.map(t => t.taskId), ["Po"]);
+  assert.deepEqual(r.claimed, ["Pc"]);
+  assert.deepEqual(r.resolved.sort(), ["C", "D"], "C matched; D's window closed with nothing to claim");
+});
+test("a claimant whose window is still open and has no prediction yet stays", () => {
+  const r = planOrphans([orphan("O", { startTime: NOW - 10_000 })], [], new Set(), NOW, [claimant("C", NOW - 20_000)]);
+  assert.deepEqual(r.resolved, []);
+});
+
 test("claimants are kept an hour and dropped once resolved", () => {
   let m = rememberClaimants({}, [claimant("A", NOW - 1000), { id: "noModel", startTime: NOW }], NOW);
   assert.deepEqual(liveClaimants(m, NOW + 59 * 60_000).map(c => c.id), ["A", "noModel"]);
