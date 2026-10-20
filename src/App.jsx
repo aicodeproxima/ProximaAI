@@ -8,7 +8,7 @@ import { submitTask, pollResult, listPredictions, checkBalance, uploadMedia, API
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, releasePredictions, releasedPredictions } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, releasePredictions, releasedPredictions, sentVersion } from "./lib/storage.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
@@ -1405,13 +1405,13 @@ export default function ProximaApp() {
     if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
     const queue = taskSyncQueueRef.current.splice(0).filter(t => !deletingIds.current.has(t.id));
     if (queue.length > 0) {
-      try { await syncTasksBatch(queue); for (const t of queue) removeFailedSync("task", t.id); } catch {}
+      try { await syncTasksBatch(queue); for (const t of queue) removeFailedSync("task", t.id, sentVersion(t)); } catch {}
     }
     const failed = getFailedSyncs();
     // Deletes win over upserts: never re-upsert a task that's queued for deletion.
     const taskRetries = failed.filter(f => f.kind === "task" && !deletingIds.current.has(f.id)).map(f => f.data).filter(Boolean);
-    if (taskRetries.length > 0) { try { await syncTasksBatch(taskRetries); for (const t of taskRetries) removeFailedSync("task", t.id); } catch {} }
-    for (const f of failed.filter(f => f.kind === "history" && !deletingLogIds.current.has(f.id))) { try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id); } catch {} }
+    if (taskRetries.length > 0) { try { await syncTasksBatch(taskRetries); for (const t of taskRetries) removeFailedSync("task", t.id, sentVersion(t)); } catch {} }
+    for (const f of failed.filter(f => f.kind === "history" && !deletingLogIds.current.has(f.id))) { try { await syncHistoryEntry(f.data); removeFailedSync("history", f.id, sentVersion(f.data)); } catch {} }
     for (const f of failed.filter(f => f.kind === "setting" && f.id !== "apiKey")) { try { await syncSetting(f.id, f.data); removeFailedSync("setting", f.id); } catch {} }
     const favoriteScope = getDeviceId();
     if (failed.some(f => f.kind === "model-favorites" && f.scope === favoriteScope)) {
@@ -1767,12 +1767,12 @@ export default function ProximaApp() {
           if (taskRetries.length > 0) {
             try {
               await syncTasksBatch(taskRetries);
-              for (const t of taskRetries) removeFailedSync("task", t.id);
+              for (const t of taskRetries) removeFailedSync("task", t.id, sentVersion(t));
             } catch {}
           }
           const historyRetries = failed.filter(f => f.kind === "history" && !logDelSet.has(f.id) && !deletingLogIds.current.has(f.id)).map(f => f.data).filter(Boolean);
           for (const entry of historyRetries) {
-            try { await syncHistoryEntry(entry); removeFailedSync("history", entry.id); } catch {}
+            try { await syncHistoryEntry(entry); removeFailedSync("history", entry.id, sentVersion(entry)); } catch {}
           }
           const settingRetries = failed.filter(f => f.kind === "setting" && f.id !== "apiKey");
           for (const s of settingRetries) {
@@ -1884,7 +1884,7 @@ export default function ProximaApp() {
       const taskUploads = taskPlan.upload.slice(0, 100);
       if (taskUploads.length) {
         for (const t of taskUploads) { savedTaskIds.current.add(t.id); saveTask(t); addFailedSync({ kind: "task", id: t.id, data: t }); }
-        try { await syncTasksBatch(taskUploads); for (const t of taskUploads) removeFailedSync("task", t.id); } catch {}
+        try { await syncTasksBatch(taskUploads); for (const t of taskUploads) removeFailedSync("task", t.id, sentVersion(t)); } catch {}
       }
 
       // History: same steps.
@@ -1904,7 +1904,7 @@ export default function ProximaApp() {
       const logUploads = logPlan.upload.slice(0, 100);
       if (logUploads.length) {
         for (const l of logUploads) { savedLogIds.current.add(l.id); addHistoryEntry(l); addFailedSync({ kind: "history", id: l.id, data: l }); }
-        try { await syncHistoryBatch(logUploads); for (const l of logUploads) removeFailedSync("history", l.id); } catch {}
+        try { await syncHistoryBatch(logUploads); for (const l of logUploads) removeFailedSync("history", l.id, sentVersion(l)); } catch {}
       }
       setFailedSyncCount(getFailedSyncs().length);
     } catch (err) {
@@ -2012,7 +2012,7 @@ export default function ProximaApp() {
       trackedSync(`tasks-batch-${Date.now()}`, () => syncTasksBatch(queue))
         .then(() => {
           // Successful sync — clear the preemptive failure entries
-          for (const t of queue) removeFailedSync("task", t.id);
+          for (const t of queue) removeFailedSync("task", t.id, sentVersion(t));
           setFailedSyncCount(getFailedSyncs().length);
         })
         .catch(() => {
@@ -2038,7 +2038,7 @@ export default function ProximaApp() {
           // Fire-and-forget: we're mid-unload, can't await. The writes are already
           // in addFailedSync() so if this doesn't complete, replay handles it.
           syncTasksBatch(queue).then(() => {
-            for (const t of queue) removeFailedSync("task", t.id);
+            for (const t of queue) removeFailedSync("task", t.id, sentVersion(t));
           }).catch(() => {});
         }
       }
@@ -2743,7 +2743,7 @@ export default function ProximaApp() {
       // Queue first: a failed upload is retried, and cross-device sync never reverts these URLs from the cloud.
       addFailedSync({ kind: "task", id: updated.id, data: updated });
       syncTask(updated)
-        .then(() => removeFailedSync("task", updated.id))
+        .then(() => removeFailedSync("task", updated.id, sentVersion(updated)))
         .catch(() => {})
         .finally(() => setFailedSyncCount(getFailedSyncs().length));
       setAccountToast("☁ Backed up to cloud");

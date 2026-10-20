@@ -455,6 +455,9 @@ export function addFailedSync(entry) {
   } catch {}
 }
 
+// For a confirmed upload: clears the queue entry only while it still holds the exact version that was sent.
+export const sentVersion = (data) => { const sent = JSON.stringify(data); return (e) => JSON.stringify(e.data) === sent; };
+
 // `onlyIf(entry)`: remove the entry only while it still matches, e.g. still the "processing" version a finished upload
 // sent, not the "completed" version that replaced it in the queue meanwhile.
 export function removeFailedSync(kind, id, onlyIf) {
