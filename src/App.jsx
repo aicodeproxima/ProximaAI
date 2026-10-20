@@ -14,7 +14,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, pollErrorAction, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -2027,8 +2027,9 @@ export default function ProximaApp() {
   // backoff; a dead session or a missing key stops the loop without failing the task, and the resume
   // effect restarts it after sign-in / once a key is saved.
   function startPolling(task, pollUrl, { genType, resumed = false, delay } = {}) {
-    const { interval, maxPollMs } = pollTiming(genType);
-    const deadline = (resumed ? (task.startTime || Date.now()) : Date.now()) + maxPollMs;
+    // No client-side deadline: the task ends on WaveSpeed's answer or the 48 h window; slow tasks just poll less often.
+    const started = task.startTime || Date.now();
+    const wait = () => nextPollDelay(genType, Date.now() - started);
     // This loop is live while pollRefs holds its own timer: cancel, sign-out or a newer loop for the same task
     // removes or replaces it, and the loop then stops even if a request was already in flight.
     let timer = null;
@@ -2036,7 +2037,6 @@ export default function ProximaApp() {
     const live = () => pollRefs.current[task.id] === timer;
     const update = (fn) => setTasks(prev => prev.map(t => t.id === task.id ? settlePoll(t, fn) : t));
     const finish = (fn) => { if (live()) delete pollRefs.current[task.id]; update(fn); };
-    const timeout = () => finish(t => ({ ...t, status: "failed", error: resumed ? "Timeout (resumed)" : "Timeout", endTime: Date.now() }));
     const poll = async () => {
       if (!live()) return;
       if (Date.now() - (task.startTime || 0) > RESUME_WINDOW_MS) { finish(t => failTask(t, Date.now(), EXPIRED_ERROR)); return; }
@@ -2046,8 +2046,7 @@ export default function ProximaApp() {
         const data = result?.data || result;
         const now = Date.now();
         if (applyPoll(task, data, now)) finish(t => applyPoll(t, data, now));
-        else if (now > deadline) timeout();
-        else schedule(interval);
+        else schedule(wait());
       } catch (e) {
         if (!live()) return;
         const action = pollErrorAction(e);
@@ -2055,13 +2054,11 @@ export default function ProximaApp() {
           delete pollRefs.current[task.id];
           if (e.noKey) setKeyStatus("missing"); // saving a key flips keyBlocked back, and the resume effect restarts this poll
         }
-        else if (action === "retry") {
-          if (Date.now() > deadline) timeout();
-          else schedule(interval * 2 + Math.random() * 2000);
-        } else finish(t => ({ ...t, status: "failed", error: e.message || (resumed ? "Poll error (resumed)" : "Poll error"), endTime: Date.now() }));
+        else if (action === "retry") schedule(wait() * 2 + Math.random() * 2000);
+        else finish(t => ({ ...t, status: "failed", error: e.message || (resumed ? "Poll error (resumed)" : "Poll error"), endTime: Date.now() }));
       }
     };
-    schedule(delay ?? interval);
+    schedule(delay ?? wait());
   }
 
   // ─── RESUME POLLING for in-flight tasks after refresh/close/OS-kill ───

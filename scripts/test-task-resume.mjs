@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, pollErrorAction, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, RESUME_WINDOW_MS, SUBMIT_GRACE_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -228,11 +228,20 @@ test("poll error: WaveSpeed refusing the poll (4xx) fails the task", () => {
   assert.equal(pollErrorAction({ code: 0, message: "Refusing to poll a non-WaveSpeed URL" }), "fail");
 });
 
-test("poll timing: images poll every 3 s for 5 min, 3D every 10 s, video until WaveSpeed answers", () => {
-  assert.deepEqual(pollTiming("image"), { interval: 3000, maxPollMs: 300000 });
-  assert.deepEqual(pollTiming("i2i"), { interval: 3000, maxPollMs: 300000 });
-  assert.deepEqual(pollTiming("i23d"), { interval: 10000, maxPollMs: Infinity });
-  assert.deepEqual(pollTiming("t2v"), { interval: 15000, maxPollMs: Infinity });
+// No client-side give-up: a task with a prediction id ends only on WaveSpeed's answer or the 48 h window. Images
+// that are still running after 5 minutes (or come back from a phone that was away) just poll less often.
+test("poll delay: images every 3 s for 5 min, then every 30 s; 3D every 10 s; video every 15 s", () => {
+  assert.equal(nextPollDelay("image", 60_000), 3000);
+  assert.equal(nextPollDelay("i2i", 299_000), 3000);
+  assert.equal(nextPollDelay("image", 301_000), 30000);
+  assert.equal(nextPollDelay("i2i", 3 * HOUR), 30000);
+  assert.equal(nextPollDelay("i23d", 10 * HOUR), 10000);
+  assert.equal(nextPollDelay("t2v", 10 * HOUR), 15000);
+});
+
+test("an image still running after 5 minutes is never failed by the app's clock", () => {
+  assert.equal(pollTiming("image").maxPollMs, undefined, "no client deadline");
+  assert.equal(applyPoll(task("a", { startTime: NOW - 20 * 60_000 }), { status: "processing" }, NOW), null, "still running = poll again");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

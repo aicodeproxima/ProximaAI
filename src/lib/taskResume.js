@@ -101,10 +101,17 @@ export function pollErrorAction(e) {
   return "fail";
 }
 
-// Images poll fast and give up after 5 minutes of polling; 3D and video poll slower until WaveSpeed answers.
+// How often to poll. There is no client-side give-up: a task with a prediction id ends only on WaveSpeed's answer or
+// the 48 h resume window. (A 5-minute image deadline used to fail images whose phone had simply been away.) Images poll
+// fast for 5 minutes, then every 30 s; 3D every 10 s; video every 15 s.
 export function pollTiming(genType) {
-  if (genType === "image" || genType === "i2i") return { interval: 3000, maxPollMs: 300000 };
-  return { interval: genType === "i23d" ? 10000 : 15000, maxPollMs: Infinity };
+  if (genType === "image" || genType === "i2i") return { interval: 3000, slowAfterMs: 300000, slowInterval: 30000 };
+  const interval = genType === "i23d" ? 10000 : 15000;
+  return { interval, slowAfterMs: Infinity, slowInterval: interval };
+}
+export function nextPollDelay(genType, elapsedMs) {
+  const t = pollTiming(genType);
+  return elapsedMs > t.slowAfterMs ? t.slowInterval : t.interval;
 }
 
 // Adds the IndexedDB snapshot to state without dropping what is already there. On load the resume effect's
