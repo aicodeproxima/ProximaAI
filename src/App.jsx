@@ -589,10 +589,9 @@ function AccountModal({ onClose, onSaved }) {
             <label style={label}>Current Password</label>
             <input type="password" value={currentPassword} onChange={e => { setCurrentPassword(e.target.value); setError(""); }} style={input} autoComplete="current-password" autoFocus />
             <label style={{ ...label, marginTop: 12 }}>Backup Code (12+ characters)</label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input type="text" value={backupCode} onChange={e => { setBackupCodeInput(e.target.value); setError(""); }} style={{ ...input, flex: 1, minWidth: 0 }} autoComplete="off" spellCheck={false} />
-              <button type="button" style={{ ...btn(), padding: "12px 14px" }} onClick={() => { const c = makeBackupCode(); setBackupCodeInput(c); setConfirmBackupCode(""); setError(""); }}>Generate</button>
-            </div>
+            {/* Full-width field: a generated code (24 chars) must be readable in full at 384px to be written down */}
+            <input type="text" value={backupCode} onChange={e => { setBackupCodeInput(e.target.value); setError(""); }} style={input} autoComplete="off" spellCheck={false} />
+            <button type="button" style={{ ...btn(), width: "100%", marginTop: 8, minHeight: 44 }} onClick={() => { const c = makeBackupCode(); setBackupCodeInput(c); setConfirmBackupCode(""); setError(""); }}>Generate a strong code</button>
             <label style={{ ...label, marginTop: 12 }}>Type It Again</label>
             <input type="text" value={confirmBackupCode} onChange={e => { setConfirmBackupCode(e.target.value); setError(""); }} style={input} autoComplete="off" spellCheck={false} />
             {error && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
