@@ -6,7 +6,7 @@
 // Activated automatically when VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.
 // Gracefully no-ops otherwise (local-only mode).
 
-import { sessionToken, isSessionError, reportSessionExpired } from "./session.js";
+import { sessionToken, isSessionError, reportSessionExpired, isSuperseded } from "./session.js";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -537,7 +537,10 @@ async function sessionRpc(fn, args = {}) {
   if (!token) { reportSessionExpired(); throw new Error("Session expired — sign in again"); }
   const { data, error } = await supabase.rpc(fn, { p_session_token: token, ...args });
   if (error) {
-    if (isSessionError(error)) reportSessionExpired();
+    if (isSessionError(error)) {
+      if (isSuperseded(token)) return sessionRpc(fn, args); // token replaced mid-flight: retry once with the new one
+      reportSessionExpired(token);
+    }
     throw error;
   }
   return data;

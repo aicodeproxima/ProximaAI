@@ -2,7 +2,7 @@
 // Every call goes through the /api/wavespeed-v2 edge proxy with the signed-in session token. The proxy
 // checks the token and adds the WaveSpeed key server-side, so the browser never holds the key.
 
-import { sessionToken, reportSessionExpired } from "./session.js";
+import { sessionToken, reportSessionExpired, isSuperseded } from "./session.js";
 import { uploadInputFile } from "./supabase.js";
 
 const PROXY_ROOT = "/api/wavespeed-v2";
@@ -32,7 +32,8 @@ async function wsFetch(url, options = {}) {
   const res = await fetch(url, { ...options, headers: { ...(options.headers || {}), "X-Proxima-Session": token } });
   const refusal = res.headers.get("x-proxima-auth");
   if (res.status === 401 && refusal === "session") {
-    reportSessionExpired();
+    if (isSuperseded(token)) return wsFetch(url, options); // refused a token replaced mid-flight: resend with the new one
+    reportSessionExpired(token);
     throw { code: 401, message: "Session expired — sign in again", session: true };
   }
   if (res.status === 400 && refusal === "no-key") {

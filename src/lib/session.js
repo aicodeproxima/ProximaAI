@@ -38,7 +38,14 @@ export function isSessionError(err) {
 
 let expiredHandler = null;
 export function onSessionExpired(fn) { expiredHandler = fn; }
-export function reportSessionExpired() {
+// tokenUsed: the token the refused request carried. A refusal that arrives after this device already switched to a
+// newer token (password change / rename revoke the old one) is stale and must not sign the fresh session out.
+export function isSuperseded(tokenUsed) {
+  const current = sessionToken();
+  return !!(tokenUsed && current && current !== tokenUsed);
+}
+export function reportSessionExpired(tokenUsed) {
+  if (isSuperseded(tokenUsed)) return;
   clearSession();
   try { expiredHandler?.(); } catch {}
 }
