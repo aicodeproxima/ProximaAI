@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useCallback, useReducer, memo } from "react";
+import { useState, useEffect, useRef, useCallback, useReducer, useMemo, memo } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload, getEffectiveImageBatchCount, getImageBatchLimit, planImageBatchRequests } from "./lib/payloadBuilder.js";
-import { quoteRequest, requestCost } from "./lib/pricing.js";
+import { requestCost } from "./lib/pricing.js";
+import { draftTask, unitQuote, taskUserSettings } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { downscaleImage } from "./lib/imageUpload.js";
@@ -867,24 +868,6 @@ function formatTime(ms) {
   return s >= 60 ? `${(s / 60).toFixed(1)}m` : `${s.toFixed(1)}s`;
 }
 function formatCost(c) { return `$${c.toFixed(4)}`; }
-// What buildPayload() receives for a task. Shared by submit, regenerate and the cost estimate, so every
-// price is computed from the payload that is actually sent.
-function taskUserSettings(task, type = task.genType) {
-  return {
-    prompt: task.prompt, negPrompt: task.negPrompt,
-    resolution: task.resolution, duration: task.duration,
-    seed: task.seed, aspectRatio: task.aspectRatio,
-    sourceImageUrl: task.sourceImageUrl,
-    sourceImageUrls: task.sourceImageUrls || [],
-    sourceVideoUrl: type === "v2v" ? task.sourceImageUrl : (task.sourceVideoUrl || ""),
-    sourceAudioUrl: task.sourceAudioUrl || "",
-    perModelResolution: task.perModelResolution || {},
-    numImages: task.numImages || 1,
-    ...(task.optionalParams || {}),
-    briaPresets: task.briaPresets || {},
-    endFrameUrl: task.endFrameUrl, refVideoUrl: task.refVideoUrl,
-  };
-}
 // "1 model · 4 images" when a batch fans out (or natively batches) one model into several images.
 function logModelsLabel(log) {
   const models = new Set(log.models || []).size;
@@ -1912,38 +1895,19 @@ export default function ProximaApp() {
   const selectedModelConfigs = selectedModels.map(id => models.find(m => m.id === id)).filter(Boolean);
   const effectiveImageBatchCount = getEffectiveImageBatchCount(selectedModelConfigs, numImages, genType);
 
-  // One planned request as a task, priced from the payload it will send. The estimate and
-  // handleGenerate both use it, so the estimate is the sum of the prices the tasks will carry.
-  function quoteDraftTask({ model, nativeBatch, requestIndex, requestCount, imagesPerRequest, totalImages }, batchId = null) {
-    const modelId = model.id;
-    // C4: coercion-aware resolution/duration this model will ACTUALLY receive (for the card)
-    const rp = model?.params?.resolution;
-    const chosenR = rp ? (perModelRes[modelId] || resolution || rp.default) : null;
-    const actualResOpt = rp ? (rp.options.find(o => o.value === chosenR) || rp.options.find(o => o.value === rp.default)) : null;
-    const dp = model?.params?.duration;
-    const actualDur = dp ? (dp.options.includes(Number(duration)) ? Number(duration) : dp.default) : null;
-    const parsedSeed = Number.parseInt(seed, 10);
-    const taskSeed = !nativeBatch && requestCount > 1 && Number.isFinite(parsedSeed) && seed !== "-1"
-      ? String(parsedSeed + requestIndex) : seed;
-    const task = {
-      id: genId(), batchId, modelId, modelName: model?.name || modelId,
-      provider: model?.provider || "Unknown", price: 0,
-      status: "pending", startTime: Date.now(), endTime: null,
-      wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
-      genType, prompt, negPrompt, resolution, duration, seed: taskSeed, aspectRatio, sourceImageUrl,
-      sourceImageUrls: sourceImageUrls.length > 0 ? sourceImageUrls : (sourceImageUrl ? [sourceImageUrl] : []),
-      perModelResolution: perModelRes, numImages: imagesPerRequest, requestedImages: totalImages,
-      batchImageIndex: requestCount > 1 ? requestIndex + 1 : null,
-      optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl,
-      actualRes: actualResOpt?.label || null, actualDur
-    };
-    const quote = quoteRequest(model, buildPayload(model, taskUserSettings(task), genType), { imagesPerRequest, mediaDuration: url => mediaDurations[url] });
-    task.price = quote.cost;
-    return { task, quote };
-  }
-  const estQuotes = planImageBatchRequests(selectedModelConfigs, numImages, genType).map(plan => quoteDraftTask(plan).quote);
+  // The cockpit's current settings. Estimate, picker labels and handleGenerate all price tasks drafted from it
+  // (src/lib/taskDraft.js), so a label, the estimate and the task price are the price of the same payload.
+  const draftForm = { genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl, sourceImageUrls,
+    perModelRes, optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl };
+  const mediaDuration = url => mediaDurations[url];
+  const estQuotes = planImageBatchRequests(selectedModelConfigs, numImages, genType).map(plan => draftTask(plan, draftForm, { mediaDuration }).quote);
   const estCost = estQuotes.reduce((sum, q) => sum + q.cost, 0);
   const estExact = estQuotes.every(q => q.exact);
+  // Picker labels: one generation of each model at the current settings. Recomputed only when a setting changes.
+  const unitQuotes = useMemo(
+    () => new Map(models.map(m => [m.id, unitQuote(m, draftForm, { mediaDuration })])),
+    [models, mediaDurations, ...Object.values(draftForm)], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   function toggleModel(id) {
     setSelectedModels(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -2125,7 +2089,7 @@ export default function ProximaApp() {
 
     const batchId = genId();
     const batchPlan = planImageBatchRequests(selectedConfigs, numImages, genType);
-    const newTasks = batchPlan.map(plan => quoteDraftTask(plan, batchId).task);
+    const newTasks = batchPlan.map(plan => draftTask(plan, draftForm, { id: genId(), batchId, mediaDuration }).task);
 
     setTasks(prev => [...newTasks, ...prev]);
 
@@ -3091,7 +3055,13 @@ export default function ProximaApp() {
                                 {m.hot && <span className="hot-badge">HOT</span>}
                                 {m.flagship && <span className="hot-badge" style={{ background: "var(--accent)" }}>★</span>}
                                 <span className="model-provider" style={{ background: (PROVIDER_COLORS[m.provider]||"#666")+"22", color: PROVIDER_COLORS[m.provider]||"#aaa" }}>{m.provider}</span>
-                                <span className="model-price">{formatCost(m.price)}</span>
+                                {(() => {
+                                  const q = unitQuotes.get(m.id) || { cost: m.price, exact: true };
+                                  const title = q.exact
+                                    ? `One generation at your current settings (default settings: ${formatCost(m.price)})`
+                                    : "Default-settings price: an input's length is not measured yet";
+                                  return <span className="model-price" title={title}>{q.exact ? "" : "~"}{formatCost(q.cost)}</span>;
+                                })()}
                               </span>
                             </button>
                             <button type="button" className={`model-favorite-btn ${isFavorite ? "active" : ""}`}
