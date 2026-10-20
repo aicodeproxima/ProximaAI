@@ -8,6 +8,7 @@ Reusable scripts are in `scripts/browser/`.
 - Live bundle: `curl -sL <site>/ | grep -o 'assets/index-[^"]*\.js'`, then grep that bundle for a string your
   change added. In the page: `[...document.scripts].map(s => s.src).find(s => s.includes('/assets/index-'))`.
 - Vercel deploys ~20-30 s after `git push origin main`. Reload open tabs (and the phone) after every deploy.
+- Wait for a deploy in one call: `sh scripts/browser/wait-deploy.sh '<string your change added>'` (polls every 5 s, prints the live bundle).
 
 ## Navigation (no deep links: pages are React state)
 | What | Selector / action |
