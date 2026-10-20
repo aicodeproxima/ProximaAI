@@ -84,7 +84,8 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   submit's `data.id` from the flux POST, then close the tab. supabase-js captured `fetch` at start, so its uploads
   pass. Proof: Vercel runtime log `[ws-webhook] 200 applied` (or `queued`) and an aggregate
   `select status, count(*) from tasks where start_time >= <t0 ms> group by status` (no prompts or outputs).
-  Verified 2026-10-20 21:37 UTC: Flux Schnell, tab closed ~4 s after Generate, delivery 7 s later, row completed.
+  Verified 2026-10-20: Flux Schnell, Generate 21:37:01.4 UTC, tab closed before the delivery (21:37:12.3 UTC), row
+  completed.
 - Network tracking in Claude in Chrome starts at its first `read_network_requests` call; call it before Generate.
 
 ## Storage
