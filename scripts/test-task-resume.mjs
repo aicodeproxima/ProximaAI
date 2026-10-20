@@ -417,6 +417,18 @@ test("an old dead claimant does not switch off protection for the current batch,
   assert.deepEqual(r.claimed, ["Pc"]);
   assert.deepEqual(r.resolved.sort(), ["C", "D"], "C matched; D's window closed with nothing to claim");
 });
+// Round-5 review wf_5d9498dc-619: a refused or malformed history lookup (items = [] though nothing answered) dropped a
+// closed-window claimant, and the next answered pass gave its prediction to a sibling. Only a lookup that answered
+// may drop one.
+test("a refused lookup never drops a claimant; the answered pass after it still pairs correctly", () => {
+  const a = claimant("A", NOW - 125_000), b = orphan("B", { startTime: NOW - 110_000 });
+  const refused = planOrphans([b], [], new Set(), NOW, [a], { answered: false });
+  assert.deepEqual(refused.resolved, []);
+  const items = [item("pA", { created_at: new Date(NOW - 124_500).toISOString() }), item("pB", { created_at: new Date(NOW - 109_500).toISOString() })];
+  const answered = planOrphans([b], items, new Set(), NOW + 20_000, [a]);
+  assert.deepEqual([answered.adopt.map(t => t.taskId), answered.claimed], [["pB"], ["pA"]]);
+});
+
 test("a claimant whose window is still open and has no prediction yet stays", () => {
   const r = planOrphans([orphan("O", { startTime: NOW - 10_000 })], [], new Set(), NOW, [claimant("C", NOW - 20_000)]);
   assert.deepEqual(r.resolved, []);

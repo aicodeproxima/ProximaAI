@@ -2188,15 +2188,17 @@ export default function ProximaApp() {
       // Tasks cancelled before their submit gave an id pair with their own prediction too (never adopted).
       const claimants = storedClaimants();
       const windows = orphanWindows([...orphans, ...claimants]);
-      let items = [];
+      let items = [], answered = true;
       try {
         for (const w of windows) items.push(...await listPredictions(w));
       } catch (e) {
         // Network trouble, a rate limit, a 5xx, a stopped session or a rejected key: ask again on the next pass. Only a
-        // refusal of the lookup itself leaves the grace alone to decide, as before this lookup existed.
+        // refusal of the lookup itself leaves the grace alone to decide, as before this lookup existed (and then no
+        // claimant is dropped: nothing answered, round-5 review wf_5d9498dc-619).
         const ks = keyStatusAfter(e);
         if (ks) setKeyStatus(ks);
         if (pollErrorAction(e) !== "fail") return;
+        items = []; answered = false;
       }
       // Owned = predictions any task holds: here, on another device (its row may not have reached this one yet), or
       // released by a delete or a cancel. Without the cloud's answer nothing is decided this pass.
@@ -2207,7 +2209,7 @@ export default function ProximaApp() {
         cloudOwned.push(...ids);
       }
       const owned = new Set([...tasksRef.current.map(t => t.taskId).filter(Boolean), ...releasedPredictions(), ...cloudOwned]);
-      const { adopt, fail, claimed, resolved } = planOrphans(orphans, items, owned, Date.now(), claimants);
+      const { adopt, fail, claimed, resolved } = planOrphans(orphans, items, owned, Date.now(), claimants, { answered });
       releasePredictions(claimed);
       resolveClaimants(resolved);
       const decided = new Map([...adopt, ...fail].map(t => [t.id, t]));
