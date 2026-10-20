@@ -2,7 +2,7 @@
 // Optimized for: tasks with outputs, generation history, settings, favorites, presets
 // Falls back to localStorage if IndexedDB unavailable.
 
-import { planResume } from "./taskResume.js";
+import { planResume, rememberReleased, liveReleased } from "./taskResume.js";
 
 const DB_NAME = "proximaai";
 const DB_VERSION = 3;
@@ -423,6 +423,17 @@ export async function migrateFromLocalStorage() {
 // Cloud writes that fail (network, rate-limit, tab-close mid-debounce) get
 // persisted here. On next mount, we replay them. Keeps us honest — failures
 // never vanish silently, and "saved" status never lies.
+// Prediction ids no task carries any more (deleted, or answered after a cancel), so the lost-submit lookup never adopts
+// them (taskResume.js rememberReleased). Survives a reload: an orphan is often looked up on the next load.
+const RELEASED_KEY = "proximaai-released-predictions";
+const readReleased = () => { try { return JSON.parse(localStorage.getItem(RELEASED_KEY) || "{}") || {}; } catch { return {}; } };
+export function releasePredictions(ids) {
+  const list = (ids || []).filter(Boolean);
+  if (!list.length) return;
+  try { localStorage.setItem(RELEASED_KEY, JSON.stringify(rememberReleased(readReleased(), list, Date.now()))); } catch {}
+}
+export const releasedPredictions = () => liveReleased(readReleased(), Date.now());
+
 const FAILED_KEY = "proximaai-failed-syncs";
 
 export function getFailedSyncs() {

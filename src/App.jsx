@@ -8,14 +8,14 @@ import { submitTask, pollResult, listPredictions, checkBalance, uploadMedia, API
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, releasePredictions, releasedPredictions } from "./lib/storage.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent } from "./lib/batchLog.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -1867,7 +1867,8 @@ export default function ProximaApp() {
         if (taskPlan.add.some(isInFlight)) setTimeout(pollUntracked, 500);
         if (rmTasks.size) {
           // Deleted on another device: the delete wins over any stale local upload of the same row, and a running
-          // one stops polling here.
+          // one stops polling here. Their prediction ids are released (no lost submit may adopt them).
+          releasePredictions(tasksRef.current.filter(t => rmTasks.has(t.id)).map(t => t.taskId));
           for (const id of rmTasks) {
             savedTaskIds.current.delete(id); removeFailedSync("task", id);
             clearTimeout(pollRefs.current[id]); delete pollRefs.current[id];
@@ -2124,6 +2125,17 @@ export default function ProximaApp() {
     }
   }, []);
 
+  // A submit that answers after its task was cancelled or deleted: the prediction id stays on the task (if it still
+  // exists) and is released, so a lost submit of the same model can never adopt it (review wf_d4a468a3-746 #1).
+  function keepLateSubmitId(id, predictionId) {
+    if (!predictionId) return;
+    releasePredictions([predictionId]);
+    const cur = tasksRef.current.find(t => t.id === id);
+    if (!cur || cur.taskId) return;
+    setTasks(prev => prev.map(t => t.id === id && !t.taskId ? { ...t, taskId: predictionId } : t));
+    saveTask({ ...cur, taskId: predictionId });
+  }
+
   const submittingIds = useRef(new Set());
   const orphanLookupRunning = useRef(false);
   const recoverOrphans = useCallback(async () => {
@@ -2143,7 +2155,15 @@ export default function ProximaApp() {
         if (ks) setKeyStatus(ks);
         if (pollErrorAction(e) !== "fail") return;
       }
-      const owned = new Set(tasksRef.current.map(t => t.taskId).filter(Boolean));
+      // Owned = predictions any task holds: here, on another device (its row may not have reached this one yet), or
+      // released by a delete or a cancel. Without the cloud's answer nothing is decided this pass.
+      const cloudOwned = [];
+      for (const w of orphanWindows(orphans)) {
+        const ids = await pullTaskIdsInWindow(w.after - ORPHAN_GRACE_MS, w.before);
+        if (!ids) return;
+        cloudOwned.push(...ids);
+      }
+      const owned = new Set([...tasksRef.current.map(t => t.taskId).filter(Boolean), ...releasedPredictions(), ...cloudOwned]);
       const { adopt, fail } = planOrphans(orphans, items, owned, Date.now());
       const decided = new Map([...adopt, ...fail].map(t => [t.id, t]));
       if (!decided.size) return;
@@ -2505,7 +2525,7 @@ export default function ProximaApp() {
           const taskId = submitRes?.data?.id;
           const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
           // Cancelled (or deleted) while the submit was on the wire: it stays that way.
-          if (!isInFlight(tasksRef.current.find(t => t.id === task.id))) return;
+          if (!isInFlight(tasksRef.current.find(t => t.id === task.id))) { keepLateSubmitId(task.id, taskId); return; }
 
           // Check if sync mode returned outputs directly
           if (submitRes?.data?.outputs?.length > 0) {
@@ -2614,7 +2634,7 @@ export default function ProximaApp() {
         const submitRes = await submitTask(newTask.modelId, payload).finally(() => submittingIds.current.delete(newTask.id));
         const taskId = submitRes?.data?.id;
         const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
-        if (!isInFlight(tasksRef.current.find(t => t.id === newTask.id))) return; // cancelled meanwhile
+        if (!isInFlight(tasksRef.current.find(t => t.id === newTask.id))) { keepLateSubmitId(newTask.id, taskId); return; } // cancelled meanwhile
 
         if (submitRes?.data?.outputs?.length > 0) {
           const wallClock = Date.now() - newTask.startTime;
@@ -2795,7 +2815,9 @@ export default function ProximaApp() {
     for (const id of ids) { savedTaskIds.current.delete(id); removeFailedSync("task", id); }
     // 3. Enqueue cloud-delete intents BEFORE firing, so a tab-close/network drop replays them.
     for (const id of ids) addFailedSync({ kind: "task-delete", id, data: id });
-    // 4. Optimistic local removal from React state.
+    // 4. Optimistic local removal from React state. Their prediction ids are released, so a lost submit of the same
+    //    model never adopts a deleted task's result.
+    releasePredictions(targets.map(t => t.taskId));
     setTasks(prev => prev.filter(t => !idSet.has(t.id)));
     // 5. Local IndexedDB delete (single transaction, awaited).
     await deleteTasks(ids);
@@ -4133,6 +4155,7 @@ export default function ProximaApp() {
                       if (!confirm("Clear all saved outputs? (local + cloud)\n\nA safety backup will be created first so you can restore it from the Backups panel.")) return;
                       setSaveStatus("saving");
                       await createBackup("pre-clear-outputs", "Before Clear Outputs");
+                      releasePredictions(tasksRef.current.map(t => t.taskId));
                       setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
                       getStorageStats().then(s => setStorageStats(s));
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
@@ -4154,6 +4177,7 @@ export default function ProximaApp() {
                       setSelectedModels([]);
                       removeFailedSync("model-favorites", favoriteScope);
                       await setSetting(localModelFavoritesKey(favoriteScope), createModelFavoritesSetting(emptyFavorites, favoriteModelsUpdatedAtRef.current));
+                      releasePredictions(tasksRef.current.map(t => t.taskId));
                       setLogs([]); setTasks([]);
                       savedLogIds.current.clear();
                       savedTaskIds.current.clear();

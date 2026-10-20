@@ -64,6 +64,18 @@ export function isOrphan(t, submitting, now) {
   return t?.status === "pending" && !t.taskId && !submitting.has(t.id) && now - (t.startTime || 0) <= RESUME_WINDOW_MS;
 }
 
+// Prediction ids of tasks that were deleted (here or on another device) or whose submit answered after a cancel. No
+// task carries them any more, so without this a lost submit of the same model could adopt one. Kept an hour, far past
+// any lookup window, as {predictionId: releasedAt}.
+const RELEASED_TTL_MS = 60 * 60 * 1000;
+export function rememberReleased(map, ids, now) {
+  const out = {};
+  for (const [id, at] of Object.entries(map || {})) if (now - at <= RELEASED_TTL_MS) out[id] = at;
+  for (const id of ids) if (id) out[id] = now;
+  return out;
+}
+export const liveReleased = (map, now) => new Set(Object.entries(map || {}).filter(([, at]) => now - at <= RELEASED_TTL_MS).map(([id]) => id));
+
 // Whether a failed submit may still have reached WaveSpeed, so the task waits for the history lookup instead of
 // failing: anything fetch itself threw (network drop, timeout, a body cut off mid-read) or a 5xx without an id.
 // A refusal (4xx: balance, validation, rate limit) or a missing session or key never did.
@@ -97,8 +109,11 @@ export function planOrphans(orphans, items, owned, now) {
   const used = new Set(), adopt = [], fail = [];
   const sameModel = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
   for (const t of [...orphans].sort((a, b) => a.startTime - b.startTime)) {
-    const hit = pool.find(x => !used.has(x.i.id) && sameModel(x.i.model, t.modelId)
+    const fits = pool.filter(x => !used.has(x.i.id) && sameModel(x.i.model, t.modelId)
       && x.at >= t.startTime - LOOKUP_SKEW_MS && x.at <= t.startTime + ORPHAN_GRACE_MS);
+    // Its own prediction is created after it started. The pre-start skew (a device clock running ahead) is only a
+    // fallback, and then the closest to the start wins, never an older leftover from a task just before it.
+    const hit = fits.find(x => x.at >= t.startTime) || fits[fits.length - 1];
     if (hit) {
       used.add(hit.i.id);
       adopt.push({ ...t, status: "processing", taskId: hit.i.id, pollUrl: hit.i.urls?.get || pollUrlFor({ taskId: hit.i.id }) });

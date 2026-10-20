@@ -191,6 +191,20 @@ export async function pullTasks(limit = 500) {
   } catch (err) { warnOnce("pullTasks", err); return []; }
 }
 
+// Prediction ids of this account's tasks started in [after, before] (ms), on any device: the lost-submit lookup must
+// never adopt a prediction another device's task owns (its row may not have reached this device yet). null = the
+// read failed (the caller then decides nothing this pass).
+export async function pullTaskIdsInWindow(after, before) {
+  if (!supabase) return new Set();
+  try {
+    const { data, error } = await supabase.from("tasks").select("task_id")
+      .eq("device_id", getDeviceId()).not("task_id", "is", null)
+      .gte("start_time", after).lte("start_time", before).limit(1000);
+    if (error) throw error;
+    return new Set((data || []).map(r => r.task_id));
+  } catch (err) { warnOnce("pullTaskIdsInWindow", err); return null; }
+}
+
 export async function deleteTaskRemote(id) {
   if (!supabase) return;
   try {

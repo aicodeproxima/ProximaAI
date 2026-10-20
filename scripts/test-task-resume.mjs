@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, rememberReleased, liveReleased, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -372,6 +372,25 @@ test("matches the history item shape WaveSpeed documents (slug model, nanosecond
   const start = Date.parse("2025-05-19T06:09:14.000Z");
   const { adopt } = planOrphans([orphan("o", { modelId: "wavespeed-ai/z-image/turbo", startTime: start })], [doc], new Set(), start + 5000);
   assert.equal(adopt[0]?.taskId, "e6832d4abffb4d79bfbca19783fca133");
+});
+
+// Review wf_d4a468a3-746 #4: an orphan's own prediction is created after it started. One from the 30 s before (a task
+// deleted or cancelled just before) must not win just because it is older; the pre-start skew is only a fallback for
+// a device clock running ahead, and then the prediction closest to the start wins.
+test("an orphan prefers a prediction created after it started over a leftover from just before", () => {
+  const { adopt } = planOrphans([orphan("o")], [item("leftover", { created_at: new Date(NOW - 75_000).toISOString() }), item("own")], new Set(), NOW);
+  assert.equal(adopt[0].taskId, "own");
+  const skewOnly = planOrphans([orphan("o")], [item("far", { created_at: new Date(NOW - 85_000).toISOString() }),
+    item("near", { created_at: new Date(NOW - 62_000).toISOString() })], new Set(), NOW);
+  assert.equal(skewOnly.adopt[0].taskId, "near", "inside the skew, the one closest to the start");
+});
+
+test("released prediction ids (deleted tasks) are remembered for an hour, then forgotten", () => {
+  const map = rememberReleased({}, ["p1", null, "p2"], NOW);
+  assert.deepEqual(Object.keys(map).sort(), ["p1", "p2"]);
+  assert.deepEqual([...liveReleased(map, NOW + 59 * 60_000)].sort(), ["p1", "p2"]);
+  assert.deepEqual([...liveReleased(map, NOW + 61 * 60_000)], []);
+  assert.deepEqual(Object.keys(rememberReleased(map, ["p3"], NOW + 61 * 60_000)), ["p3"], "old entries pruned on write");
 });
 
 test("a failed submit may have reached WaveSpeed on a network drop, timeout or 5xx, never on a refusal", () => {
