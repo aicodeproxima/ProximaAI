@@ -444,9 +444,11 @@ export function addFailedSync(entry) {
   } catch {}
 }
 
-export function removeFailedSync(kind, id) {
+// `onlyIf(entry)`: remove the entry only while it still matches, e.g. still the "processing" version a finished upload
+// sent, not the "completed" version that replaced it in the queue meanwhile.
+export function removeFailedSync(kind, id, onlyIf) {
   try {
-    const list = getFailedSyncs().filter(e => !(e.kind === kind && e.id === id));
+    const list = getFailedSyncs().filter(e => !(e.kind === kind && e.id === id && (!onlyIf || onlyIf(e))));
     localStorage.setItem(FAILED_KEY, JSON.stringify(list));
   } catch {}
 }

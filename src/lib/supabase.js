@@ -157,7 +157,7 @@ export async function pullTasks(limit = 500) {
       .from("tasks")
       .select("*")
       .eq("device_id", getDeviceId())
-      .in("status", ["completed", "failed"])
+      .in("status", ["completed", "failed", "processing"]) // running rows: another device may be frozen mid-generation
       .order("start_time", { ascending: false })
       .limit(limit);
     return (data || []).map(row => ({

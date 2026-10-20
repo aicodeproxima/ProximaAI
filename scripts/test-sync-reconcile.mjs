@@ -1,6 +1,6 @@
 // Tests for src/lib/syncReconcile.js — the cross-device sync decisions. Run: node scripts/test-sync-reconcile.mjs
 import assert from "node:assert/strict";
-import { planTaskSync, planLogSync, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
+import { planTaskSync, planLogSync, applyCloudUpdate, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
 
 const NOW = 1_800_000_000_000;
 const OLD = NOW - 10 * 60_000;
@@ -38,10 +38,19 @@ test("leaves a task that finished inside the grace window alone", () => {
   assert.deepEqual([p.remove, p.upload], [[], []]);
 });
 
-test("never touches a running task", () => {
+test("never uploads a running task (its own submit path does)", () => {
   const local = [task("run", { status: "processing" }), task("q", { status: "pending" })];
-  const p = planTaskSync({ ...base, tombstones: new Set(["run"]), local, cloud: [], cloudIds: new Set() });
+  const p = planTaskSync({ ...base, local, cloud: [], cloudIds: new Set() });
   assert.deepEqual([p.remove, p.upload], [[], []]);
+});
+
+// Running tasks reach the cloud now, so one can be deleted on another device mid-generation. Finishing it here would
+// re-insert it, which clears its tombstone: the deleted task would come back everywhere.
+test("removes a running task another device deleted, unless its upload is still queued here", () => {
+  const local = [task("run", { status: "processing" }), task("q", { status: "processing" })];
+  const p = planTaskSync({ ...base, tombstones: new Set(["run", "q"]), pending: new Set(["q"]), local, cloud: [], cloudIds: new Set() });
+  assert.deepEqual(p.remove, ["run"]);
+  assert.deepEqual(p.upload, []);
 });
 
 test("does nothing destructive or uploading when either cloud read failed", () => {
@@ -78,6 +87,54 @@ test("history: adds, removes tombstoned, uploads local-only, skips pending and r
   assert.deepEqual(p.add.map(l => l.id), ["other"]);
   assert.deepEqual(p.remove, ["gone"]);
   assert.deepEqual(p.upload.map(l => l.id), ["mine"]);
+});
+
+// ─── Running tasks across devices ───
+// A device uploads a task as "processing" right after submit, so another open device can finish it when the first one
+// is frozen or closed. Whichever device gets the result first uploads it; the others take that outcome.
+const running = (id, extra = {}) => task(id, { status: "processing", taskId: `pred-${id}`, endTime: null, outputs: [], ...extra });
+
+test("adds a task still running on another device (so this one can poll it)", () => {
+  const p = planTaskSync({ ...base, local: [], cloud: [running("r")], cloudIds: new Set(["r"]) });
+  assert.deepEqual(p.add.map(t => [t.id, t.status]), [["r", "processing"]]);
+});
+
+test("takes the outcome another device saved for a task still running here", () => {
+  const done = task("r", { taskId: "pred-r", endTime: NOW - 1000, wallClockMs: 9000, inferenceMs: 7000 });
+  const failed = task("f", { status: "failed", error: "Generation failed", outputs: [], endTime: NOW - 1000 });
+  const p = planTaskSync({ ...base, local: [running("r"), running("f")], cloud: [done, failed], cloudIds: new Set(["r", "f"]) });
+  assert.deepEqual(p.update, [
+    { id: "r", outputs: done.outputs, finish: { status: "completed", error: null, endTime: NOW - 1000, wallClockMs: 9000, inferenceMs: 7000, nsfw: null } },
+    { id: "f", outputs: [], finish: { status: "failed", error: "Generation failed", endTime: NOW - 1000, wallClockMs: 0, inferenceMs: 0, nsfw: null } },
+  ]);
+});
+
+test("a task being recovered here keeps polling: the cloud's old network failure is not its outcome", () => {
+  const stale = task("x", { status: "failed", error: "Failed to fetch", outputs: [], taskId: "pred-x" });
+  const p = planTaskSync({ ...base, local: [running("x", { recovered: true }), running("y")],
+    cloud: [stale, task("y", { status: "failed", error: "Load failed", outputs: [], taskId: "pred-y" })], cloudIds: new Set(["x", "y"]) });
+  assert.deepEqual(p.update, [], "neither a recovered task nor a recoverable failure ends a running one");
+  const won = planTaskSync({ ...base, local: [running("x", { recovered: true })], cloud: [task("x", { taskId: "pred-x" })], cloudIds: new Set(["x"]) });
+  assert.equal(won.update[0]?.finish?.status, "completed", "another device recovered it first");
+});
+
+test("a running cloud copy never overrides a finished task here, and the result is sent again", () => {
+  const p = planTaskSync({ ...base, local: [task("d")], cloud: [running("d")], cloudIds: new Set(["d"]) });
+  assert.deepEqual(p.update, []);
+  assert.deepEqual(p.upload.map(t => t.id), ["d"], "heals a cloud row left at processing");
+  const fresh = planTaskSync({ ...base, local: [task("d", { endTime: NOW - 1000 })], cloud: [running("d")], cloudIds: new Set(["d"]) });
+  assert.deepEqual(fresh.upload, [], "inside the grace its own upload may still be in flight");
+  const queued = planTaskSync({ ...base, pending: new Set(["d"]), local: [task("d")], cloud: [running("d")], cloudIds: new Set(["d"]) });
+  assert.deepEqual(queued.upload, [], "the queue will send it");
+});
+
+test("applying a cloud outcome: only to a task still running here; plain output refreshes as before", () => {
+  const u = { id: "r", outputs: ["https://cdn/r.png"], finish: { status: "completed", error: null, endTime: NOW, wallClockMs: 9, inferenceMs: 7, nsfw: null } };
+  const applied = applyCloudUpdate(running("r"), u);
+  assert.deepEqual([applied.status, applied.outputs, applied.endTime, applied.taskId], ["completed", ["https://cdn/r.png"], NOW, "pred-r"]);
+  const cancelled = task("r", { status: "failed", error: "Cancelled", outputs: [] });
+  assert.equal(applyCloudUpdate(cancelled, u), cancelled, "finished here meanwhile: kept");
+  assert.deepEqual(applyCloudUpdate(task("a"), { id: "a", outputs: ["https://supabase/a.png"] }).outputs, ["https://supabase/a.png"]);
 });
 
 console.log(`\n${n} passed`);

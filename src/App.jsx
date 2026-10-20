@@ -13,7 +13,7 @@ import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTas
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
-import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
+import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -1693,13 +1693,15 @@ export default function ProximaApp() {
           setTasks(prev => {
             const existingIds = new Set(prev.map(t => t.id));
             const newOnes = remote.tasks.filter(t => !existingIds.has(t.id) && !deletingIds.current.has(t.id));
-            // Save new cloud tasks to local IndexedDB
+            // Save new cloud tasks to local IndexedDB. A running one is not "saved": when this device's poll finishes
+            // it, the result must still be stored and uploaded.
             for (const t of newOnes) {
-              savedTaskIds.current.add(t.id);
+              if (!isInFlight(t)) savedTaskIds.current.add(t.id);
               saveTask(t);
             }
             return [...newOnes, ...prev].sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
           });
+          if (remote.tasks.some(isInFlight)) setTimeout(pollUntracked, 1000); // running on another device: poll it here too
         }
 
         // Merge history: add any cloud logs not already in local (and not pending-delete)
@@ -1832,22 +1834,38 @@ export default function ProximaApp() {
       const logPlan = planLogSync({ local: logsRef.current, cloud: remote.history || [], cloudIds: ids?.history ?? null,
         tombstones: ids?.historyTombstones ?? null, pending: pendingLogs, deleting: deletingLogIds.current, since });
       const rmTasks = new Set(taskPlan.remove), rmLogs = new Set(logPlan.remove);
-      const updates = new Map(taskPlan.update.map(u => [u.id, u.outputs]));
+      const updates = new Map(taskPlan.update.map(u => [u.id, u]));
 
-      // Tasks: the cloud's additions + archive updates, and the server's recorded deletions.
+      // Tasks: the cloud's additions + archive updates + outcomes other devices saved, and the server's recorded deletions.
       if (taskPlan.add.length || updates.size || rmTasks.size) {
-        for (const t of taskPlan.add) savedTaskIds.current.add(t.id); // pulled rows are already in the cloud
+        // Pulled rows are already in the cloud; a running one is not "saved" yet (this device may finish it).
+        for (const t of taskPlan.add) if (!isInFlight(t)) savedTaskIds.current.add(t.id);
         setTasks(prev => {
           const have = new Set(prev.map(t => t.id));
           const added = taskPlan.add.filter(t => !have.has(t.id) && !deletingIds.current.has(t.id));
-          const kept = prev.filter(t => !rmTasks.has(t.id)).map(t => updates.has(t.id) ? { ...t, outputs: updates.get(t.id) } : t);
+          const kept = prev.filter(t => !rmTasks.has(t.id)).map(t => updates.has(t.id) ? applyCloudUpdate(t, updates.get(t.id)) : t);
           return [...added, ...kept].sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
         });
         for (const t of taskPlan.add) saveTask(t);
-        for (const t of tasksRef.current) if (updates.has(t.id)) saveTask({ ...t, outputs: updates.get(t.id) });
+        for (const t of tasksRef.current) {
+          const u = updates.get(t.id);
+          if (!u) continue;
+          const next = applyCloudUpdate(t, u);
+          if (u.finish && next !== t) {
+            // Another device saved this result: stop polling it here, and don't upload it back.
+            clearTimeout(pollRefs.current[t.id]); delete pollRefs.current[t.id];
+            savedTaskIds.current.add(t.id); recoveringIds.current.delete(t.id);
+          }
+          if (next !== t) saveTask(next);
+        }
+        if (taskPlan.add.some(isInFlight)) setTimeout(pollUntracked, 500);
         if (rmTasks.size) {
-          // Deleted on another device: the delete wins over any stale local upload of the same row.
-          for (const id of rmTasks) { savedTaskIds.current.delete(id); removeFailedSync("task", id); }
+          // Deleted on another device: the delete wins over any stale local upload of the same row, and a running
+          // one stops polling here.
+          for (const id of rmTasks) {
+            savedTaskIds.current.delete(id); removeFailedSync("task", id);
+            clearTimeout(pollRefs.current[id]); delete pollRefs.current[id];
+          }
           await deleteTasks([...rmTasks]);
         }
       }
@@ -2066,6 +2084,24 @@ export default function ProximaApp() {
   // though WaveSpeed may have accepted it. This looks such tasks up, adopts the prediction it finds and polls it, and
   // fails a task only when a lookup that answered shows nothing after the grace. Runs on load, on return to the app,
   // after a cut-off submit and every 20 s while one waits.
+  // ─── RUNNING TASKS ACROSS DEVICES (rules in syncReconcile.js) ───
+  // A task is uploaded the moment WaveSpeed accepts it, so another open device can finish it while this one is frozen
+  // or closed. Queued first like every cloud write; a confirmed upload clears only its own running entry, never the
+  // finished version that may have replaced it in the queue meanwhile (the server keeps a finished row finished).
+  const syncInFlight = useCallback((t) => {
+    addFailedSync({ kind: "task", id: t.id, data: t });
+    syncTask(t)
+      .then(() => removeFailedSync("task", t.id, e => isInFlight(e.data)))
+      .catch(() => {})
+      .finally(() => setFailedSyncCount(getFailedSyncs().length));
+  }, []);
+  // Starts a poll for every running task that has none: pulled from another device, or loaded before its loop began.
+  const pollUntracked = useCallback(() => {
+    for (const t of planRepoll(tasksRef.current, Date.now(), -Infinity).kick) {
+      if (!pollRefs.current[t.id]) startPolling(t, t.pollUrl, { genType: t.genType, resumed: true, delay: 500 });
+    }
+  }, []);
+
   const submittingIds = useRef(new Set());
   const orphanLookupRunning = useRef(false);
   const recoverOrphans = useCallback(async () => {
@@ -2093,6 +2129,7 @@ export default function ProximaApp() {
       setTasks(prev => prev.map(t => decided.has(t.id) && waiting(t) ? decided.get(t.id) : t));
       for (const t of adoptNow) {
         saveTask(t);
+        syncInFlight(t);
         startPolling(t, t.pollUrl, { genType: t.genType, resumed: true, delay: 0 });
       }
     } finally {
@@ -2438,6 +2475,7 @@ export default function ProximaApp() {
           // Persist pollUrl immediately so we can resume polling after tab close / refresh / OS kill
           setTasks(prev => prev.map(t => t.id === task.id ? settlePoll(t, t => ({ ...t, status: "processing", taskId, pollUrl })) : t));
           saveTask({ ...task, status: "processing", taskId, pollUrl });
+          syncInFlight({ ...task, status: "processing", taskId, pollUrl });
 
           startPolling(task, pollUrl, { genType: task.genType || genType });
 
@@ -2556,6 +2594,7 @@ export default function ProximaApp() {
         // Persist pollUrl so a reload / tab kill can resume this poll (it used to be kept in memory only)
         setTasks(prev => prev.map(t => t.id === newTask.id ? settlePoll(t, t => ({ ...t, status: "processing", taskId, pollUrl })) : t));
         saveTask({ ...newTask, status: "processing", taskId, pollUrl });
+        syncInFlight({ ...newTask, status: "processing", taskId, pollUrl });
         startPolling(newTask, pollUrl, { genType: taskGenType });
       } catch (e) {
         if (sent && submitMayHaveLanded(e)) { setTimeout(recoverOrphans, 2000); return; }
