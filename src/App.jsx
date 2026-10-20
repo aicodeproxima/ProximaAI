@@ -1822,6 +1822,9 @@ export default function ProximaApp() {
   const logsRef = useRef(logs);
   logsRef.current = logs;
   const reconcileRunningRef = useRef(false);
+  // True once this session's first reconcile pass has run (answered or not): History entries are finished only then.
+  const [historySyncReady, setHistorySyncReady] = useState(false);
+  useEffect(() => { if (!isAuthed) setHistorySyncReady(false); }, [isAuthed]); // a later sign-in waits for its own sync
   const reconcileWithCloud = useCallback(async () => {
     if (!isSupabaseConfigured() || !initialLoadDone.current || bootstrapInProgress.current || reconcileRunningRef.current) return;
     reconcileRunningRef.current = true;
@@ -1922,6 +1925,7 @@ export default function ProximaApp() {
       console.warn("[sync] reconcile failed", err);
     } finally {
       reconcileRunningRef.current = false;
+      setHistorySyncReady(true);
     }
   }, []);
 
@@ -1975,14 +1979,17 @@ export default function ProximaApp() {
   }, [logs, persistLog]);
 
   // A batch's entry is written when it starts and finished here once all its tasks have finished, in this tab, after
-  // a reload or with results another device saved (rules in batchLog.js).
+  // a reload or with results another device saved (rules in batchLog.js). Not before this session's first cloud sync:
+  // a load more than 48 h after the batch expires the local copies first, and finishing from those would overwrite
+  // the entry another device already finished correctly (round-3 review wf_393b4699-2d7 #2).
   useEffect(() => {
+    if (!historySyncReady && isSupabaseConfigured()) return;
     const done = finishLogs(logs, tasks, Date.now()).filter(l => !deletingLogIds.current.has(l.id));
     if (!done.length) return;
     const byId = new Map(done.map(l => [l.id, l]));
     setLogs(prev => prev.map(l => byId.get(l.id) || l));
     for (const l of done) persistLog(l);
-  }, [tasks, logs, persistLog]);
+  }, [tasks, logs, persistLog, historySyncReady]);
 
   // Track active count
   useEffect(() => {
