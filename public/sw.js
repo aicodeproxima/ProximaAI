@@ -1,4 +1,4 @@
-const CACHE_NAME = "proximaai-v5";
+const CACHE_NAME = "proximaai-v6";
 const PRECACHE = ["/", "/index.html"];
 
 self.addEventListener("install", (e) => {
@@ -19,8 +19,9 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
-  // Never cache API calls or external resources
-  if (url.pathname.startsWith("/wavespeed") || url.origin !== self.location.origin) {
+  // Never cache API calls (the WaveSpeed proxy answers per session: balances, results), non-GET
+  // requests, or external resources.
+  if (e.request.method !== "GET" || url.pathname.startsWith("/api/") || url.pathname.startsWith("/wavespeed") || url.origin !== self.location.origin) {
     return;
   }
   e.respondWith(
