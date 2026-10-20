@@ -105,8 +105,10 @@ export function orphanWindows(orphans) {
 // release) and the claimant in `resolved` (to drop). Claimants of a model take part only while that model has at least
 // as many predictions in the window as tasks; with fewer, one of them never reached WaveSpeed, and live tasks come
 // first rather than lose their own result to a submit that may never have landed.
-// `answered`: false when the lookup was refused (items are then [] though nothing answered): no claimant is dropped.
-export function planOrphans(orphans, items, owned, now, claimants = [], { answered = true } = {}) {
+// `answeredFor(task)`: whether the lookup window holding that task answered (a refused window gives no items though
+// nothing answered). Only a claimant whose own window answered is dropped. `answered: false` = no window answered.
+export function planOrphans(orphans, items, owned, now, claimants = [], { answered = true, answeredFor } = {}) {
+  const didAnswer = answeredFor || (() => answered);
   // created_at carries nanoseconds ("2025-05-19T06:09:15.948268264Z"); trimmed to ms so every engine parses it.
   const pool = items
     .map(i => ({ i, at: Date.parse(String(i?.created_at || "").replace(/(\.\d{3})\d+/, "$1")) }))
@@ -145,7 +147,7 @@ export function planOrphans(orphans, items, owned, now, claimants = [], { answer
         if (hit) used.add(hit.i.id);
         if (claim) {
           if (hit) { claimed.push(hit.i.id); resolved.push(t.id); }
-          else if (answered && closed(t)) resolved.push(t.id);   // its window closed and the lookup shows nothing: done
+          else if (closed(t) && didAnswer(t)) resolved.push(t.id);   // its window closed and answered with nothing: done
           continue;
         }
         if (hit) adopt.push({ ...t, status: "processing", taskId: hit.i.id, pollUrl: hit.i.urls?.get || pollUrlFor({ taskId: hit.i.id }) });

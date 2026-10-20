@@ -429,6 +429,16 @@ test("a refused lookup never drops a claimant; the answered pass after it still 
   assert.deepEqual([answered.adopt.map(t => t.taskId), answered.claimed], [["pB"], ["pA"]]);
 });
 
+// Round-6 review wf_c5014fa6-227: discarding every item when one window was refused failed orphans whose own window
+// had answered with their prediction (for good). Items from windows that answered are kept; only claimants whose own
+// window was refused are kept from being dropped.
+test("one refused window does not cost an orphan in another window its prediction", () => {
+  const o1 = orphan("O1", { startTime: NOW - 180_000 }), c2 = claimant("C2", NOW - 125_000, { modelId: "kwaivgi/kling-v2" });
+  const answeredFor = (t) => t.id === "O1"; // O1's window answered, C2's was refused
+  const r = planOrphans([o1], [item("pO1", { created_at: new Date(NOW - 179_500).toISOString() })], new Set(), NOW, [c2], { answeredFor });
+  assert.deepEqual([r.adopt.map(t => t.taskId), r.fail, r.resolved], [["pO1"], [], []]);
+});
+
 test("a claimant whose window is still open and has no prediction yet stays", () => {
   const r = planOrphans([orphan("O", { startTime: NOW - 10_000 })], [], new Set(), NOW, [claimant("C", NOW - 20_000)]);
   assert.deepEqual(r.resolved, []);

@@ -15,7 +15,7 @@ import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud } from "./lib/batchLog.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -2188,18 +2188,22 @@ export default function ProximaApp() {
       // Tasks cancelled before their submit gave an id pair with their own prediction too (never adopted).
       const claimants = storedClaimants();
       const windows = orphanWindows([...orphans, ...claimants]);
-      let items = [], answered = true;
-      try {
-        for (const w of windows) items.push(...await listPredictions(w));
-      } catch (e) {
-        // Network trouble, a rate limit, a 5xx, a stopped session or a rejected key: ask again on the next pass. Only a
-        // refusal of the lookup itself leaves the grace alone to decide, as before this lookup existed (and then no
-        // claimant is dropped: nothing answered, round-5 review wf_5d9498dc-619).
-        const ks = keyStatusAfter(e);
-        if (ks) setKeyStatus(ks);
-        if (pollErrorAction(e) !== "fail") return;
-        items = []; answered = false;
+      // Each window is fetched on its own. Network trouble, a rate limit, a 5xx, a stopped session or a rejected key: ask
+      // again on the next pass. A refusal of the lookup itself leaves the grace alone to decide for that window, as
+      // before this lookup existed, and its claimants are not dropped; windows that answered keep their items (each
+      // model's cluster sits inside one window, so they are complete). Round-5/6 reviews wf_5d9498dc-619, wf_c5014fa6-227.
+      const items = [], answeredWindows = [];
+      for (const w of windows) {
+        try {
+          items.push(...await listPredictions(w));
+          answeredWindows.push(w);
+        } catch (e) {
+          const ks = keyStatusAfter(e);
+          if (ks) setKeyStatus(ks);
+          if (pollErrorAction(e) !== "fail") return;
+        }
       }
+      const answeredFor = (t) => answeredWindows.some(w => w.after <= t.startTime - LOOKUP_SKEW_MS && t.startTime + ORPHAN_GRACE_MS <= w.before);
       // Owned = predictions any task holds: here, on another device (its row may not have reached this one yet), or
       // released by a delete or a cancel. Without the cloud's answer nothing is decided this pass.
       const cloudOwned = [];
@@ -2209,7 +2213,7 @@ export default function ProximaApp() {
         cloudOwned.push(...ids);
       }
       const owned = new Set([...tasksRef.current.map(t => t.taskId).filter(Boolean), ...releasedPredictions(), ...cloudOwned]);
-      const { adopt, fail, claimed, resolved } = planOrphans(orphans, items, owned, Date.now(), claimants, { answered });
+      const { adopt, fail, claimed, resolved } = planOrphans(orphans, items, owned, Date.now(), claimants, { answeredFor });
       releasePredictions(claimed);
       resolveClaimants(resolved);
       const decided = new Map([...adopt, ...fail].map(t => [t.id, t]));
