@@ -4,6 +4,8 @@ export const PROVIDER_COLORS = {
   Kwaivgi: "#7c3aed", WaveSpeed: "#06b6d4", Vidu: "#ec4899", Minimax: "#f59e0b",
   BFL: "#a855f7", Luma: "#f472b6", PixVerse: "#22d3ee", Pika: "#fb923c",
   Runway: "#14b8a6", NVIDIA: "#76b900",
+  xAI: "#9ca3af", Krea: "#facc15", Ideogram: "#38bdf8", Recraft: "#f43f5e", Microsoft: "#0ea5e9",
+  Pruna: "#84cc16", HeyGen: "#8b5cf6", Tripo: "#2dd4bf", Meshy: "#c084fc",
 };
 
 // Resolution presets for common schemes
@@ -439,17 +441,17 @@ export const MODELS = {
         optional: { enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
     { id: "google/nano-banana-2-lite/text-to-image", name: "Nano Banana 2 Lite", provider: "Google", price: 0.04,
       params: { resolution: null, aspectRatio: AR_NANO2, negativePrompt: false, seed: false } },
-    { id: "google/nano-banana-pro/text-to-image", name: "Nano Banana Pro", provider: "Google", price: 0.14, hot: true,
+    { id: "google/nano-banana-pro/text-to-image", name: "Nano Banana Pro", provider: "Google", price: 0.126, hot: true,
       params: { resolution: RES_NANO, aspectRatio: AR_NANO_PRO, negativePrompt: false, seed: false } },
 
     // Flux
-    { id: "wavespeed-ai/flux-dev", name: "Flux Dev", provider: "WaveSpeed", price: 0.03,
+    { id: "wavespeed-ai/flux-dev", name: "Flux Dev", provider: "WaveSpeed", price: 0.012,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true, maxBatchImages: 4, optional: { numInferenceSteps: { paramName: "num_inference_steps", type: "number", default: 28, min: 1, max: 50 }, guidanceScale: { paramName: "guidance_scale", type: "number", default: 3.5, min: 0, max: 20 } } } },
-    { id: "wavespeed-ai/flux-schnell", name: "Flux Schnell", provider: "WaveSpeed", price: 0.01, hot: true,
+    { id: "wavespeed-ai/flux-schnell", name: "Flux Schnell", provider: "WaveSpeed", price: 0.003, hot: true,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true, maxBatchImages: 4 } },
-    { id: "wavespeed-ai/flux-2-klein-4b/text-to-image-lora", name: "FLUX 2 Klein 4B", provider: "BFL", price: 0.01,
+    { id: "wavespeed-ai/flux-2-klein-4b/text-to-image-lora", name: "FLUX 2 Klein 4B", provider: "BFL", price: 0.013,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true, outputFormat: false } },
-    { id: "wavespeed-ai/flux-2-klein-9b/text-to-image", name: "FLUX 2 Klein 9B", provider: "BFL", price: 0.02,
+    { id: "wavespeed-ai/flux-2-klein-9b/text-to-image", name: "FLUX 2 Klein 9B", provider: "BFL", price: 0.01,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true, outputFormat: false } },
 
     // ByteDance Seedream
@@ -466,7 +468,7 @@ export const MODELS = {
       params: { resolution: RES_SEEDREAM, negativePrompt: false, seed: false, outputFormat: false } },
 
     // Alibaba
-    { id: "alibaba/wan-2.6/text-to-image", name: "WAN 2.6", provider: "Alibaba", price: 0.02,
+    { id: "alibaba/wan-2.6/text-to-image", name: "WAN 2.6", provider: "Alibaba", price: 0.03,
       params: { resolution: RES_WAN_T2I, negativePrompt: false, seed: true, outputFormat: false, optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
 
     // WaveSpeed / Alibaba
@@ -480,15 +482,15 @@ export const MODELS = {
         optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: true } } } },
     { id: "wavespeed-ai/qwen-image/text-to-image", name: "Qwen Image", provider: "Alibaba", price: 0.02,
       params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
-    { id: "wavespeed-ai/phota/text-to-image", name: "Phota", provider: "WaveSpeed", price: 0.03,
+    { id: "wavespeed-ai/phota/text-to-image", name: "Phota", provider: "WaveSpeed", price: 0.09,
       params: { resolution: RES_PHOTA, aspectRatio: AR_PHOTA, negativePrompt: false, seed: false, maxBatchImages: 4 } },
 
     // Luma
-    { id: "luma/photon", name: "Luma Photon", provider: "Luma", price: 0.03,
+    { id: "luma/photon", name: "Luma Photon", provider: "Luma", price: 0.015,
       params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false } },
 
     // OpenAI GPT Image 2.0
-    { id: "openai/gpt-image-2/text-to-image", name: "GPT Image 2.0", provider: "OpenAI", price: 0.01, hot: true,
+    { id: "openai/gpt-image-2/text-to-image", name: "GPT Image 2.0", provider: "OpenAI", price: 0.057, hot: true,
       params: { resolution: RES_NANO, aspectRatio: AR_GPT, negativePrompt: false, seed: false, outputFormat: false,
         optional: { quality: { paramName: "quality", type: "enum", values: ["low", "medium", "high"], default: "low" } } } },
     { id: "openai/gpt-image-2.5-flare/text-to-image", name: "GPT Image 2.5 Flare", provider: "OpenAI", price: 0.024, hot: true,
@@ -500,9 +502,9 @@ export const MODELS = {
 
     // MiniMax H3 open-weights image generation
     { id: "wavespeed-ai/minimax-h3/text-to-image", name: "MiniMax H3 Image", provider: "Minimax", price: 0.02, hot: true,
-      params: { resolution: RES_IMAGE_1K_2K, aspectRatio: AR_IMAGE_WIDE, negativePrompt: false, seed: true } },
-    { id: "wavespeed-ai/minimax-h3/text-to-image-lora", name: "MiniMax H3 Image LoRA", provider: "Minimax", price: 0.02,
-      params: { resolution: RES_IMAGE_1K_2K, aspectRatio: AR_IMAGE_WIDE, negativePrompt: false, seed: true } },
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "1.5K", value: "1.5k" }, { label: "2K", value: "2k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "1:2", value: "1:2" }, { label: "2:1", value: "2:1" }, { label: "1:3", value: "1:3" }, { label: "3:1", value: "3:1" }, { label: "2:3", value: "2:3" }, { label: "3:2", value: "3:2" }, { label: "3:4", value: "3:4" }, { label: "4:3", value: "4:3" }, { label: "4:5", value: "4:5" }, { label: "5:4", value: "5:4" }, { label: "9:16", value: "9:16" }, { label: "16:9", value: "16:9" }, { label: "9:21", value: "9:21" }, { label: "21:9", value: "21:9" }], default: "1:1" }, negativePrompt: false, seed: true } },
+    { id: "wavespeed-ai/minimax-h3/text-to-image-lora", name: "MiniMax H3 Image LoRA", provider: "Minimax", price: 0.035,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "1.5K", value: "1.5k" }, { label: "2K", value: "2k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "1:2", value: "1:2" }, { label: "2:1", value: "2:1" }, { label: "1:3", value: "1:3" }, { label: "3:1", value: "3:1" }, { label: "2:3", value: "2:3" }, { label: "3:2", value: "3:2" }, { label: "3:4", value: "3:4" }, { label: "4:3", value: "4:3" }, { label: "4:5", value: "4:5" }, { label: "5:4", value: "5:4" }, { label: "9:16", value: "9:16" }, { label: "16:9", value: "16:9" }, { label: "9:21", value: "9:21" }, { label: "21:9", value: "21:9" }], default: "1:1" }, negativePrompt: false, seed: true } },
 
     // Kuaishou Kling O3 image generation
     { id: "kwaivgi/kling-image-o3/text-to-image", name: "Kling O3 Image", provider: "Kwaivgi", price: 0.028, hot: true,
@@ -525,6 +527,28 @@ export const MODELS = {
         optional: { guidanceScale: { paramName: "guidance_scale", type: "number", default: 4, min: 0, max: 20 }, numInferenceSteps: { paramName: "num_inference_steps", type: "number", default: 28, min: 1, max: 50 } } } },
     { id: "google/gemini-3-pro-image/text-to-image", name: "Gemini 3 Pro Image", provider: "Google", price: 0.14,
       params: { resolution: RES_NANO, aspectRatio: AR_NANO_PRO, negativePrompt: false, seed: false } },
+
+    // ─── 2026-10-20 additions (WaveSpeed refresh, params + prices verified against public schemas) ───
+    { id: "microsoft/mai-image-2.5/text-to-image", name: "MAI Image 2.5", provider: "Microsoft", price: 0.0502,
+      params: { resolution: null, aspectRatio: { paramName: "size", options: [{ label: "21:9", value: "21:9" }, { label: "16:9", value: "16:9" }, { label: "3:2", value: "3:2" }, { label: "4:3", value: "4:3" }, { label: "5:4", value: "5:4" }, { label: "1:1", value: "1:1" }, { label: "4:5", value: "4:5" }, { label: "3:4", value: "3:4" }, { label: "2:3", value: "2:3" }, { label: "9:16", value: "9:16" }], default: "1:1" }, negativePrompt: false, seed: false } },
+    { id: "pruna-ai/p-image/text-to-image", name: "P-Image", provider: "Pruna", price: 0.005,
+      params: { resolution: null, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "Custom", value: "custom" }], default: "1:1" }, seed: true, optional: { width: { paramName: "width", type: "number", default: 512, min: 256, max: 1440 }, height: { paramName: "height", type: "number", default: 512, min: 256, max: 1440 } } } },
+    { id: "recraft-ai/recraft-v4.1-flash/text-to-image", name: "Recraft 4.1 Flash", provider: "Recraft", price: 0.008,
+      params: { resolution: null, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }], default: "1:1" }, outputFormat: false } },
+    { id: "recraft-ai/recraft-v4.1-pro/text-to-image", name: "Recraft 4.1 Pro", provider: "Recraft", price: 0.25,
+      params: { resolution: { paramName: "image_size", options: [{ label: "1:1", value: "1:1" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }], default: "1:1" }, aspectRatio: null, outputFormat: false } },
+    { id: "recraft-ai/recraft-v4.1/text-to-image", name: "Recraft 4.1", provider: "Recraft", price: 0.04,
+      params: { resolution: { paramName: "image_size", options: [{ label: "1:1", value: "1:1" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }], default: "1:1" }, aspectRatio: null, outputFormat: false } },
+    { id: "x-ai/grok-imagine-image-v2.0/text-to-image", name: "Grok Imagine Image 2.0", provider: "xAI", price: 0.08,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "2K", value: "2k" }], default: "2k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "2:1", value: "2:1" }, { label: "1:2", value: "1:2" }, { label: "19.5:9", value: "19.5:9" }, { label: "9:19.5", value: "9:19.5" }, { label: "20:9", value: "20:9" }, { label: "9:20", value: "9:20" }], default: "1:1" }, outputFormat: false, optional: { quality: { paramName: "quality", type: "enum", values: ["low", "medium"], default: "medium" } } } },
+    { id: "black-forest-labs/flux-3/text-to-image", name: "Flux 3", provider: "BFL", price: 0.05,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "2K", value: "2k" }, { label: "4K", value: "4k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "21:9", value: "21:9" }, { label: "2:1", value: "2:1" }, { label: "16:9", value: "16:9" }, { label: "3:2", value: "3:2" }, { label: "7:5", value: "7:5" }, { label: "4:3", value: "4:3" }, { label: "5:4", value: "5:4" }, { label: "1:1", value: "1:1" }, { label: "4:5", value: "4:5" }, { label: "3:4", value: "3:4" }, { label: "5:7", value: "5:7" }, { label: "2:3", value: "2:3" }, { label: "9:16", value: "9:16" }, { label: "1:2", value: "1:2" }], default: "1:1" }, negativePrompt: false, seed: false, optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
+    { id: "google/nano-banana-2.1/text-to-image", name: "Nano Banana 2.1", provider: "Google", price: 0.036,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "2K", value: "2k" }, { label: "4K", value: "4k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "3:4", value: "3:4" }, { label: "4:3", value: "4:3" }, { label: "4:5", value: "4:5" }, { label: "5:4", value: "5:4" }, { label: "9:16", value: "9:16" }, { label: "16:9", value: "16:9" }, { label: "21:9", value: "21:9" }, { label: "1:4", value: "1:4" }, { label: "4:1", value: "4:1" }, { label: "1:8", value: "1:8" }, { label: "8:1", value: "8:1" }], default: "1:1" }, negativePrompt: false, seed: false, optional: { enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false }, enableImageSearch: { paramName: "enable_image_search", type: "boolean", default: false } } } },
+    { id: "ideogram-ai/ideogram-v4.5", name: "Ideogram 4.5", provider: "Ideogram", price: 0.06,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "2K", value: "2k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }], default: "1:1" }, negativePrompt: false, seed: false, outputFormat: false, optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false }, quality: { paramName: "quality", type: "enum", values: ["low", "medium", "high"], default: "medium" } } } },
+    { id: "krea/v3/text-to-image", name: "Krea 3", provider: "Krea", price: 0.03,
+      params: { resolution: { paramName: "size", options: [{ label: "1K", value: "1024*1024" }, { label: "2K", value: "2048*2048" }], default: "1024*1024" }, negativePrompt: true, seed: true, optional: { model: { paramName: "model", type: "enum", values: ["berry", "jam"], default: "berry" }, reasoningLevel: { paramName: "reasoning_level", type: "enum", values: ["low", "medium"], default: "low" } } } },
   ],
 
   i2i: [
@@ -537,10 +561,10 @@ export const MODELS = {
         optional: { enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
     { id: "google/nano-banana-2-lite/edit", name: "Nano Banana 2 Lite Edit", provider: "Google", price: 0.04,
       params: { resolution: null, aspectRatio: AR_NANO2, negativePrompt: false, seed: false, maxImages: 4 } },
-    { id: "google/nano-banana-pro/edit", name: "Nano Banana Pro Edit", provider: "Google", price: 0.14, hot: true,
+    { id: "google/nano-banana-pro/edit", name: "Nano Banana Pro Edit", provider: "Google", price: 0.126, hot: true,
       params: { resolution: RES_NANO, aspectRatio: AR_NANO_PRO, negativePrompt: false, seed: false, maxImages: 8 } },
-    { id: "google/gemini-2.5-flash-image/edit", name: "Gemini 2.5 Flash Edit", provider: "Google", price: 0.05,
-      params: { resolution: null, negativePrompt: false, seed: false, maxImages: 10, outputFormat: false } },
+    { id: "google/gemini-2.5-flash-image/edit", name: "Gemini 2.5 Flash Edit", provider: "Google", price: 0.038,
+      params: { resolution: null, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "3:4", value: "3:4" }, { label: "4:3", value: "4:3" }, { label: "4:5", value: "4:5" }, { label: "5:4", value: "5:4" }, { label: "9:16", value: "9:16" }, { label: "16:9", value: "16:9" }, { label: "21:9", value: "21:9" }], default: "1:1" }, negativePrompt: false, seed: false, maxImages: 10, outputFormat: false } },
 
     // ByteDance
     { id: "bytedance/seedream-v5.0-lite/edit", name: "Seedream 5.0 Lite Edit", provider: "ByteDance", price: 0.035, hot: true,
@@ -554,7 +578,7 @@ export const MODELS = {
         optional: { promptOptimizationMode: { paramName: "prompt_optimization_mode", type: "enum", values: ["standard", "fast"], default: "standard" } } } },
     { id: "bytedance/seedream-v5.0-flash/layer-decomposition", name: "Seedream 5.0 Flash Layers", provider: "ByteDance", price: 0.459,
       params: { resolution: RES_IMAGE_1K_15K_2K, negativePrompt: false, seed: false, imageParam: "image", noPrompt: true } },
-    { id: "bytedance/seedream-v5.0-pro/layer-decomposition", name: "Seedream 5.0 Pro Layers", provider: "ByteDance", price: 0.75,
+    { id: "bytedance/seedream-v5.0-pro/layer-decomposition", name: "Seedream 5.0 Pro Layers", provider: "ByteDance", price: 0.765,
       params: { resolution: RES_IMAGE_1K_15K_2K, negativePrompt: false, seed: false, imageParam: "image", noPrompt: true,
         optional: { promptOptimizationMode: { paramName: "prompt_optimization_mode", type: "enum", values: ["standard", "fast"], default: "standard" } } } },
     { id: "bytedance/seedream-v4.5/edit", name: "Seedream 4.5 Edit", provider: "ByteDance", price: 0.04,
@@ -567,49 +591,49 @@ export const MODELS = {
       params: { resolution: RES_WAN_T2I, negativePrompt: false, seed: true, outputFormat: false, maxImages: 9 } },
 
     // Flux Edit
-    { id: "wavespeed-ai/flux-2-pro/edit", name: "FLUX 2 Pro Edit", provider: "BFL", price: 0.04,
+    { id: "wavespeed-ai/flux-2-pro/edit", name: "FLUX 2 Pro Edit", provider: "BFL", price: 0.06,
       params: { resolution: RES_FLUX, negativePrompt: false, seed: true, outputFormat: false, maxImages: 3 } },
     { id: "wavespeed-ai/flux-kontext-pro", name: "FLUX Kontext Pro", provider: "BFL", price: 0.04, hot: true,
-      params: { resolution: null, aspectRatio: AR_STANDARD, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image" } },
+      params: { resolution: null, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "21:9", value: "21:9" }, { label: "16:9", value: "16:9" }, { label: "4:3", value: "4:3" }, { label: "3:2", value: "3:2" }, { label: "1:1", value: "1:1" }, { label: "2:3", value: "2:3" }, { label: "3:4", value: "3:4" }, { label: "9:16", value: "9:16" }, { label: "9:21", value: "9:21" }], default: "16:9" }, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image" } },
 
     // WaveSpeed
     { id: "wavespeed-ai/qwen-image-2.0-pro/edit", name: "Qwen Image 2.0 Pro Edit", provider: "Alibaba", price: 0.07, hot: true,
-      params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true, outputFormat: false, maxImages: 6 } },
-    { id: "alibaba/qwen-image-3.0/edit", name: "Qwen Image 3.0 Edit", provider: "Alibaba", price: 0.03, hot: true,
+      params: { resolution: { paramName: "size", options: [{ label: "1024x1024 (1:1)", value: "1024*1024" }, { label: "1024x576 (16:9)", value: "1024*576" }, { label: "576x1024 (9:16)", value: "576*1024" }, { label: "1024x768 (4:3)", value: "1024*768" }, { label: "768x1024 (3:4)", value: "768*1024" }, { label: "2048x2048", value: "2048*2048" }], default: "1024*1024" }, negativePrompt: false, seed: true, outputFormat: false, maxImages: 3 } },
+    { id: "alibaba/qwen-image-3.0/edit", name: "Qwen Image 3.0 Edit", provider: "Alibaba", price: 0.033, hot: true,
       params: { resolution: RES_IMAGE_1K_2K, aspectRatio: AR_IMAGE_WIDE, negativePrompt: false, seed: true, outputFormat: false, maxImages: 3,
         optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: true } } } },
-    { id: "alibaba/qwen-image-3.0-pro/edit", name: "Qwen Image 3.0 Pro Edit", provider: "Alibaba", price: 0.04, flagship: true,
+    { id: "alibaba/qwen-image-3.0-pro/edit", name: "Qwen Image 3.0 Pro Edit", provider: "Alibaba", price: 0.043, flagship: true,
       params: { resolution: RES_IMAGE_1K_2K, aspectRatio: AR_IMAGE_WIDE, negativePrompt: false, seed: true, outputFormat: false, maxImages: 3,
         optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: true } } } },
-    { id: "wavespeed-ai/qwen-image/edit", name: "Qwen Image Edit", provider: "Alibaba", price: 0.03,
+    { id: "wavespeed-ai/qwen-image/edit", name: "Qwen Image Edit", provider: "Alibaba", price: 0.02,
       params: { resolution: null, negativePrompt: false, seed: true, imageParam: "image" } },
-    { id: "wavespeed-ai/phota/edit", name: "Phota Edit", provider: "WaveSpeed", price: 0.03,
+    { id: "wavespeed-ai/phota/edit", name: "Phota Edit", provider: "WaveSpeed", price: 0.09,
       params: { resolution: RES_PHOTA, aspectRatio: AR_PHOTA, negativePrompt: false, seed: false, maxImages: 3, maxBatchImages: 4 } },
-    { id: "wavespeed-ai/firered-image-v1.1/edit", name: "FireRed Edit", provider: "WaveSpeed", price: 0.02,
+    { id: "wavespeed-ai/firered-image-v1.1/edit", name: "FireRed Edit", provider: "WaveSpeed", price: 0.15,
       params: { resolution: RES_WAN_T2I, negativePrompt: false, seed: false, outputFormat: false } },
-    { id: "wavespeed-ai/step1x-edit", name: "Step1X Edit", provider: "WaveSpeed", price: 0.02,
+    { id: "wavespeed-ai/step1x-edit", name: "Step1X Edit", provider: "WaveSpeed", price: 0.03,
       params: { resolution: null, negativePrompt: false, seed: true, outputFormat: false, imageParam: "image" } },
 
     // OpenAI GPT Image 2.0 Edit
-    { id: "openai/gpt-image-2/edit", name: "GPT Image 2.0 Edit", provider: "OpenAI", price: 0.03, hot: true,
+    { id: "openai/gpt-image-2/edit", name: "GPT Image 2.0 Edit", provider: "OpenAI", price: 0.0665, hot: true,
       params: { resolution: RES_NANO, aspectRatio: AR_GPT, negativePrompt: false, seed: false, outputFormat: false, maxImages: 4,
         optional: { quality: { paramName: "quality", type: "enum", values: ["low", "medium", "high"], default: "low" } } } },
-    { id: "openai/gpt-image-2.5-flare/edit", name: "GPT Image 2.5 Flare Edit", provider: "OpenAI", price: 0.034, hot: true,
+    { id: "openai/gpt-image-2.5-flare/edit", name: "GPT Image 2.5 Flare Edit", provider: "OpenAI", price: 0.039, hot: true,
       params: { resolution: RES_IMAGE_1K_2K_4K, aspectRatio: AR_IMAGE_WIDE, negativePrompt: false, seed: false, maxImages: 16,
         optional: { quality: { paramName: "quality", type: "enum", values: ["low", "medium", "high", "xhigh", "max"], default: "medium" } } } },
-    { id: "openai/gpt-image-2.5-sunburst/edit", name: "GPT Image 2.5 Sunburst Edit", provider: "OpenAI", price: 0.034, flagship: true,
+    { id: "openai/gpt-image-2.5-sunburst/edit", name: "GPT Image 2.5 Sunburst Edit", provider: "OpenAI", price: 0.039, flagship: true,
       params: { resolution: RES_IMAGE_1K_2K_4K, aspectRatio: AR_IMAGE_WIDE, negativePrompt: false, seed: false, maxImages: 16,
         optional: { quality: { paramName: "quality", type: "enum", values: ["low", "medium", "high", "xhigh", "max"], default: "medium" } } } },
 
     // MiniMax H3 open-weights image editing
     { id: "wavespeed-ai/minimax-h3/image-edit", name: "MiniMax H3 Image Edit", provider: "Minimax", price: 0.03,
-      params: { resolution: RES_IMAGE_1K_2K, aspectRatio: AR_IMAGE_WIDE, negativePrompt: false, seed: true, maxImages: 9 } },
-    { id: "wavespeed-ai/minimax-h3/image-edit-lora", name: "MiniMax H3 Image Edit LoRA", provider: "Minimax", price: 0.03,
-      params: { resolution: RES_IMAGE_1K_2K, aspectRatio: AR_IMAGE_WIDE, negativePrompt: false, seed: true, maxImages: 9 } },
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "1.5K", value: "1.5k" }, { label: "2K", value: "2k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "1:2", value: "1:2" }, { label: "2:1", value: "2:1" }, { label: "1:3", value: "1:3" }, { label: "3:1", value: "3:1" }, { label: "2:3", value: "2:3" }, { label: "3:2", value: "3:2" }, { label: "3:4", value: "3:4" }, { label: "4:3", value: "4:3" }, { label: "4:5", value: "4:5" }, { label: "5:4", value: "5:4" }, { label: "9:16", value: "9:16" }, { label: "16:9", value: "16:9" }, { label: "9:21", value: "9:21" }, { label: "21:9", value: "21:9" }], default: "1:1" }, negativePrompt: false, seed: true, maxImages: 9 } },
+    { id: "wavespeed-ai/minimax-h3/image-edit-lora", name: "MiniMax H3 Image Edit LoRA", provider: "Minimax", price: 0.045,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "1.5K", value: "1.5k" }, { label: "2K", value: "2k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "1:2", value: "1:2" }, { label: "2:1", value: "2:1" }, { label: "1:3", value: "1:3" }, { label: "3:1", value: "3:1" }, { label: "2:3", value: "2:3" }, { label: "3:2", value: "3:2" }, { label: "3:4", value: "3:4" }, { label: "4:3", value: "4:3" }, { label: "4:5", value: "4:5" }, { label: "5:4", value: "5:4" }, { label: "9:16", value: "9:16" }, { label: "16:9", value: "16:9" }, { label: "9:21", value: "9:21" }, { label: "21:9", value: "21:9" }], default: "1:1" }, negativePrompt: false, seed: true, maxImages: 9 } },
 
     // Kuaishou Kling O3 multi-reference image editing
     { id: "kwaivgi/kling-image-o3/edit", name: "Kling O3 Image Edit", provider: "Kwaivgi", price: 0.028, hot: true,
-      params: { resolution: RES_IMAGE_1K_2K_4K, aspectRatio: { ...AR_KLING_IMAGE, default: "auto" }, negativePrompt: false, seed: false, maxImages: 10, maxBatchImages: 9 } },
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "2K", value: "2k" }, { label: "4K", value: "4k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "Auto", value: "auto" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "1:1", value: "1:1" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "21:9", value: "21:9" }], default: "auto" }, negativePrompt: false, seed: false, maxImages: 10, maxBatchImages: 9 } },
 
     // Bria FIBO Edit + utility tools
     { id: "bria/fibo/edit", name: "Bria FIBO Edit", provider: "Bria", price: 0.04,
@@ -675,23 +699,47 @@ export const MODELS = {
       params: { resolution: null, negativePrompt: false, seed: true, maxImages: 3 } },
     { id: "google/gemini-3-pro-image/edit", name: "Gemini 3 Pro Edit", provider: "Google", price: 0.14,
       params: { resolution: RES_NANO, aspectRatio: AR_NANO_PRO, negativePrompt: false, seed: false, maxImages: 8 } },
+
+    // ─── 2026-10-20 additions (WaveSpeed refresh, params + prices verified against public schemas) ───
+    { id: "microsoft/mai-image-2.5/edit", name: "MAI Image 2.5 Edit", provider: "Microsoft", price: 0.0584,
+      params: { resolution: null, aspectRatio: { paramName: "size", options: [{ label: "Auto", value: "auto" }, { label: "1:1", value: "1:1" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }], default: "auto" }, negativePrompt: false, seed: false, imageParam: "image", maxImages: 1 } },
+    { id: "pruna-ai/p-image/edit", name: "P-Image Edit", provider: "Pruna", price: 0.01,
+      params: { resolution: null, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }], default: "1:1" }, seed: true, maxImages: 5 } },
+    { id: "x-ai/grok-imagine-image-v2.0/edit", name: "Grok Imagine Image 2.0 Edit", provider: "xAI", price: 0.09,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "2K", value: "2k" }], default: "2k" }, negativePrompt: false, seed: false, outputFormat: false, maxImages: 3, optional: { quality: { paramName: "quality", type: "enum", values: ["low", "medium"], default: "medium" } } } },
+    { id: "black-forest-labs/flux-3/image-edit", name: "Flux 3 Edit", provider: "BFL", price: 0.05,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "2K", value: "2k" }, { label: "4K", value: "4k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "21:9", value: "21:9" }, { label: "2:1", value: "2:1" }, { label: "16:9", value: "16:9" }, { label: "3:2", value: "3:2" }, { label: "7:5", value: "7:5" }, { label: "4:3", value: "4:3" }, { label: "5:4", value: "5:4" }, { label: "1:1", value: "1:1" }, { label: "4:5", value: "4:5" }, { label: "3:4", value: "3:4" }, { label: "5:7", value: "5:7" }, { label: "2:3", value: "2:3" }, { label: "9:16", value: "9:16" }, { label: "1:2", value: "1:2" }], default: "1:1" }, negativePrompt: false, seed: false, maxImages: 10, optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
+    { id: "google/nano-banana-2.1/edit", name: "Nano Banana 2.1 Edit", provider: "Google", price: 0.0378,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1K", value: "1k" }, { label: "2K", value: "2k" }, { label: "4K", value: "4k" }], default: "1k" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "1:1", value: "1:1" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "3:4", value: "3:4" }, { label: "4:3", value: "4:3" }, { label: "4:5", value: "4:5" }, { label: "5:4", value: "5:4" }, { label: "9:16", value: "9:16" }, { label: "16:9", value: "16:9" }, { label: "21:9", value: "21:9" }, { label: "1:4", value: "1:4" }, { label: "4:1", value: "4:1" }, { label: "1:8", value: "1:8" }, { label: "8:1", value: "8:1" }], default: "1:1" }, negativePrompt: false, seed: false, maxImages: 14, optional: { enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false }, enableImageSearch: { paramName: "enable_image_search", type: "boolean", default: false } } } },
+    { id: "ideogram-ai/ideogram-v4.5/edit", name: "Ideogram 4.5 Edit", provider: "Ideogram", price: 0.06,
+      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", maxImages: 1, optional: { editPrecision: { paramName: "edit_precision", type: "enum", values: ["regular", "high"], default: "regular" }, quality: { paramName: "quality", type: "enum", values: ["very_low", "low", "medium", "high"], default: "medium" } } } },
+    { id: "krea/v3/edit", name: "Krea 3 Edit", provider: "Krea", price: 0.24,
+      params: { resolution: null, negativePrompt: true, seed: true, maxImages: 8, optional: { model: { paramName: "model", type: "enum", values: ["berry", "jam"], default: "berry" }, reasoningLevel: { paramName: "reasoning_level", type: "enum", values: ["low", "medium"], default: "low" } } } },
   ],
 
   i23d: [
     // Image-to-3D models — input: source image, output: 3D mesh URL (.glb)
-    { id: "wavespeed-ai/hunyuan3d-v3/image-to-3d", name: "Hunyuan3D V3", provider: "Tencent", price: 0.225,
+    { id: "wavespeed-ai/hunyuan3d-v3/image-to-3d", name: "Hunyuan3D V3", provider: "Tencent", price: 0.63,
       params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true } },
-    { id: "hyper3d/rodin-v2/image-to-3d", name: "Hyper3D Rodin v2", provider: "Hyper3D", price: 0.40,
+    { id: "hyper3d/rodin-v2/image-to-3d", name: "Hyper3D Rodin v2", provider: "Hyper3D", price: 0.48,
       params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "images", maxImages: 4 } },
-    { id: "wavespeed-ai/meshy6/image-to-3d", name: "Meshy 6", provider: "Meshy", price: 0.20,
-      params: { resolution: null, negativePrompt: false, seed: false, outputFormat: false, imageParam: "image", noPrompt: true } },
-    { id: "tripo3d/h3.1/image-to-3d", name: "Tripo3D H3.1", provider: "Tripo3D", price: 0.20,
+    { id: "tripo3d/h3.1/image-to-3d", name: "Tripo3D H3.1", provider: "Tripo3D", price: 0.36,
       params: { resolution: null, negativePrompt: false, seed: true, seedParam: "model_seed", outputFormat: false, imageParam: "image", noPrompt: true } },
+
+    // ─── 2026-10-20 additions (WaveSpeed refresh, params + prices verified against public schemas) ───
+    { id: "meshy/v6/image-to-3d", name: "Meshy 6", provider: "Meshy", price: 1.44,
+      params: { resolution: null, negativePrompt: false, seed: false, noPrompt: true, imageParam: "image", optional: { enablePbr: { paramName: "enable_pbr", type: "boolean", default: false }, shouldRemesh: { paramName: "should_remesh", type: "boolean", default: true }, shouldTexture: { paramName: "should_texture", type: "boolean", default: true }, symmetryMode: { paramName: "symmetry_mode", type: "enum", values: ["off", "auto", "on"], default: "auto" }, taPose: { paramName: "ta_pose", type: "boolean", default: false }, targetPolycount: { paramName: "target_polycount", type: "number", default: 30000, min: 100, max: 300000 }, topology: { paramName: "topology", type: "enum", values: ["quad", "triangle"], default: "triangle" } } } },
+    { id: "meshy/v7.1/image-to-3d", name: "Meshy 7.1", provider: "Meshy", price: 1.44,
+      params: { resolution: null, negativePrompt: false, seed: false, noPrompt: true, imageParam: "image", optional: { enablePbr: { paramName: "enable_pbr", type: "boolean", default: false }, enableRigging: { paramName: "enable_rigging", type: "boolean", default: false }, enableAnimation: { paramName: "enable_animation", type: "boolean", default: false }, geometryResolution: { paramName: "geometry_resolution", type: "enum", values: ["standard", "2k", "4k"], default: "standard" }, modelType: { paramName: "model_type", type: "enum", values: ["standard", "lowpoly", "smart-topology"], default: "standard" }, shouldRemesh: { paramName: "should_remesh", type: "boolean", default: true }, shouldTexture: { paramName: "should_texture", type: "boolean", default: true }, symmetryMode: { paramName: "symmetry_mode", type: "enum", values: ["off", "auto", "on"], default: "auto" }, targetPolycount: { paramName: "target_polycount", type: "number", default: 30000, min: 100, max: 300000 }, topology: { paramName: "topology", type: "enum", values: ["quad", "triangle"], default: "triangle" } } } },
+    { id: "tripo3d/p2/image-to-3d", name: "Tripo P2", provider: "Tripo", price: 1.32,
+      params: { resolution: null, negativePrompt: false, seed: true, seedParam: "model_seed", outputFormat: false, imageParam: "image", noPrompt: true, optional: { textureQuality: { paramName: "texture_quality", type: "enum", values: ["standard", "detailed", "extreme"], default: "standard" }, texture: { paramName: "texture", type: "boolean", default: true }, pbr: { paramName: "pbr", type: "boolean", default: true }, quad: { paramName: "quad", type: "boolean", default: false } } } },
+    { id: "bytedance/seed3d-2.0/image-to-3d", name: "Seed3D 2.0", provider: "ByteDance", price: 0.4,
+      params: { resolution: null, negativePrompt: false, seed: false, noPrompt: true, imageParam: "image", optional: { subdivisionLevel: { paramName: "subdivision_level", type: "enum", values: ["low", "medium", "high"], default: "medium" } } } },
   ],
 
   t2v: [
     // ByteDance Seedance 2.5 — standard + Turbo
-    { id: "bytedance/seedance-2.5/text-to-video", name: "Seedance 2.5", provider: "ByteDance", price: 0.81, hot: true,
+    { id: "bytedance/seedance-2.5/text-to-video", name: "Seedance 2.5", provider: "ByteDance", price: 1.62, hot: true,
       params: { resolution: RES_VIDEO_480_720_1080_4K, aspectRatio: AR_SEEDANCE, duration: { options: DUR_4_30, default: 5 }, negativePrompt: false, seed: false,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
     { id: "bytedance/seedance-2.5/text-to-video-turbo", name: "Seedance 2.5 Turbo", provider: "ByteDance", price: 0.90, flagship: true,
@@ -715,7 +763,7 @@ export const MODELS = {
         optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false }, generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
     { id: "alibaba/wan-2.7/text-to-video", name: "WAN 2.7", provider: "Alibaba", price: 0.50, hot: true,
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_STANDARD, duration: { options: [2,3,4,5,6,7,8,9,10,11,12,13,14,15], default: 5 }, negativePrompt: true, seed: true, optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
-    { id: "alibaba/wan-2.5/text-to-video", name: "WAN 2.5", provider: "Alibaba", price: 0.30,
+    { id: "alibaba/wan-2.5/text-to-video", name: "WAN 2.5", provider: "Alibaba", price: 0.5,
       params: { resolution: RES_VIDEO_WAN, duration: { options: [5,10], default: 5 }, negativePrompt: true, seed: true } },
 
     // Google Veo
@@ -739,8 +787,8 @@ export const MODELS = {
       params: { resolution: { paramName: "size", options: [{ label: "720x1280", value: "720*1280" }, { label: "1280x720", value: "1280*720" }, { label: "1024x1792", value: "1024*1792" }, { label: "1792x1024", value: "1792*1024" }, { label: "1920x1080", value: "1920*1080" }, { label: "1080x1920", value: "1080*1920" }], default: "1280*720" }, duration: { options: [4,8,12,16,20], default: 4 }, negativePrompt: false, seed: false } },
 
     // Kling
-    { id: "kwaivgi/kling-v3.0-pro/text-to-video", name: "Kling 3.0 Pro", provider: "Kwaivgi", price: 0.80, hot: true,
-      params: { resolution: null, aspectRatio: AR_KLING, duration: { options: [5,10], default: 5 }, negativePrompt: true, seed: false, optional: { cfgScale: { paramName: "cfg_scale", type: "number", default: 0.5, min: 0, max: 1 }, sound: { paramName: "sound", type: "boolean", default: false } } } },
+    { id: "kwaivgi/kling-v3.0-pro/text-to-video", name: "Kling 3.0 Pro", provider: "Kwaivgi", price: 0.56, hot: true,
+      params: { resolution: null, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "1:1", value: "1:1" }], default: "16:9" }, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: true, seed: false, optional: { cfgScale: { paramName: "cfg_scale", type: "number", default: 0.5, min: 0, max: 1 }, sound: { paramName: "sound", type: "boolean", default: false } } } },
     { id: "kwaivgi/kling-video-o3-std/text-to-video", name: "Kling O3 Standard", provider: "Kwaivgi", price: 0.42, hot: true,
       params: { resolution: null, aspectRatio: AR_KLING, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: false,
         optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
@@ -752,29 +800,29 @@ export const MODELS = {
         optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
 
     // PixVerse
-    { id: "pixverse/pixverse-v6/text-to-video", name: "PixVerse V6", provider: "PixVerse", price: 0.10, hot: true,
+    { id: "pixverse/pixverse-v6/text-to-video", name: "PixVerse V6", provider: "PixVerse", price: 0.225, hot: true,
       params: { resolution: RES_VIDEO_360_540_720_1080, aspectRatio: AR_KLING_IMAGE, duration: { options: DUR_1_15, default: 5 }, negativePrompt: false, seed: false,
         optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false }, thinkingType: { paramName: "thinking_type", type: "enum", values: ["enabled", "disabled", "auto"], default: "auto" } } } },
 
     // Pika
-    { id: "pika/v2.2-t2v", name: "Pika V2.2", provider: "Pika", price: 0.40,
+    { id: "pika/v2.2-t2v", name: "Pika V2.2", provider: "Pika", price: 0.2,
       params: { resolution: { paramName: "size", options: [{ label: "1280x720", value: "1280*720" }, { label: "720x1280", value: "720*1280" }], default: "1280*720" }, duration: { options: [5,10], default: 5 }, negativePrompt: false, seed: false } },
 
     // Vidu
-    { id: "vidu/q3/text-to-video", name: "Vidu Q3", provider: "Vidu", price: 0.35, hot: true,
+    { id: "vidu/q3/text-to-video", name: "Vidu Q3", provider: "Vidu", price: 0.75, hot: true,
       params: { resolution: RES_VIDEO_540_720_1080_DEFAULT_720, aspectRatio: { ...AR_WAN3, default: "4:3" }, duration: { options: DUR_1_16, default: 5 }, negativePrompt: false, seed: true,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, bgm: { paramName: "bgm", type: "boolean", default: true } } } },
-    { id: "vidu/q3-pro/text-to-video", name: "Vidu Q3 Pro", provider: "Vidu", price: 0.25,
+    { id: "vidu/q3-pro/text-to-video", name: "Vidu Q3 Pro", provider: "Vidu", price: 0.625,
       params: { resolution: RES_VIDEO_540_720_1080_DEFAULT_720, duration: { options: DUR_1_16, default: 5 }, negativePrompt: false, seed: true,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, bgm: { paramName: "bgm", type: "boolean", default: true } } } },
 
     // Minimax
-    { id: "minimax/hailuo-2.3/t2v-pro", name: "Hailuo 2.3", provider: "Minimax", price: 0.50,
+    { id: "minimax/hailuo-2.3/t2v-pro", name: "Hailuo 2.3", provider: "Minimax", price: 0.49,
       params: { resolution: null, duration: null, negativePrompt: false, seed: false,
         optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
 
     // MiniMax H3 — official + WaveSpeed open-weights deployment
-    { id: "minimax/h3/text-to-video", name: "MiniMax H3 Official", provider: "Minimax", price: 0.70, flagship: true,
+    { id: "minimax/h3/text-to-video", name: "MiniMax H3 Official", provider: "Minimax", price: 0.5, flagship: true,
       params: { resolution: RES_VIDEO_H3_OFFICIAL, aspectRatio: AR_H3, duration: { options: [4,5,6,7,8,9,10,11,12,13,14,15], default: 5 }, negativePrompt: false, seed: false } },
     { id: "wavespeed-ai/minimax-h3/text-to-video", name: "MiniMax H3 WaveSpeed", provider: "Minimax", price: 0.10, hot: true,
       params: { resolution: RES_VIDEO_H3, aspectRatio: AR_H3_WS, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: true } },
@@ -786,7 +834,7 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_540_720_1080, aspectRatio: AR_LUMA_SIZE, duration: { options: [5,10], default: 5 }, negativePrompt: false, seed: false } },
 
     // WaveSpeed — Cosmos Predict
-    { id: "wavespeed-ai/cosmos-predict-2.5/text-to-video", name: "Cosmos Predict 2.5", provider: "WaveSpeed", price: 0.25,
+    { id: "wavespeed-ai/cosmos-predict-2.5/text-to-video", name: "Cosmos Predict 2.5", provider: "WaveSpeed", price: 0.3,
       params: { resolution: null, duration: null, negativePrompt: false, seed: false } },
 
     // WaveSpeed — Kandinsky
@@ -794,15 +842,31 @@ export const MODELS = {
       params: { resolution: RES_KANDINSKY, aspectRatio: AR_KANDINSKY, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
 
     // ─── 2026-06 additions ───
-    { id: "bytedance/seedance-2.0/text-to-video", name: "Seedance 2.0", provider: "ByteDance", price: 0.60,
+    { id: "bytedance/seedance-2.0/text-to-video", name: "Seedance 2.0", provider: "ByteDance", price: 1.08,
       params: { resolution: RES_VIDEO_480_4K, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
     { id: "kwaivgi/kling-v3.0-std/text-to-video", name: "Kling 3.0 Std", provider: "Kwaivgi", price: 0.42,
-      params: { resolution: null, aspectRatio: AR_KLING, duration: DUR_KLING3, negativePrompt: true, seed: false, optional: { cfgScale: { paramName: "cfg_scale", type: "number", default: 0.5, min: 0, max: 1 }, sound: { paramName: "sound", type: "boolean", default: false } } } },
+      params: { resolution: null, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "1:1", value: "1:1" }], default: "16:9" }, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: true, seed: false, optional: { cfgScale: { paramName: "cfg_scale", type: "number", default: 0.5, min: 0, max: 1 }, sound: { paramName: "sound", type: "boolean", default: false } } } },
+
+    // ─── 2026-10-20 additions (WaveSpeed refresh, params + prices verified against public schemas) ───
+    { id: "pixverse/pixverse-c1/text-to-video", name: "PixVerse C1", provider: "PixVerse", price: 0.25,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "540p", value: "540p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "4:3", value: "4:3" }, { label: "1:1", value: "1:1" }, { label: "3:4", value: "3:4" }, { label: "9:16", value: "9:16" }, { label: "2:3", value: "2:3" }, { label: "3:2", value: "3:2" }, { label: "21:9", value: "21:9" }], default: "16:9" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false } } } },
+    { id: "pruna-ai/p-video-2-pro/text-to-video", name: "P-Video 2 Pro", provider: "Pruna", price: 0.175,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "768p", value: "768p" }], default: "768p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "1:1", value: "1:1" }], default: "16:9" }, duration: { options: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, seed: true, optional: { mode: { paramName: "mode", type: "enum", values: ["speed", "quality", "cost"], default: "speed" }, promptUpsampler: { paramName: "prompt_upsampler", type: "enum", values: ["off", "turbo", "max"], default: "turbo" } } } },
+    { id: "pruna-ai/p-video-2/text-to-video", name: "P-Video 2", provider: "Pruna", price: 0.125,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "1:1", value: "1:1" }], default: "16:9" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], default: 5 }, seed: true, optional: { draft: { paramName: "draft", type: "boolean", default: false }, promptUpsampling: { paramName: "prompt_upsampling", type: "boolean", default: true }, saveAudio: { paramName: "save_audio", type: "boolean", default: true } } } },
+    { id: "x-ai/grok-imagine-video-v1.5/text-to-video", name: "Grok Imagine Video 1.5", provider: "xAI", price: 0.84,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "1:1", value: "1:1" }, { label: "9:16", value: "9:16" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }], default: "16:9" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 6 } } },
+    { id: "bytedance/seedance-2.0-mini/text-to-video", name: "Seedance 2.0 Mini", provider: "ByteDance", price: 0.6,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "1:1", value: "1:1" }, { label: "21:9", value: "21:9" }], default: "16:9" }, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "google/gemini-omni-1.1-flash/text-to-video", name: "Gemini Omni 1.1 Flash", provider: "Google", price: 0.8,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }], default: "16:9" }, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10], default: 8 }, negativePrompt: false, seed: false } },
+    { id: "heygen/video-1.0/text-to-video", name: "HeyGen Video 1.0", provider: "HeyGen", price: 0.18,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "768p", value: "768p" }], default: "768p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "21:9", value: "21:9" }, { label: "16:9", value: "16:9" }, { label: "4:3", value: "4:3" }, { label: "1:1", value: "1:1" }, { label: "3:4", value: "3:4" }, { label: "9:16", value: "9:16" }], default: "16:9" }, duration: { options: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: true, optional: { promptEnhancement: { paramName: "prompt_enhancement", type: "enum", values: ["disabled", "turbo", "quality"], default: "disabled" } } } },
   ],
 
   i2v: [
     // ByteDance Seedance 2.5 — first frame + optional last frame
-    { id: "bytedance/seedance-2.5/image-to-video", name: "Seedance 2.5 I2V", provider: "ByteDance", price: 0.81, hot: true,
+    { id: "bytedance/seedance-2.5/image-to-video", name: "Seedance 2.5 I2V", provider: "ByteDance", price: 1.62, hot: true,
       params: { resolution: RES_VIDEO_480_720_1080_4K, duration: { options: DUR_4_30, default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image",
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
     { id: "bytedance/seedance-2.5/image-to-video-turbo", name: "Seedance 2.5 I2V Turbo", provider: "ByteDance", price: 0.90, flagship: true,
@@ -817,11 +881,9 @@ export const MODELS = {
       params: { resolution: null, aspectRatio: AR_FLUX3, duration: { options: DUR_5_20, default: 5 }, negativePrompt: false, seed: false,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
     { id: "black-forest-labs/flux-3/start-end-to-video", name: "FLUX 3 Start + End", provider: "BFL", price: 0.85,
-      params: { resolution: RES_VIDEO_FLUX3, aspectRatio: AR_FLUX3, duration: { options: DUR_5_20, default: 5 }, negativePrompt: false, seed: false, maxImages: 2, startEndFrames: true,
-        optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
-    { id: "black-forest-labs/flux-3/start-end-to-video-draft", name: "FLUX 3 Start + End Draft", provider: "BFL", price: 0.30,
-      params: { resolution: null, aspectRatio: AR_FLUX3, duration: { options: DUR_5_20, default: 5 }, negativePrompt: false, seed: false, maxImages: 2, startEndFrames: true,
-        optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "21:9", value: "21:9" }, { label: "2:1", value: "2:1" }, { label: "16:9", value: "16:9" }, { label: "4:3", value: "4:3" }, { label: "1:1", value: "1:1" }, { label: "3:4", value: "3:4" }, { label: "9:16", value: "9:16" }], default: "16:9" }, duration: { options: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, startEndFrames: true, startImageParam: "image", endImageParam: "last_image", optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "black-forest-labs/flux-3/start-end-to-video-draft", name: "FLUX 3 Start + End Draft", provider: "BFL", price: 0.3,
+      params: { resolution: null, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "21:9", value: "21:9" }, { label: "2:1", value: "2:1" }, { label: "16:9", value: "16:9" }, { label: "4:3", value: "4:3" }, { label: "1:1", value: "1:1" }, { label: "3:4", value: "3:4" }, { label: "9:16", value: "9:16" }], default: "16:9" }, duration: { options: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, startEndFrames: true, startImageParam: "image", endImageParam: "last_image", optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
 
     // Alibaba WAN
     { id: "alibaba/wan-3.0/image-to-video", name: "WAN 3.0 I2V", provider: "Alibaba", price: 0.475, hot: true,
@@ -852,7 +914,7 @@ export const MODELS = {
       params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, maxImages: 2, lastImageParam: "last_image", optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
     { id: "google/veo3.1-fast/image-to-video", name: "Veo 3.1 Fast I2V", provider: "Google", price: 1.20, hot: true,
       params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true, maxImages: 2, lastImageParam: "last_image", optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
-    { id: "google/veo3.1-lite/image-to-video", name: "Veo 3.1 Lite I2V", provider: "Google", price: 0.30,
+    { id: "google/veo3.1-lite/image-to-video", name: "Veo 3.1 Lite I2V", provider: "Google", price: 0.4,
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_VEO, duration: { options: [4,6,8], default: 8 }, negativePrompt: true, seed: true } },
     { id: "google/veo3.1/reference-to-video", name: "Veo 3.1 Reference", provider: "Google", price: 3.20,
       params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, negativePrompt: true, seed: true, imageParam: "images", maxImages: 3,
@@ -872,17 +934,14 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_720_1080, duration: { options: [4,8,12,16,20], default: 4 }, negativePrompt: false, seed: false } },
 
     // Kling
-    { id: "kwaivgi/kling-v3.0-pro/image-to-video", name: "Kling 3.0 I2V", provider: "Kwaivgi", price: 0.80, hot: true,
-      params: { resolution: null, duration: { options: [5,10], default: 5 }, negativePrompt: true, seed: false, maxImages: 2, lastImageParam: "end_image" } },
+    { id: "kwaivgi/kling-v3.0-pro/image-to-video", name: "Kling 3.0 I2V", provider: "Kwaivgi", price: 0.56, hot: true,
+      params: { resolution: null, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: true, seed: false, maxImages: 2, lastImageParam: "last_image" } },
     { id: "kwaivgi/kling-video-o3-std/image-to-video", name: "Kling O3 Standard I2V", provider: "Kwaivgi", price: 0.42, hot: true,
-      params: { resolution: null, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "end_image",
-        optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
+      params: { resolution: null, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image", optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
     { id: "kwaivgi/kling-video-o3-pro/image-to-video", name: "Kling O3 Pro I2V", provider: "Kwaivgi", price: 0.56, flagship: true,
-      params: { resolution: null, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "end_image",
-        optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
-    { id: "kwaivgi/kling-video-o3-4k/image-to-video", name: "Kling O3 4K I2V", provider: "Kwaivgi", price: 2.10,
-      params: { resolution: null, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "end_image",
-        optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
+      params: { resolution: null, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image", optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
+    { id: "kwaivgi/kling-video-o3-4k/image-to-video", name: "Kling O3 4K I2V", provider: "Kwaivgi", price: 2.1,
+      params: { resolution: null, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image", optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
     { id: "kwaivgi/kling-video-o3-std/reference-to-video", name: "Kling O3 Standard Reference", provider: "Kwaivgi", price: 0.42,
       params: { resolution: null, aspectRatio: AR_KLING, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: false, imageParam: "images", maxImages: 7, sourceOptional: true,
         optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
@@ -894,7 +953,7 @@ export const MODELS = {
         optional: { sound: { paramName: "sound", type: "boolean", default: false } } } },
 
     // Runway
-    { id: "runwayml/gen4-turbo", name: "Runway Gen4 Turbo", provider: "Runway", price: 0.50, hot: true,
+    { id: "runwayml/gen4-turbo", name: "Runway Gen4 Turbo", provider: "Runway", price: 0.28, hot: true,
       params: { resolution: null, aspectRatio: AR_STANDARD, duration: { options: [5,10], default: 5 }, negativePrompt: false, seed: false } },
 
     // Luma
@@ -904,18 +963,16 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_540_720_1080, aspectRatio: AR_LUMA_SIZE, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image" } },
 
     // PixVerse
-    { id: "pixverse/pixverse-v6/image-to-video", name: "PixVerse V6 I2V", provider: "PixVerse", price: 0.10, hot: true,
+    { id: "pixverse/pixverse-v6/image-to-video", name: "PixVerse V6 I2V", provider: "PixVerse", price: 0.225, hot: true,
       params: { resolution: RES_VIDEO_360_540_720_1080, duration: { options: DUR_1_15, default: 5 }, negativePrompt: false, seed: false,
         optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false }, thinkingType: { paramName: "thinking_type", type: "enum", values: ["enabled", "disabled", "auto"], default: "auto" } } } },
-    { id: "pixverse/pixverse-v6/reference-to-video", name: "PixVerse V6 Reference", provider: "PixVerse", price: 1.00,
-      params: { resolution: { ...RES_VIDEO_360_540_720_1080, options: [{ label: "Auto", value: "auto" }, ...RES_VIDEO_360_540_720_1080.options] }, aspectRatio: { ...AR_KLING_IMAGE, default: "auto" }, duration: { options: DUR_1_15, default: 5 }, negativePrompt: false, seed: false, imageParam: "images", maxImages: 10, sourceOptional: true,
-        optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false } } } },
-    { id: "pixverse/pixverse-v6/transition", name: "PixVerse V6 Transition", provider: "PixVerse", price: 0.025,
-      params: { resolution: RES_VIDEO_360_540_720_1080, aspectRatio: AR_KLING_IMAGE, duration: { options: DUR_1_15, default: 5 }, negativePrompt: true, seed: true, maxImages: 2, lastImageParam: "end_image",
-        optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false } } } },
+    { id: "pixverse/pixverse-v6/reference-to-video", name: "PixVerse V6 Reference", provider: "PixVerse", price: 0.225,
+      params: { resolution: { paramName: "resolution", options: [{ label: "Auto", value: "auto" }, { label: "360p", value: "360p" }, { label: "540p", value: "540p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "Auto", value: "auto" }, { label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "1:1", value: "1:1" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "21:9", value: "21:9" }], default: "auto" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, imageParam: "images", maxImages: 10, sourceOptional: true, optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false } } } },
+    { id: "pixverse/pixverse-v6/transition", name: "PixVerse V6 Transition", provider: "PixVerse", price: 0.225,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "540p", value: "540p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "1:1", value: "1:1" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "21:9", value: "21:9" }], default: "16:9" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: true, seed: true, maxImages: 2, lastImageParam: "last_image", optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false } } } },
 
     // Pika
-    { id: "pika/v2.2-i2v", name: "Pika V2.2 I2V", provider: "Pika", price: 0.40,
+    { id: "pika/v2.2-i2v", name: "Pika V2.2 I2V", provider: "Pika", price: 0.2,
       params: { resolution: { paramName: "size", options: [{ label: "1280x720", value: "1280*720" }, { label: "720x1280", value: "720*1280" }], default: "1280*720" }, duration: { options: [5,10], default: 5 }, negativePrompt: false, seed: false } },
 
     // ByteDance Waver 1.0 is image-conditioned despite its endpoint name.
@@ -923,10 +980,10 @@ export const MODELS = {
       params: { resolution: null, duration: null, negativePrompt: false, seed: true } },
 
     // Vidu
-    { id: "vidu/q3/image-to-video", name: "Vidu Q3 I2V", provider: "Vidu", price: 0.35, hot: true,
+    { id: "vidu/q3/image-to-video", name: "Vidu Q3 I2V", provider: "Vidu", price: 0.75, hot: true,
       params: { resolution: RES_VIDEO_540_720_1080_DEFAULT_720, duration: { options: DUR_1_16, default: 5 }, negativePrompt: false, seed: true,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, bgm: { paramName: "bgm", type: "boolean", default: true } } } },
-    { id: "vidu/q3-pro/image-to-video", name: "Vidu Q3 Pro I2V", provider: "Vidu", price: 0.25,
+    { id: "vidu/q3-pro/image-to-video", name: "Vidu Q3 Pro I2V", provider: "Vidu", price: 0.625,
       params: { resolution: RES_VIDEO_540_720_1080_DEFAULT_720, duration: { options: DUR_1_16, default: 5 }, negativePrompt: false, seed: true,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, bgm: { paramName: "bgm", type: "boolean", default: true } } } },
     { id: "vidu/q3-turbo/image-to-video", name: "Vidu Q3 Turbo I2V", provider: "Vidu", price: 0.30,
@@ -935,19 +992,19 @@ export const MODELS = {
     { id: "vidu/q3/image-to-video-pro", name: "Vidu Q3 I2V High-Res", provider: "Vidu", price: 0.45, flagship: true,
       params: { resolution: RES_VIDEO_720_1080_2K_4K, duration: { options: DUR_1_16, default: 5 }, negativePrompt: false, seed: true,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, bgm: { paramName: "bgm", type: "boolean", default: true } } } },
-    { id: "vidu/q3/start-end-to-video", name: "Vidu Q3 Start + End", provider: "Vidu", price: 0.35,
+    { id: "vidu/q3/start-end-to-video", name: "Vidu Q3 Start + End", provider: "Vidu", price: 0.75,
       params: { resolution: RES_VIDEO_540_720_1080_DEFAULT_720, duration: { options: DUR_1_16, default: 5 }, negativePrompt: false, seed: true, maxImages: 2, lastImageParam: "last_image", requiresLastImage: true,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, bgm: { paramName: "bgm", type: "boolean", default: true } } } },
-    { id: "vidu/q3-pro/start-end-to-video", name: "Vidu Q3 Pro Start + End", provider: "Vidu", price: 0.25,
+    { id: "vidu/q3-pro/start-end-to-video", name: "Vidu Q3 Pro Start + End", provider: "Vidu", price: 0.625,
       params: { resolution: RES_VIDEO_540_720_1080_DEFAULT_720, duration: { options: DUR_1_16, default: 5 }, negativePrompt: false, seed: true, maxImages: 2, lastImageParam: "last_image", requiresLastImage: true,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, bgm: { paramName: "bgm", type: "boolean", default: true } } } },
     { id: "vidu/q3-turbo/start-end-to-video", name: "Vidu Q3 Turbo Start + End", provider: "Vidu", price: 0.30,
       params: { resolution: RES_VIDEO_540_720_1080_DEFAULT_720, duration: { options: DUR_1_16, default: 5 }, negativePrompt: false, seed: true, maxImages: 2, lastImageParam: "last_image", requiresLastImage: true,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, bgm: { paramName: "bgm", type: "boolean", default: true } } } },
-    { id: "vidu/q3/reference-to-video", name: "Vidu Q3 Reference", provider: "Vidu", price: 0.35,
+    { id: "vidu/q3/reference-to-video", name: "Vidu Q3 Reference", provider: "Vidu", price: 0.77,
       params: { resolution: RES_VIDEO_360_540_720_1080, aspectRatio: AR_WAN3, duration: { options: DUR_1_16, default: 5 }, negativePrompt: false, seed: true, imageParam: "images", maxImages: 4,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
-    { id: "vidu/q3-ad", name: "Vidu Q3 Ad", provider: "Vidu", price: 0.15,
+    { id: "vidu/q3-ad", name: "Vidu Q3 Ad", provider: "Vidu", price: 0.75,
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_WAN3, duration: { options: Array.from({ length: 14 }, (_, i) => i + 3), default: 5 }, negativePrompt: false, seed: true, imageParam: "images", maxImages: 7,
         optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
 
@@ -958,29 +1015,29 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_720_1080, aspectRatio: AR_SEEDANCE, duration: { options: [4,5,6,7,8,9,10,11,12], default: 5 }, negativePrompt: false, seed: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, cameraFixed: { paramName: "camera_fixed", type: "boolean", default: false } } } },
 
     // MiniMax H3 — official + WaveSpeed open-weights I2V/reference variants
-    { id: "minimax/h3/image-to-video", name: "MiniMax H3 Official I2V", provider: "Minimax", price: 0.70, flagship: true,
+    { id: "minimax/h3/image-to-video", name: "MiniMax H3 Official I2V", provider: "Minimax", price: 0.5, flagship: true,
       params: { resolution: RES_VIDEO_H3_OFFICIAL, duration: { options: [4,5,6,7,8,9,10,11,12,13,14,15], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image" } },
-    { id: "minimax/h3/reference-to-video", name: "MiniMax H3 Official Reference", provider: "Minimax", price: 0.70,
+    { id: "minimax/h3/reference-to-video", name: "MiniMax H3 Official Reference", provider: "Minimax", price: 0.5,
       params: { resolution: RES_VIDEO_H3_OFFICIAL, aspectRatio: AR_H3, duration: { options: [4,5,6,7,8,9,10,11,12,13,14,15], default: 5 }, negativePrompt: false, seed: false, imageParam: "reference_images", maxImages: 9, sourceOptional: true } },
     { id: "wavespeed-ai/minimax-h3/image-to-video", name: "MiniMax H3 WaveSpeed I2V", provider: "Minimax", price: 0.10, hot: true,
       params: { resolution: RES_VIDEO_H3, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: true, maxImages: 2, lastImageParam: "last_image" } },
-    { id: "wavespeed-ai/minimax-h3/reference-to-video", name: "MiniMax H3 WaveSpeed Reference", provider: "Minimax", price: 0.125,
+    { id: "wavespeed-ai/minimax-h3/reference-to-video", name: "MiniMax H3 WaveSpeed Reference", provider: "Minimax", price: 0.135,
       params: { resolution: RES_VIDEO_H3, aspectRatio: AR_H3_WS, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: true, imageParam: "reference_images", maxImages: 9, sourceOptional: true } },
     { id: "wavespeed-ai/minimax-h3/image-to-video-lora", name: "MiniMax H3 I2V LoRA", provider: "Minimax", price: 0.125,
       params: { resolution: RES_VIDEO_H3, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: true, maxImages: 2, lastImageParam: "last_image" } },
-    { id: "wavespeed-ai/minimax-h3/reference-to-video-lora", name: "MiniMax H3 Reference LoRA", provider: "Minimax", price: 0.15,
+    { id: "wavespeed-ai/minimax-h3/reference-to-video-lora", name: "MiniMax H3 Reference LoRA", provider: "Minimax", price: 0.16,
       params: { resolution: RES_VIDEO_H3, aspectRatio: AR_H3_WS, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: true, imageParam: "reference_images", maxImages: 9, sourceOptional: true } },
     { id: "wavespeed-ai/minimax-h3-singularity/image-to-video", name: "MiniMax H3 Singularity I2V", provider: "Minimax", price: 0.125, hot: true,
       params: { resolution: RES_VIDEO_H3, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: true, maxImages: 2, lastImageParam: "last_image" } },
     { id: "wavespeed-ai/minimax-h3-singularity/image-to-video-lora", name: "MiniMax H3 Singularity I2V LoRA", provider: "Minimax", price: 0.1563,
       params: { resolution: RES_VIDEO_H3, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: true, maxImages: 2, lastImageParam: "last_image" } },
-    { id: "wavespeed-ai/minimax-h3-singularity/reference-to-video", name: "MiniMax H3 Singularity Reference", provider: "Minimax", price: 0.125,
+    { id: "wavespeed-ai/minimax-h3-singularity/reference-to-video", name: "MiniMax H3 Singularity Reference", provider: "Minimax", price: 0.135,
       params: { resolution: RES_VIDEO_H3, aspectRatio: AR_H3_WS, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: true, imageParam: "reference_images", maxImages: 9, sourceOptional: true } },
-    { id: "wavespeed-ai/minimax-h3-singularity/reference-to-video-lora", name: "MiniMax H3 Singularity Reference LoRA", provider: "Minimax", price: 0.15,
+    { id: "wavespeed-ai/minimax-h3-singularity/reference-to-video-lora", name: "MiniMax H3 Singularity Reference LoRA", provider: "Minimax", price: 0.16,
       params: { resolution: RES_VIDEO_H3, aspectRatio: AR_H3_WS, duration: { options: DUR_3_15, default: 5 }, negativePrompt: false, seed: true, imageParam: "reference_images", maxImages: 9, sourceOptional: true } },
 
     // WaveSpeed — Cosmos Predict I2V
-    { id: "wavespeed-ai/cosmos-predict-2.5/image-to-video", name: "Cosmos Predict 2.5 I2V", provider: "WaveSpeed", price: 0.25,
+    { id: "wavespeed-ai/cosmos-predict-2.5/image-to-video", name: "Cosmos Predict 2.5 I2V", provider: "WaveSpeed", price: 0.3,
       params: { resolution: null, duration: null, negativePrompt: false, seed: false } },
 
     // WaveSpeed — Kandinsky I2V
@@ -988,15 +1045,49 @@ export const MODELS = {
       params: { resolution: RES_KANDINSKY, duration: { options: [5], default: 5 }, negativePrompt: false, seed: false } },
 
     // ─── 2026-06 additions (standard) ───
-    { id: "bytedance/seedance-2.0/image-to-video", name: "Seedance 2.0 I2V", provider: "ByteDance", price: 0.60,
+    { id: "bytedance/seedance-2.0/image-to-video", name: "Seedance 2.0 I2V", provider: "ByteDance", price: 1.08,
       params: { resolution: RES_VIDEO_480_4K, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image", optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
     { id: "kwaivgi/kling-v3.0-std/image-to-video", name: "Kling 3.0 Std I2V", provider: "Kwaivgi", price: 0.42,
-      params: { resolution: null, duration: DUR_KLING3, negativePrompt: true, seed: false, endFrame: "end_image", optional: { cfgScale: { paramName: "cfg_scale", type: "number", default: 0.5, min: 0, max: 1 }, sound: { paramName: "sound", type: "boolean", default: false } } } },
-    { id: "nvidia/cosmos-3-super/image-to-video", name: "Cosmos 3 Super I2V", provider: "NVIDIA", price: 0.05,
+      params: { resolution: null, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: true, seed: false, maxImages: 2, lastImageParam: "last_image", optional: { cfgScale: { paramName: "cfg_scale", type: "number", default: 0.5, min: 0, max: 1 }, sound: { paramName: "sound", type: "boolean", default: false } } } },
+    { id: "nvidia/cosmos-3-super/image-to-video", name: "Cosmos 3 Super I2V", provider: "NVIDIA", price: 0.35,
       params: { resolution: { paramName: "size", options: AR_STANDARD.options, default: "16:9" }, duration: { options: DUR_COSMOS.options, default: 7 }, negativePrompt: true, seed: false,
         optional: { guidanceScale: { paramName: "guidance_scale", type: "number", default: 6, min: 0, max: 20 }, numInferenceSteps: { paramName: "num_inference_steps", type: "number", default: 28, min: 1, max: 50 } } } },
-    { id: "alibaba/wan-2.7/reference-to-video", name: "WAN 2.7 Reference", provider: "Alibaba", price: 0.50,
-      params: { resolution: RES_VIDEO_720_1080, duration: { options: [5, 10, 15], default: 5 }, negativePrompt: true, seed: true, referenceVideos: "videos", optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
+    { id: "alibaba/wan-2.7/reference-to-video", name: "WAN 2.7 Reference", provider: "Alibaba", price: 1,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "1:1", value: "1:1" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }], default: "16:9" }, duration: { options: [2, 3, 4, 5, 6, 7, 8, 9, 10], default: 5 }, negativePrompt: true, seed: true, referenceVideos: "videos", optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
+
+    // ─── 2026-10-20 additions (WaveSpeed refresh, params + prices verified against public schemas) ───
+    { id: "alibaba/happyhorse-1.1/reference-to-video", name: "HappyHorse 1.1 Reference", provider: "Alibaba", price: 0.7,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "1:1", value: "1:1" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }], default: "16:9" }, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, seed: true, imageParam: "images", maxImages: 9 } },
+    { id: "alibaba/wan-2.7/image-to-video-pro", name: "WAN 2.7 I2V Pro", provider: "Alibaba", price: 0.7,
+      params: { resolution: { paramName: "resolution", options: [{ label: "1080p", value: "1080p" }, { label: "2K", value: "2k" }, { label: "4K", value: "4k" }], default: "1080p" }, duration: { options: [5, 10, 15], default: 5 }, negativePrompt: true, seed: true, optional: { shotType: { paramName: "shot_type", type: "enum", values: ["single", "multi"], default: "single" }, enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
+    { id: "pixverse/pixverse-c1/image-to-video", name: "PixVerse C1 I2V", provider: "PixVerse", price: 0.25,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "540p", value: "540p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false } } } },
+    { id: "pixverse/pixverse-c1/reference-to-video", name: "PixVerse C1 Reference", provider: "PixVerse", price: 0.25,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "540p", value: "540p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "4:3", value: "4:3" }, { label: "1:1", value: "1:1" }, { label: "3:4", value: "3:4" }, { label: "9:16", value: "9:16" }, { label: "2:3", value: "2:3" }, { label: "3:2", value: "3:2" }, { label: "21:9", value: "21:9" }], default: "16:9" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: true, imageParam: "images", maxImages: 7, optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false } } } },
+    { id: "pixverse/pixverse-c1/transition", name: "PixVerse C1 Transition", provider: "PixVerse", price: 1,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "540p", value: "540p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "4:3", value: "4:3" }, { label: "1:1", value: "1:1" }, { label: "3:4", value: "3:4" }, { label: "9:16", value: "9:16" }, { label: "2:3", value: "2:3" }, { label: "3:2", value: "3:2" }, { label: "21:9", value: "21:9" }], default: "16:9" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image", optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false } } } },
+    { id: "pruna-ai/p-video-2-pro/image-to-video", name: "P-Video 2 Pro I2V", provider: "Pruna", price: 0.175,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "768p", value: "768p" }], default: "768p" }, aspectRatio: null, duration: { options: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, seed: true, lastImageParam: "last_image", optional: { mode: { paramName: "mode", type: "enum", values: ["speed", "quality", "cost"], default: "speed" }, promptUpsampler: { paramName: "prompt_upsampler", type: "enum", values: ["off", "turbo", "max"], default: "turbo" } } } },
+    { id: "pruna-ai/p-video-2-pro/reference-to-video", name: "P-Video 2 Pro Reference", provider: "Pruna", price: 0.175,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "768p", value: "768p" }], default: "768p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }, { label: "1:1", value: "1:1" }], default: "16:9" }, duration: { options: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, seed: true, imageParam: "images", maxImages: 9, sourceOptional: true, lastImageParam: "last_image", optional: { mode: { paramName: "mode", type: "enum", values: ["speed", "cost"], default: "speed" }, promptUpsampler: { paramName: "prompt_upsampler", type: "enum", values: ["off", "turbo", "max"], default: "off" } } } },
+    { id: "pruna-ai/p-video-2/image-to-video", name: "P-Video 2 I2V", provider: "Pruna", price: 0.125,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: null, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], default: 5 }, seed: true, optional: { draft: { paramName: "draft", type: "boolean", default: false }, promptUpsampling: { paramName: "prompt_upsampling", type: "boolean", default: true }, saveAudio: { paramName: "save_audio", type: "boolean", default: true } } } },
+    { id: "wavespeed-ai/open-video/image-to-video", name: "Open Video I2V", provider: "WaveSpeed", price: 0.1,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "480p" }, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], default: 5 }, negativePrompt: false, seed: true, optional: { preset: { paramName: "preset", type: "enum", values: ["tuned", "original"], default: "tuned" } } } },
+    { id: "x-ai/grok-imagine-video-v1.5/image-to-video", name: "Grok Imagine Video 1.5 I2V", provider: "xAI", price: 0.85,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 6 } } },
+    { id: "x-ai/grok-imagine-video-v1.5/reference-to-video", name: "Grok Imagine Video 1.5 Reference", provider: "xAI", price: 0.85,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "1:1", value: "1:1" }, { label: "9:16", value: "9:16" }, { label: "3:2", value: "3:2" }, { label: "2:3", value: "2:3" }], default: "16:9" }, duration: { options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 6 }, imageParam: "reference_images", maxImages: 7 } },
+    { id: "bytedance/seedance-2.0-mini/image-to-video", name: "Seedance 2.0 Mini I2V", provider: "ByteDance", price: 0.6,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "1:1", value: "1:1" }, { label: "21:9", value: "21:9" }], default: "16:9" }, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image", optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-2.0-mini/image-to-video-turbo", name: "Seedance 2.0 Mini I2V Turbo", provider: "ByteDance", price: 0.4,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "1:1", value: "1:1" }, { label: "21:9", value: "21:9" }], default: "16:9" }, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, maxImages: 2, lastImageParam: "last_image", optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "google/gemini-omni-1.1-flash/image-to-video", name: "Gemini Omni 1.1 Flash I2V", provider: "Google", price: 0.8,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }], default: "16:9" }, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10], default: 8 }, negativePrompt: false, seed: false, lastImageParam: "last_image" } },
+    { id: "google/gemini-omni-1.1-flash/reference-to-video", name: "Gemini Omni 1.1 Flash Reference", provider: "Google", price: 0.8,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }], default: "16:9" }, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10], default: 8 }, negativePrompt: false, seed: false, imageParam: "images", maxImages: 10, sourceOptional: true } },
+    { id: "heygen/video-1.0/image-to-video", name: "HeyGen Video 1.0 I2V", provider: "HeyGen", price: 0.18,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "768p", value: "768p" }, { label: "1080p", value: "1080p" }, { label: "2K", value: "2k" }], default: "768p" }, duration: { options: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: true, optional: { promptEnhancement: { paramName: "prompt_enhancement", type: "enum", values: ["disabled", "turbo", "quality"], default: "disabled" } } } },
   ],
 
   v2v: [
@@ -1075,9 +1166,35 @@ export const MODELS = {
       params: { resolution: RES_VIDEO_540_720_1080, aspectRatio: AR_LUMA_REFRAME, negativePrompt: false, seed: false } },
 
     // PixVerse V6 video extension
-    { id: "pixverse/pixverse-v6/extend", name: "PixVerse V6 Extend", provider: "PixVerse", price: 0.025,
+    { id: "pixverse/pixverse-v6/extend", name: "PixVerse V6 Extend", provider: "PixVerse", price: 0.225,
       params: { resolution: RES_VIDEO_360_540_720_1080, duration: { options: DUR_1_15, default: 5 }, negativePrompt: true, seed: true,
         optional: { generateAudio: { paramName: "generate_audio_switch", type: "boolean", default: false } } } },
+
+    // ─── 2026-10-20 additions (WaveSpeed refresh, params + prices verified against public schemas) ───
+    { id: "alibaba/happyhorse-1.0/video-edit", name: "HappyHorse 1.0 Video Edit", provider: "Alibaba", price: 1.4,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, seed: true } },
+    { id: "alibaba/happyhorse-1.1/video-extend", name: "HappyHorse 1.1 Video Extend", provider: "Alibaba", price: 0.7,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, duration: { options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, seed: true } },
+    { id: "bytedance/seedance-2.0-fast/video-edit", name: "Seedance 2.0 Fast Video Edit", provider: "ByteDance", price: 0.65,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "1:1", value: "1:1" }, { label: "21:9", value: "21:9" }], default: "16:9" }, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-2.0-fast/video-edit-turbo", name: "Seedance 2.0 Fast Video Edit Turbo", provider: "ByteDance", price: 0.85,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "4:3", value: "4:3" }, { label: "3:4", value: "3:4" }, { label: "1:1", value: "1:1" }, { label: "21:9", value: "21:9" }], default: "16:9" }, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-2.0-fast/video-extend", name: "Seedance 2.0 Fast Video Extend", provider: "ByteDance", price: 1,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-2.0-mini/video-edit", name: "Seedance 2.0 Mini Video Edit", provider: "ByteDance", price: 0.75,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-2.0-mini/video-edit-turbo", name: "Seedance 2.0 Mini Video Edit Turbo", provider: "ByteDance", price: 0.95,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-2.0-mini/video-extend", name: "Seedance 2.0 Mini Video Extend", provider: "ByteDance", price: 0.6,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-2.0/video-edit", name: "Seedance 2.0 Video Edit", provider: "ByteDance", price: 0.675,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-2.0/video-edit-turbo", name: "Seedance 2.0 Video Edit Turbo", provider: "ByteDance", price: 0.855,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "bytedance/seedance-2.0/video-extend", name: "Seedance 2.0 Video Extend", provider: "ByteDance", price: 1.08,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 }, negativePrompt: false, seed: false, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true }, enableWebSearch: { paramName: "enable_web_search", type: "boolean", default: false } } } },
+    { id: "google/gemini-omni-1.1-flash/video-edit", name: "Gemini Omni 1.1 Flash Video Edit", provider: "Google", price: 0.12,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "720p" }, duration: null, negativePrompt: false, seed: false } },
   ],
 
   avatar: [
@@ -1085,13 +1202,25 @@ export const MODELS = {
       params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }], default: "720p" }, negativePrompt: false, seed: false, noPrompt: true } },
     { id: "wavespeed-ai/infinitetalk", name: "InfiniteTalk", provider: "WaveSpeed", price: 0.15, requiresAudio: true,
       params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }], default: "480p" }, negativePrompt: false, seed: true, audioParam: "audio" } },
-    { id: "kwaivgi/kling-v2-ai-avatar-pro", name: "Kling Avatar Pro", provider: "Kwaivgi", price: 0.34, hot: true, requiresAudio: true,
+    { id: "kwaivgi/kling-v2-ai-avatar-pro", name: "Kling Avatar Pro", provider: "Kwaivgi", price: 0.56, hot: true, requiresAudio: true,
       params: { resolution: null, negativePrompt: false, seed: false, audioParam: "audio" } },
-    { id: "wavespeed-ai/wan-2.2/animate", name: "WAN 2.2 Animate", provider: "WaveSpeed", price: 0.20, requiresVideo: true,
-      params: { resolution: null, negativePrompt: false, seed: true, videoParam: "video" } },
-    { id: "wavespeed-ai/image-face-swap-pro", name: "Face Swap Pro", provider: "WaveSpeed", price: 0.05,
+    { id: "wavespeed-ai/wan-2.2/animate", name: "WAN 2.2 Animate", provider: "WaveSpeed", price: 0.2, requiresVideo: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }], default: "480p" }, negativePrompt: false, seed: true, videoParam: "video", optional: { mode: { paramName: "mode", type: "enum", values: ["animate", "replace"], default: "animate" } } } },
+    { id: "wavespeed-ai/image-face-swap-pro", name: "Face Swap Pro", provider: "WaveSpeed", price: 0.025,
       params: { resolution: null, negativePrompt: false, seed: false, noPrompt: true,
         maxImages: 2, auxImageParam: "face_image", requiresSecondImage: true } },
+
+    // ─── 2026-10-20 additions (WaveSpeed refresh, params + prices verified against public schemas) ───
+    { id: "pruna-ai/p-video/animate", name: "P-Video Animate", provider: "Pruna", price: 0.03, requiresVideo: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, aspectRatio: null, duration: null, seed: true, optional: { fps: { paramName: "fps", type: "enum", values: ["original", "24", "48"], default: "original" }, saveAudio: { paramName: "save_audio", type: "boolean", default: true } } } },
+    { id: "wavespeed-ai/wan-2.2/animate-2", name: "WAN 2.2 Animate 2", provider: "WaveSpeed", price: 0.2, requiresVideo: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }], default: "480p" }, negativePrompt: false, seed: true, videoParam: "video" } },
+    { id: "bytedance/seedance-2.5/motion-control", name: "Seedance 2.5 Motion Control", provider: "ByteDance", price: 1.1, requiresVideo: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "480p", value: "480p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "720p" }, negativePrompt: false, seed: false, imageParam: "reference_images", maxImages: 30, sourceOptional: true, optional: { generateAudio: { paramName: "generate_audio", type: "boolean", default: true } } } },
+    { id: "heygen/avatar-iv", name: "HeyGen Avatar IV", provider: "HeyGen", price: 0.1, requiresAudio: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "360p", value: "360p" }, { label: "480p", value: "480p" }, { label: "540p", value: "540p" }, { label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }], default: "1080p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "1:1", value: "1:1" }, { label: "5:4", value: "5:4" }, { label: "4:5", value: "4:5" }], default: "16:9" }, negativePrompt: false, seed: false, imageParam: "image", audioParam: "audio", optional: { expressiveness: { paramName: "expressiveness", type: "enum", values: ["low", "medium", "high"], default: "low" } } } },
+    { id: "heygen/avatar-v", name: "HeyGen Avatar V", provider: "HeyGen", price: 0.15, requiresAudio: true,
+      params: { resolution: { paramName: "resolution", options: [{ label: "720p", value: "720p" }, { label: "1080p", value: "1080p" }, { label: "4K", value: "4k" }], default: "1080p" }, aspectRatio: { paramName: "aspect_ratio", options: [{ label: "16:9", value: "16:9" }, { label: "9:16", value: "9:16" }, { label: "1:1", value: "1:1" }, { label: "5:4", value: "5:4" }, { label: "4:5", value: "4:5" }], default: "16:9" }, negativePrompt: false, seed: false, noPrompt: true, imageParam: "avatar", audioParam: "audio" } },
   ],
 };
 
