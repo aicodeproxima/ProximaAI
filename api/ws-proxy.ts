@@ -24,6 +24,10 @@
 //           SESSION_SIGNING_KEY_PREVIOUS for a 12h rotation grace window.
 //   M5    — req.signal is piped to upstream GETs only. Cancelling a submit mid-flight never reliably cancelled
 //           billing; it only lost the prediction id (changed 2026-10-20).
+//   Webhook — model submits carry standard_webhook=<prod>/api/ws-webhook (added here, never by the client) once
+//           WAVESPEED_WEBHOOK_SECRET is set; src/lib/wsWebhook.js forwardParams decides (2026-10-20).
+
+import { forwardParams } from '../src/lib/wsWebhook.js';
 
 export const config = { runtime: 'edge' };
 
@@ -222,11 +226,6 @@ export default async function handler(req: Request, ctx?: { waitUntil?: (p: Prom
   const reqUrl = new URL(req.url);
   let path = reqUrl.searchParams.get('p') || reqUrl.pathname.replace(/^\/api\/(wavespeed-v2|ws-proxy)\/?/, '');
   path = path.replace(/^\/+/, '');
-  // Preserve any genuine upstream query params (everything except our internal 'p').
-  const passthrough = new URLSearchParams(reqUrl.search);
-  passthrough.delete('p');
-  const qs = passthrough.toString();
-  const upstreamUrl = `${WAVESPEED_BASE}/${path}${qs ? `?${qs}` : ''}`;
 
   // 5. Forward headers: copy Content-Type, REPLACE Authorization with server key,
   //    drop hop-by-hop and identifying headers.
@@ -246,6 +245,15 @@ export default async function handler(req: Request, ctx?: { waitUntil?: (p: Prom
     }
     body = buf.byteLength > 0 ? buf : undefined;
   }
+
+  // 6b. Query string: the client's own parameters (minus our internal 'p' and any webhook it tried to set). Model
+  //     submits also get the server's result webhook (api/ws-webhook.ts) once its signing secret is configured, so
+  //     the result is saved even if every device closes; the client never chooses where results are sent.
+  const qs = forwardParams(reqUrl.searchParams, {
+    method: req.method, path, body: body ? new TextDecoder().decode(body) : '',
+    webhookOn: !!process.env.WAVESPEED_WEBHOOK_SECRET,
+  }).toString();
+  const upstreamUrl = `${WAVESPEED_BASE}/${path}${qs ? `?${qs}` : ''}`;
 
   // 7. Forward to WaveSpeed. A GET (poll, balance) stops when the browser goes away: the next poll asks again.
   //    A POST is never cut off: WaveSpeed may already have accepted and billed a submit, and cancelling the upstream
