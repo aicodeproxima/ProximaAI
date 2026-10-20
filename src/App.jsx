@@ -674,7 +674,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
             <input id="acct-reset-confirm-password" type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setError(""); }} style={input} autoComplete="new-password" />
             {error && <div role="alert" style={{ color: "#ef4444", fontSize: 12, marginTop: 10 }}>✗ {error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-              <button type="button" style={btn()} onClick={() => { setResetCode(""); setNewPassword(""); setConfirmPassword(""); setStep("menu"); }}>Cancel</button>
+              <button type="button" style={btn()} onClick={() => { setResetCode(""); setShowResetCode(false); setNewPassword(""); setConfirmPassword(""); setError(""); setStep("menu"); }}>Cancel</button>
               <button type="submit" disabled={busy} style={{ ...btn("primary"), flex: 1 }}>{busy ? "Resetting..." : "Reset Password"}</button>
             </div>
           </form>
