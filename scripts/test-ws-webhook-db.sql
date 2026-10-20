@@ -145,6 +145,74 @@ begin
     and ev.applied_at is not null and ev.outputs is null
     then 'ok own-first; ' else format('FAIL own-first %s %s; ', r, t.outputs) end;
 
+  -- A result replaces a failure (as everywhere else: tasks_keep_finished, planTaskSync): a cloud row a device failed
+  -- with "Poll error" (or a cancel) takes the completed delivery; a failed delivery never replaces anything finished.
+  insert into tasks (id, device_id, status, start_time, task_id, outputs, error) values
+    ('wh-pe',  'webhook-test', 'failed', 1000, 'wh-pred-pe',  '[]', 'Poll error'),
+    ('wh-pe2', 'webhook-test', 'failed', 1000, 'wh-pred-pe2', '[]', 'Poll error');
+  set local role service_role;
+  r := ws_webhook_apply('m9', 'wh-pred-pe', 'completed', '["https://cdn.example/pe.png"]', null, 7000);
+  reset role;
+  select * into t from tasks where id = 'wh-pe';
+  out := out || case when r = 'applied' and t.status = 'completed' and t.outputs = '["https://cdn.example/pe.png"]' and t.error is null
+    then 'ok completed-over-failed; ' else format('FAIL completed-over-failed %s %s; ', r, t.status) end;
+  set local role service_role;
+  r := ws_webhook_apply('m10', 'wh-pred-pe2', 'failed', null, 'Generation failed', 7000);
+  reset role;
+  select * into t from tasks where id = 'wh-pe2';
+  out := out || case when r = 'finished' and t.status = 'failed' and t.error = 'Poll error'
+    then 'ok failed-keeps-failed; ' else format('FAIL failed-keeps-failed %s %s; ', r, t.error) end;
+
+  -- Queued result, then the device's failed (cancelled) row lands: it takes the result. Queued failure, then the
+  -- device's completed row lands: it stays completed, and the delivery is settled.
+  set local role service_role;
+  r := ws_webhook_apply('m11', 'wh-pred-cx', 'completed', '["https://cdn.example/cx.png"]', null, 6000);
+  perform ws_webhook_apply('m12', 'wh-pred-ok', 'failed', null, 'Generation failed', 6000);
+  set local role anon;
+  insert into tasks (id, device_id, status, start_time, task_id, outputs, error, end_time, wall_clock_ms, inference_ms, nsfw)
+    values ('wh-cx', 'webhook-test', 'failed', 1000, 'wh-pred-cx', '[]', 'Cancelled', 5000, 4000, 4000, null),
+           ('wh-ok', 'webhook-test', 'completed', 1000, 'wh-pred-ok', '["https://cdn.example/ok.png"]', null, 5000, 4000, 4000, null)
+    on conflict (id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
+      start_time = excluded.start_time, end_time = excluded.end_time, wall_clock_ms = excluded.wall_clock_ms,
+      inference_ms = excluded.inference_ms, nsfw = excluded.nsfw;
+  reset role;
+  out := out || case when (select status = 'completed' and outputs = '["https://cdn.example/cx.png"]' and error is null from tasks where id = 'wh-cx')
+    and (select applied_at is not null from ws_webhook_events where webhook_id = 'm11')
+    and (select status = 'completed' and outputs = '["https://cdn.example/ok.png"]' from tasks where id = 'wh-ok')
+    and (select applied_at is not null from ws_webhook_events where webhook_id = 'm12')
+    then 'ok queued-vs-finished; ' else 'FAIL queued-vs-finished; ' end;
+
+  -- The sweep heals a delivery that missed its row (both committed at the same instant, neither saw the other):
+  -- simulated by a waiting delivery next to a running row, and one next to a row the device already finished.
+  insert into tasks (id, device_id, status, start_time, task_id, outputs) values
+    ('wh-sw',  'webhook-test', 'processing', 1000, 'wh-pred-sw',  '[]'),
+    ('wh-sw2', 'webhook-test', 'completed',  1000, 'wh-pred-sw2', '["https://cdn.example/own.png"]');
+  insert into ws_webhook_events (webhook_id, task_id, status, outputs, error, end_time) values
+    ('m13', 'wh-pred-sw',  'completed', '["https://cdn.example/sw.png"]', null, 3000),
+    ('m14', 'wh-pred-sw2', 'completed', '["https://cdn.example/sw2.png"]', null, 3000);
+  begin
+    perform ws_webhook_sweep();
+    out := out || case when (select status = 'completed' and outputs = '["https://cdn.example/sw.png"]' and end_time = 3000 from tasks where id = 'wh-sw')
+      and (select outputs = '["https://cdn.example/own.png"]' from tasks where id = 'wh-sw2')
+      and (select count(*) from ws_webhook_events where webhook_id in ('m13', 'm14') and applied_at is not null) = 2
+      then 'ok sweep; ' else 'FAIL sweep; ' end;
+  exception when undefined_function then out := out || 'FAIL sweep (missing); '; end;
+  set local role anon;
+  begin perform ws_webhook_sweep(); out := out || 'FAIL anon-sweep; ';
+  exception when insufficient_privilege or undefined_function then out := out || 'ok anon-sweep; '; end;
+  reset role;
+  out := out || case when (select count(*) from cron.job where jobname = 'ws-webhook-sweep' and active) = 1
+    then 'ok sweep-scheduled; ' else 'FAIL sweep-scheduled; ' end;
+
+  -- No advisory locks: a batch upload must not fill the shared lock table or deadlock against the webhook.
+  set local role anon;
+  insert into tasks (id, device_id, status, start_time, task_id, outputs)
+    select 'wh-batch-' || g, 'webhook-test', case when g % 2 = 0 then 'completed' else 'processing' end, 1000, 'wh-pred-batch-' || g, '[]'
+    from generate_series(1, 50) g;
+  reset role;
+  out := out || case when (select count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid()) = 0
+    then 'ok no-advisory-locks; ' else format('FAIL no-advisory-locks %s; ', (select count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid())) end;
+
   -- Only completed / failed are accepted.
   set local role service_role;
   begin perform ws_webhook_apply('m6', 'wh-pred-x', 'processing', null, null, 1); out := out || 'FAIL bad-status; ';
