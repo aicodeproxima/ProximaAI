@@ -47,6 +47,9 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   card = log = charge: GPT Image 2.0 low/2K $0.019, Nano Banana 2.1 2K $0.054, FLUX 3 Video Edit on a 5.06 s clip
   $0.18 (WaveSpeed bills ceil(seconds); charged at submit). `.cost-amount` starts with "~" and its `title` says so
   while an input's length is unmeasured; it then becomes exact.
+- Picker `.model-price` = one generation of that model at the current settings (batch of one; same "~" rule); its
+  `title` gives the default-settings price. Selecting one model at Batch 1 makes the estimate equal its label
+  (swept on 82 models 2026-10-20, bundle 1hxo0fjF). Rows fit a 10-character label at 384 px.
 - Cheap input-length test: Video Edit → FLUX 3 Video Edit ($0.03/s, ceil). Test clip: MDN CC0
   `https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4` (5.06 s, CORS `*`): fetch it into a
   `File` and inject it into `input[type=file][accept='video/*']` with `DataTransfer` + `change`; the app uploads it
