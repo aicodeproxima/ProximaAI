@@ -22,7 +22,8 @@
 //           Vite never bundles to the client. CI bundle-audit gates this too.
 //   F.1.5 — token verified against SESSION_SIGNING_KEY, falling back to
 //           SESSION_SIGNING_KEY_PREVIOUS for a 12h rotation grace window.
-//   M5    — req.signal piped to upstream so client disconnect cancels billing.
+//   M5    — req.signal is piped to upstream GETs only. Cancelling a submit mid-flight never reliably cancelled
+//           billing; it only lost the prediction id (changed 2026-10-20).
 
 export const config = { runtime: 'edge' };
 
@@ -169,7 +170,7 @@ async function checkRateLimit(userId: string): Promise<{ ok: boolean; configured
 }
 
 // ─── Handler ────────────────────────────────────────────────────────────────
-export default async function handler(req: Request): Promise<Response> {
+export default async function handler(req: Request, ctx?: { waitUntil?: (p: Promise<unknown>) => void }): Promise<Response> {
   const origin = req.headers.get('origin');
   const cors = corsHeaders(origin);
 
@@ -246,15 +247,20 @@ export default async function handler(req: Request): Promise<Response> {
     body = buf.byteLength > 0 ? buf : undefined;
   }
 
-  // 7. Forward to WaveSpeed; pipe abort signal for client-disconnect cancel (M5).
+  // 7. Forward to WaveSpeed. A GET (poll, balance) stops when the browser goes away: the next poll asks again.
+  //    A POST is never cut off: WaveSpeed may already have accepted and billed a submit, and cancelling the upstream
+  //    request then only loses its prediction id (the app finds such submits in WaveSpeed's history). Vercel does
+  //    not end a function on disconnect unless supportsCancellation is set; waitUntil covers the rest of the submit.
   let upstream: Response;
   try {
-    upstream = await fetch(upstreamUrl, {
+    const sent = fetch(upstreamUrl, {
       method: req.method,
       headers: fwdHeaders,
       body,
-      signal: req.signal,
+      signal: req.method === 'GET' ? req.signal : undefined,
     });
+    if (req.method === 'POST') ctx?.waitUntil?.(sent.catch(() => undefined));
+    upstream = await sent;
   } catch (e) {
     if ((e as Error)?.name === 'AbortError') {
       return new Response(null, { status: 499, headers: cors }); // client closed request
