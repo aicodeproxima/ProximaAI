@@ -4,10 +4,11 @@ import { buildPayload } from "./lib/payloadBuilder.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, verifyCredentials, saveCredentials, getStoredCredentials, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
+import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -1455,14 +1456,14 @@ export default function ProximaApp() {
           const logDelRetries = failed.filter(f => f.kind === "history-delete").map(f => f.id).filter(Boolean);
           const logDelSet = new Set(logDelRetries);
           for (const id of logDelRetries) deletingLogIds.current.add(id);
-          const taskRetries = failed.filter(f => f.kind === "task" && !delSet.has(f.id)).map(f => f.data).filter(Boolean);
+          const taskRetries = failed.filter(f => f.kind === "task" && !delSet.has(f.id) && !deletingIds.current.has(f.id)).map(f => f.data).filter(Boolean);
           if (taskRetries.length > 0) {
             try {
               await syncTasksBatch(taskRetries);
               for (const t of taskRetries) removeFailedSync("task", t.id);
             } catch {}
           }
-          const historyRetries = failed.filter(f => f.kind === "history" && !logDelSet.has(f.id)).map(f => f.data).filter(Boolean);
+          const historyRetries = failed.filter(f => f.kind === "history" && !logDelSet.has(f.id) && !deletingLogIds.current.has(f.id)).map(f => f.data).filter(Boolean);
           for (const entry of historyRetries) {
             try { await syncHistoryEntry(entry); removeFailedSync("history", entry.id); } catch {}
           }
@@ -1498,9 +1499,110 @@ export default function ProximaApp() {
       }
       // Mark initial load complete so future apiKey changes debounce-sync to cloud
       if (!cancelled) initialLoadDone.current = true;
+      // First cross-device reconcile: drops rows deleted on other devices, adds theirs.
+      if (!cancelled) reconcileWithCloud();
     })();
     return () => { cancelled = true; };
   }, [isAuthed]);
+
+  // ─── Cross-device sync ───
+  // Brings this device in line with the cloud (rules in src/lib/syncReconcile.js): adds rows other
+  // devices created, refreshes archived outputs, removes rows the server recorded as deleted, and
+  // uploads local rows the cloud never received. Runs after bootstrap, on focus / visibility /
+  // reconnect, every 20s while visible, and on Supabase realtime changes.
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const logsRef = useRef(logs);
+  logsRef.current = logs;
+  const reconcileRunningRef = useRef(false);
+  const reconcileWithCloud = useCallback(async () => {
+    if (!isSupabaseConfigured() || !initialLoadDone.current || bootstrapInProgress.current || reconcileRunningRef.current) return;
+    reconcileRunningRef.current = true;
+    try {
+      const since = Date.now();
+      const [remote, ids] = await Promise.all([pullAllRemoteData(), pullCloudIds()]);
+      if (!remote) return;
+      const failed = getFailedSyncs();
+      const pendingTasks = new Set([...failed.filter(f => f.kind === "task").map(f => f.id), ...taskSyncQueueRef.current.map(t => t.id)]);
+      const pendingLogs = new Set(failed.filter(f => f.kind === "history").map(f => f.id));
+      const taskPlan = planTaskSync({ local: tasksRef.current, cloud: remote.tasks || [], cloudIds: ids?.tasks ?? null,
+        tombstones: ids?.taskTombstones ?? null, pending: pendingTasks, deleting: deletingIds.current, since });
+      const logPlan = planLogSync({ local: logsRef.current, cloud: remote.history || [], cloudIds: ids?.history ?? null,
+        tombstones: ids?.historyTombstones ?? null, pending: pendingLogs, deleting: deletingLogIds.current, since });
+      const rmTasks = new Set(taskPlan.remove), rmLogs = new Set(logPlan.remove);
+      const updates = new Map(taskPlan.update.map(u => [u.id, u.outputs]));
+
+      // Tasks: the cloud's additions + archive updates, and the server's recorded deletions.
+      if (taskPlan.add.length || updates.size || rmTasks.size) {
+        for (const t of taskPlan.add) savedTaskIds.current.add(t.id); // pulled rows are already in the cloud
+        setTasks(prev => {
+          const have = new Set(prev.map(t => t.id));
+          const added = taskPlan.add.filter(t => !have.has(t.id) && !deletingIds.current.has(t.id));
+          const kept = prev.filter(t => !rmTasks.has(t.id)).map(t => updates.has(t.id) ? { ...t, outputs: updates.get(t.id) } : t);
+          return [...added, ...kept].sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+        });
+        for (const t of taskPlan.add) saveTask(t);
+        for (const t of tasksRef.current) if (updates.has(t.id)) saveTask({ ...t, outputs: updates.get(t.id) });
+        if (rmTasks.size) {
+          // Deleted on another device: the delete wins over any stale local upload of the same row.
+          for (const id of rmTasks) { savedTaskIds.current.delete(id); removeFailedSync("task", id); }
+          await deleteTasks([...rmTasks]);
+        }
+      }
+      // Local-only tasks the cloud never received (failed or evicted uploads, finished during load,
+      // pre-sync rows): persist + queue them like a fresh result, then upload. Capped per pass so the
+      // 200-entry failed-sync queue never evicts other pending writes.
+      const taskUploads = taskPlan.upload.slice(0, 100);
+      if (taskUploads.length) {
+        for (const t of taskUploads) { savedTaskIds.current.add(t.id); saveTask(t); addFailedSync({ kind: "task", id: t.id, data: t }); }
+        try { await syncTasksBatch(taskUploads); for (const t of taskUploads) removeFailedSync("task", t.id); } catch {}
+      }
+
+      // History: same steps.
+      if (logPlan.add.length || rmLogs.size) {
+        for (const l of logPlan.add) savedLogIds.current.add(l.id);
+        setLogs(prev => {
+          const have = new Set(prev.map(l => l.id));
+          const added = logPlan.add.filter(l => !have.has(l.id) && !deletingLogIds.current.has(l.id));
+          return [...added, ...prev.filter(l => !rmLogs.has(l.id))].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        });
+        for (const l of logPlan.add) addHistoryEntry(l);
+        if (rmLogs.size) {
+          for (const id of rmLogs) { savedLogIds.current.delete(id); removeFailedSync("history", id); }
+          await deleteHistoryEntries([...rmLogs]);
+        }
+      }
+      const logUploads = logPlan.upload.slice(0, 100);
+      if (logUploads.length) {
+        for (const l of logUploads) { savedLogIds.current.add(l.id); addHistoryEntry(l); addFailedSync({ kind: "history", id: l.id, data: l }); }
+        try { await syncHistoryBatch(logUploads); for (const l of logUploads) removeFailedSync("history", l.id); } catch {}
+      }
+      setFailedSyncCount(getFailedSyncs().length);
+    } catch (err) {
+      console.warn("[sync] reconcile failed", err);
+    } finally {
+      reconcileRunningRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthed) return;
+    let cancelled = false, timer = null, unsubscribe = () => {};
+    const run = () => { if (document.visibilityState === "visible") reconcileWithCloud(); };
+    const soon = () => { clearTimeout(timer); timer = setTimeout(run, 500); }; // coalesce realtime bursts, focus + visibility
+    const onVisibility = () => { if (document.visibilityState === "visible") soon(); };
+    const interval = setInterval(run, 20000);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", soon);
+    window.addEventListener("online", soon);
+    initSupabase().then(() => { if (!cancelled) unsubscribe = subscribeToCloudChanges(soon); });
+    return () => {
+      cancelled = true; clearInterval(interval); clearTimeout(timer); unsubscribe();
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", soon);
+      window.removeEventListener("online", soon);
+    };
+  }, [isAuthed, reconcileWithCloud]);
 
   // Save API key — debounced to avoid keystroke-level syncs
   useEffect(() => {
@@ -1545,8 +1647,10 @@ export default function ProximaApp() {
 
   // Persist completed/failed tasks to IndexedDB + batch sync to Supabase
   useEffect(() => {
-    // Skip scheduling new writes during cloud bootstrap — prevents races with the pull
-    if (bootstrapInProgress.current) return;
+    // During cloud bootstrap, persist + queue but don't upload yet (avoids racing the pull); the
+    // bootstrap replay uploads the queued rows. Skipping entirely used to lose results that finished
+    // mid-bootstrap (never saved, never queued).
+    const deferUpload = bootstrapInProgress.current;
     const toSave = tasks.filter(t =>
       (t.status === "completed" || t.status === "failed") &&
       !savedTaskIds.current.has(t.id) &&
@@ -1556,12 +1660,13 @@ export default function ProximaApp() {
     for (const t of toSave) {
       savedTaskIds.current.add(t.id);
       saveTask(t); // Local IndexedDB always succeeds first — cloud sync is separate
-      taskSyncQueueRef.current.push(t);
+      if (!deferUpload) taskSyncQueueRef.current.push(t);
       // Also record in failed-queue preemptively so if the tab closes mid-debounce,
       // the next session will replay it. Removed on successful cloud sync below.
       addFailedSync({ kind: "task", id: t.id, data: t });
     }
     setFailedSyncCount(getFailedSyncs().length);
+    if (deferUpload) return;
     // Debounced batch upload to Supabase (flushes 300ms after last task)
     if (taskSyncTimerRef.current) clearTimeout(taskSyncTimerRef.current);
     taskSyncTimerRef.current = setTimeout(() => {
@@ -2277,7 +2382,12 @@ export default function ProximaApp() {
         : x));
       const updated = { ...task, outputs: newUrls, archivedOutputs: newUrls, archivedPaths: paths, isArchived: true };
       saveTask(updated);
-      syncTask(updated).catch(() => {});
+      // Queue first: a failed upload is retried, and cross-device sync never reverts these URLs from the cloud.
+      addFailedSync({ kind: "task", id: updated.id, data: updated });
+      syncTask(updated)
+        .then(() => removeFailedSync("task", updated.id))
+        .catch(() => {})
+        .finally(() => setFailedSyncCount(getFailedSyncs().length));
       setAccountToast("☁ Backed up to cloud");
     } else {
       setTasks(prev => prev.map(x => x.id === task.id ? { ...x, archiving: false } : x));

@@ -85,80 +85,67 @@ export function touchSync() {
 
 // ─── Task Sync ───
 
+// Uploads resolve only on a confirmed write and throw otherwise, so callers keep the row in the
+// failed-sync queue. (They used to resolve on error, which dropped the row from the queue and left
+// it on this device only — and cross-device sync would then treat it as deleted elsewhere.)
+function requireClient() {
+  if (supabase) return true;
+  if (!isSupabaseConfigured()) return false; // local-only install: nothing to sync
+  throw new Error("Cloud sync is not initialized");
+}
+
+export function taskToRow(task) {
+  return {
+    id: task.id,
+    device_id: getDeviceId(),
+    batch_id: task.batchId ?? null,
+    model_id: task.modelId ?? null,
+    model_name: task.modelName ?? null,
+    provider: task.provider ?? null,
+    price: task.price ?? 0,
+    status: task.status ?? null,
+    gen_type: task.genType ?? null,
+    prompt: task.prompt ?? null,
+    neg_prompt: task.negPrompt ?? null,
+    resolution: task.resolution ?? null,
+    duration: task.duration ?? null,
+    seed: task.seed ?? null,
+    aspect_ratio: task.aspectRatio ?? null,
+    source_image_url: task.sourceImageUrl ?? null,
+    source_image_urls: task.sourceImageUrls ?? [],
+    num_images: task.numImages ?? 1,
+    outputs: task.outputs ?? [],
+    error: task.error ?? null,
+    start_time: task.startTime ?? null,
+    end_time: task.endTime ?? null,
+    wall_clock_ms: task.wallClockMs ?? 0,
+    inference_ms: task.inferenceMs ?? 0,
+    per_model_resolution: task.perModelResolution ?? null,
+    nsfw: task.nsfw ?? null,
+    task_id: task.taskId ?? null,
+  };
+}
+
 export async function syncTask(task) {
-  if (!supabase || !task?.id) return;
+  if (!task?.id || !requireClient()) return;
   try {
-    const r = await supabase.from("tasks").upsert({
-      id: task.id,
-      device_id: getDeviceId(),
-      batch_id: task.batchId ?? null,
-      model_id: task.modelId ?? null,
-      model_name: task.modelName ?? null,
-      provider: task.provider ?? null,
-      price: task.price ?? 0,
-      status: task.status ?? null,
-      gen_type: task.genType ?? null,
-      prompt: task.prompt ?? null,
-      neg_prompt: task.negPrompt ?? null,
-      resolution: task.resolution ?? null,
-      duration: task.duration ?? null,
-      seed: task.seed ?? null,
-      aspect_ratio: task.aspectRatio ?? null,
-      source_image_url: task.sourceImageUrl ?? null,
-      source_image_urls: task.sourceImageUrls ?? [],
-      num_images: task.numImages ?? 1,
-      outputs: task.outputs ?? [],
-      error: task.error ?? null,
-      start_time: task.startTime ?? null,
-      end_time: task.endTime ?? null,
-      wall_clock_ms: task.wallClockMs ?? 0,
-      inference_ms: task.inferenceMs ?? 0,
-      per_model_resolution: task.perModelResolution ?? null,
-      nsfw: task.nsfw ?? null,
-      task_id: task.taskId ?? null,
-    }, { onConflict: "id" });
-    if (!r.error) touchSync();
-  } catch (err) { warnOnce("syncTask", err); }
+    const r = await supabase.from("tasks").upsert(taskToRow(task), { onConflict: "id" });
+    if (r.error) throw r.error;
+    touchSync();
+  } catch (err) { warnOnce("syncTask", err); throw err; }
 }
 
 // Batch version — single upsert for multiple tasks at once
 export async function syncTasksBatch(tasks) {
-  if (!supabase || !tasks?.length) return;
+  if (!tasks?.length || !requireClient()) return;
   try {
-    const rows = tasks.filter(t => t?.id).map(task => ({
-      id: task.id,
-      device_id: getDeviceId(),
-      batch_id: task.batchId ?? null,
-      model_id: task.modelId ?? null,
-      model_name: task.modelName ?? null,
-      provider: task.provider ?? null,
-      price: task.price ?? 0,
-      status: task.status ?? null,
-      gen_type: task.genType ?? null,
-      prompt: task.prompt ?? null,
-      neg_prompt: task.negPrompt ?? null,
-      resolution: task.resolution ?? null,
-      duration: task.duration ?? null,
-      seed: task.seed ?? null,
-      aspect_ratio: task.aspectRatio ?? null,
-      source_image_url: task.sourceImageUrl ?? null,
-      source_image_urls: task.sourceImageUrls ?? [],
-      num_images: task.numImages ?? 1,
-      outputs: task.outputs ?? [],
-      error: task.error ?? null,
-      start_time: task.startTime ?? null,
-      end_time: task.endTime ?? null,
-      wall_clock_ms: task.wallClockMs ?? 0,
-      inference_ms: task.inferenceMs ?? 0,
-      per_model_resolution: task.perModelResolution ?? null,
-      nsfw: task.nsfw ?? null,
-      task_id: task.taskId ?? null,
-    }));
+    const rows = tasks.filter(t => t?.id).map(taskToRow);
     if (rows.length > 0) {
       const r = await supabase.from("tasks").upsert(rows, { onConflict: "id" });
-      if (!r.error) touchSync();
+      if (r.error) throw r.error;
+      touchSync();
     }
-  } catch (err) { warnOnce("syncTasksBatch", err); }
+  } catch (err) { warnOnce("syncTasksBatch", err); throw err; }
 }
 
 export async function pullTasks(limit = 500) {
@@ -235,29 +222,34 @@ export async function clearTasksRemote() {
 
 // ─── History Sync ───
 
+export function historyToRow(entry) {
+  return {
+    id: entry.id,
+    device_id: getDeviceId(),
+    timestamp: entry.timestamp ?? Date.now(),
+    prompt: entry.prompt ?? null,
+    neg_prompt: entry.negPrompt ?? null,
+    gen_type: entry.genType ?? null,
+    models: entry.models ?? [],
+    resolution: entry.resolution ?? null,
+    duration: entry.duration ?? null,
+    seed: entry.seed ?? null,
+    aspect_ratio: entry.aspectRatio ?? null,
+    source_image_url: entry.sourceImageUrl ?? null,
+    source_image_urls: entry.sourceImageUrls ?? [],
+    num_images: entry.numImages ?? 1,
+    tasks: entry.tasks ?? [],
+    total_cost: entry.totalCost ?? 0,
+  };
+}
+
 export async function syncHistoryEntry(entry) {
-  if (!supabase || !entry?.id) return;
+  if (!entry?.id || !requireClient()) return;
   try {
-    const r = await supabase.from("history").upsert({
-      id: entry.id,
-      device_id: getDeviceId(),
-      timestamp: entry.timestamp ?? Date.now(),
-      prompt: entry.prompt ?? null,
-      neg_prompt: entry.negPrompt ?? null,
-      gen_type: entry.genType ?? null,
-      models: entry.models ?? [],
-      resolution: entry.resolution ?? null,
-      duration: entry.duration ?? null,
-      seed: entry.seed ?? null,
-      aspect_ratio: entry.aspectRatio ?? null,
-      source_image_url: entry.sourceImageUrl ?? null,
-      source_image_urls: entry.sourceImageUrls ?? [],
-      num_images: entry.numImages ?? 1,
-      tasks: entry.tasks ?? [],
-      total_cost: entry.totalCost ?? 0,
-    }, { onConflict: "id" });
-    if (!r.error) touchSync();
-  } catch (err) { warnOnce("syncHistoryEntry", err); }
+    const r = await supabase.from("history").upsert(historyToRow(entry), { onConflict: "id" });
+    if (r.error) throw r.error;
+    touchSync();
+  } catch (err) { warnOnce("syncHistoryEntry", err); throw err; }
 }
 
 export async function pullHistory(limit = 500) {
@@ -393,6 +385,77 @@ export async function pullFavorites() {
       createdAt: row.created_at,
     }));
   } catch (err) { warnOnce("pullFavorites", err); return []; }
+}
+
+// ─── Cross-device sync support ───
+
+// Every id in a table for this scope (optionally narrowed by `kind`), keyset-paged past PostgREST's
+// 1000-row cap (keyset, not offsets, so a concurrent delete can't shift rows out of an unread page).
+// A failed read returns null — never an empty set — so a network blip can't look like "everything
+// was deleted" or "nothing was ever uploaded".
+async function pullAllIds(table, kind) {
+  const ids = new Set();
+  let last = null;
+  for (;;) {
+    let q = supabase.from(table).select("id").eq("device_id", getDeviceId()).order("id").limit(1000);
+    if (kind) q = q.eq("kind", kind);
+    if (last !== null) q = q.gt("id", last);
+    const { data, error } = await q;
+    if (error || !Array.isArray(data)) return null;
+    for (const row of data) ids.add(row.id);
+    if (data.length < 1000) return ids;
+    last = data[data.length - 1].id;
+  }
+}
+
+// The cloud's ids plus the server's record of deleted ids (sync_tombstones, kept by DB triggers).
+// Tombstones are read strictly AFTER the ids: a delete committing between the two reads then shows up
+// as a tombstone (→ remove) instead of looking like a never-uploaded row (→ re-upload = undo the delete).
+export async function pullCloudIds() {
+  if (!supabase) return null;
+  try {
+    const [tasks, history] = await Promise.all([pullAllIds("tasks"), pullAllIds("history")]);
+    const [taskTombstones, historyTombstones] = await Promise.all([
+      pullAllIds("sync_tombstones", "task"), pullAllIds("sync_tombstones", "history"),
+    ]);
+    return { tasks, history, taskTombstones, historyTombstones };
+  } catch (err) { warnOnce("pullCloudIds", err); return null; }
+}
+
+// Batch upload of history entries (sync uploads local-only rows the cloud never received).
+export async function syncHistoryBatch(entries) {
+  if (!entries?.length || !requireClient()) return;
+  try {
+    const rows = entries.filter(e => e?.id).map(historyToRow);
+    if (rows.length > 0) {
+      const r = await supabase.from("history").upsert(rows, { onConflict: "id" });
+      if (r.error) throw r.error;
+      touchSync();
+    }
+  } catch (err) { warnOnce("syncHistoryBatch", err); throw err; }
+}
+
+// Live updates: calls onChange for any insert/update/delete on this scope's tasks or history.
+// Realtime can't filter DELETE events server-side, so they arrive unfiltered; tasks/history use
+// REPLICA IDENTITY FULL (migration 20261020000002) so the old row carries device_id and other
+// scopes' deletes are dropped here instead of triggering a full reconcile on every client.
+export function subscribeToCloudChanges(onChange) {
+  if (!supabase) return () => {};
+  const scope = getDeviceId();
+  const channel = supabase.channel(`proxima-sync-${scope}`);
+  const onDelete = (payload) => {
+    const owner = payload?.old?.device_id;
+    if (owner && owner !== scope) return;
+    onChange(payload);
+  };
+  for (const table of ["tasks", "history"]) {
+    channel
+      .on("postgres_changes", { event: "INSERT", schema: "public", table, filter: `device_id=eq.${scope}` }, onChange)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table, filter: `device_id=eq.${scope}` }, onChange)
+      .on("postgres_changes", { event: "DELETE", schema: "public", table }, onDelete);
+  }
+  channel.subscribe();
+  return () => { supabase.removeChannel(channel); };
 }
 
 // ─── Bulk Pull (for initial sync on login) ───
