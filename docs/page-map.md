@@ -43,6 +43,15 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   "Bearer " + key } })` with `key` from IndexedDB `proximaai` → store `settings` → `get("apiKey")`. Never print the key.
 - Cheapest live tests: Flux Schnell $0.003/image (native batch), P-Image $0.005/image (fan-out batch),
   Nano Banana 2.1 $0.036. Billing check 2026-10-20: estimate = logged cost = actual charge for both batch kinds.
+- Prices follow the settings sent (`src/lib/pricing.js`). Billing check 2026-10-20 (bundle BptSS0uN), estimate =
+  card = log = charge: GPT Image 2.0 low/2K $0.019, Nano Banana 2.1 2K $0.054, FLUX 3 Video Edit on a 5.06 s clip
+  $0.18 (WaveSpeed bills ceil(seconds); charged at submit). `.cost-amount` starts with "~" and its `title` says so
+  while an input's length is unmeasured; it then becomes exact.
+- Cheap input-length test: Video Edit → FLUX 3 Video Edit ($0.03/s, ceil). Test clip: MDN CC0
+  `https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4` (5.06 s, CORS `*`): fetch it into a
+  `File` and inject it into `input[type=file][accept='video/*']` with `DataTransfer` + `change`; the app uploads it
+  to WaveSpeed. Do NOT paste `static.wavespeed.ai` example URLs: that CDN 403s any foreign Referer, so the browser
+  reports "Format error" and nothing can be measured (the app's own uploads on `*.cloudfront.net` work).
 
 ## Storage
 - IndexedDB `proximaai`: stores `settings` (key), `tasks` (id), `history` (id), `favorites`, `presets`.
