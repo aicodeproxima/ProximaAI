@@ -564,7 +564,7 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .content { flex: 1; overflow-y: auto; padding: 20px; min-width: 0; max-width: 100%; }
 
 /* Cockpit */
-.cockpit { display: grid; grid-template-columns: 360px 1fr; gap: 24px; height: 100%; min-height: 0; }
+.cockpit { display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 24px; height: 100%; min-height: 0; }
 .cockpit-left { display: flex; flex-direction: column; gap: 16px; overflow-y: auto; overflow-x: hidden; padding-right: 8px; padding-bottom: 60px; flex-shrink: 0; min-height: 0; scrollbar-gutter: stable; }
 .cockpit-left::-webkit-scrollbar { width: 8px; }
 .cockpit-left::-webkit-scrollbar-track { background: rgba(10,20,40,0.2); border-radius: 4px; }
@@ -572,10 +572,10 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .cockpit-left::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.5); }
 .cockpit-right { overflow-y: auto; min-width: 0; min-height: 0; padding-bottom: 40px; }
 @media (min-width: 1600px) {
-  .cockpit { grid-template-columns: 400px 1fr; gap: 28px; }
+  .cockpit { grid-template-columns: 460px minmax(0, 1fr); gap: 28px; }
 }
 @media (max-width: 1200px) {
-  .cockpit { grid-template-columns: 340px 1fr; gap: 20px; }
+  .cockpit { grid-template-columns: 380px minmax(0, 1fr); gap: 20px; }
 }
 
 .card { background: var(--bg-card); border: 1px solid var(--glass-border); border-radius: 14px; padding: 16px; transition: border-color 0.3s, box-shadow 0.3s; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
@@ -2932,7 +2932,7 @@ export default function ProximaApp() {
                         const isFavorite = categoryFavoriteSet.has(m.id);
                         return (
                           <div key={m.id} className={`model-item ${isSelected ? "selected" : ""}`}>
-                            <button type="button" className="model-choice" aria-pressed={isSelected}
+                            <button type="button" className="model-choice" aria-pressed={isSelected} title={m.name}
                               aria-label={`${isSelected ? "Deselect" : "Select"} ${m.name}`}
                               onClick={() => toggleModel(m.id)}>
                               <span className="model-check" aria-hidden="true">{isSelected ? "✓" : ""}</span>
