@@ -1,6 +1,6 @@
 // Tests for src/lib/batchLog.js — the History entry of a generation batch. Run: node scripts/test-batch-log.mjs
 import assert from "node:assert/strict";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent } from "../src/lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems } from "../src/lib/batchLog.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -48,6 +48,28 @@ test("a task this device does not have yet keeps the log open; one gone past the
   const [done] = finishLogs([{ ...open, timestamp: NOW - 49 * HOUR }], tasks, NOW);
   assert.deepEqual(done.tasks.map(i => i.status), ["completed", "failed"]);
   assert.match(done.tasks[1].error, /removed|expired/i);
+});
+
+// Review wf_d4a468a3-746 #6/#8: deleting a task of a batch that is still running left the entry open for 48 h ($0, no
+// images), then recorded the deleted task as failed even when it had completed. A deleted task's item is closed with
+// its last known state at delete time; the entry then finishes as soon as the rest of the batch does.
+test("deleting a task closes its item with its last state; the entry finishes with the rest of the batch", () => {
+  const open = log(batchLogItems([task("a"), task("b")]));
+  const doneA = task("a", { status: "completed", outputs: ["https://cdn/a.png"], wallClockMs: 5000 });
+  const [closed] = closeRemovedItems([open], [doneA]);
+  assert.deepEqual(closed.tasks.map(i => [i.id, i.status]), [["a", "completed"], ["b", "processing"]]);
+  assert.equal(isOpenLog(closed), true, "b still running");
+  const [done] = finishLogs([closed], [task("b", { status: "completed", outputs: ["https://cdn/b.png"] })], NOW);
+  assert.deepEqual(done.tasks.map(i => i.status), ["completed", "completed"]);
+  assert.equal(done.totalCost, 0.08, "the deleted task's cost still counts: it ran");
+});
+
+test("deleting a running task (Clear) closes its item as removed; entries without it are untouched", () => {
+  const open = log(batchLogItems([task("a"), task("b")]));
+  const [closed] = closeRemovedItems([open, log([], { id: "other" })], [task("a")]);
+  assert.deepEqual(closed.tasks.map(i => [i.id, i.status]), [["a", "failed"], ["b", "processing"]]);
+  assert.match(closed.tasks[0].error, /removed/i);
+  assert.equal(closeRemovedItems([open], [task("zzz", { status: "completed" })]).length, 0);
 });
 
 test("queue bookkeeping: an upload clears only the version it sent", () => {

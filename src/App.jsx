@@ -14,7 +14,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent } from "./lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -1868,7 +1868,9 @@ export default function ProximaApp() {
         if (rmTasks.size) {
           // Deleted on another device: the delete wins over any stale local upload of the same row, and a running
           // one stops polling here. Their prediction ids are released (no lost submit may adopt them).
-          releasePredictions(tasksRef.current.filter(t => rmTasks.has(t.id)).map(t => t.taskId));
+          const removedHere = tasksRef.current.filter(t => rmTasks.has(t.id));
+          releasePredictions(removedHere.map(t => t.taskId));
+          closeLogsFor(removedHere);
           for (const id of rmTasks) {
             savedTaskIds.current.delete(id); removeFailedSync("task", id);
             clearTimeout(pollRefs.current[id]); delete pollRefs.current[id];
@@ -1942,6 +1944,16 @@ export default function ProximaApp() {
       .then(() => { removeFailedSync("history", entry.id, e => sameLogContent(e.data, entry)); setFailedSyncCount(getFailedSyncs().length); })
       .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
   }, [trackedSync]);
+
+  // Tasks being deleted close their items in open History entries with their last state (batchLog.js), so an entry
+  // never waits 48 h for a task that is gone.
+  const closeLogsFor = useCallback((removed) => {
+    const changed = closeRemovedItems(logsRef.current, removed).filter(l => !deletingLogIds.current.has(l.id));
+    if (!changed.length) return;
+    const byId = new Map(changed.map(l => [l.id, l]));
+    setLogs(prev => prev.map(l => byId.get(l.id) || l));
+    for (const l of changed) persistLog(l);
+  }, [persistLog]);
 
   // Save NEW logs to IndexedDB (and sync to Supabase): every entry not saved yet, not only the newest (two batches
   // logged in one render used to leave the second unsaved).
@@ -2818,6 +2830,7 @@ export default function ProximaApp() {
     // 4. Optimistic local removal from React state. Their prediction ids are released, so a lost submit of the same
     //    model never adopts a deleted task's result.
     releasePredictions(targets.map(t => t.taskId));
+    closeLogsFor(targets);
     setTasks(prev => prev.filter(t => !idSet.has(t.id)));
     // 5. Local IndexedDB delete (single transaction, awaited).
     await deleteTasks(ids);
@@ -4156,6 +4169,7 @@ export default function ProximaApp() {
                       setSaveStatus("saving");
                       await createBackup("pre-clear-outputs", "Before Clear Outputs");
                       releasePredictions(tasksRef.current.map(t => t.taskId));
+                      closeLogsFor(tasksRef.current);
                       setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
                       getStorageStats().then(s => setStorageStats(s));
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);

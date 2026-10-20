@@ -37,6 +37,24 @@ export function finishLogs(logs, tasks, now) {
   return out;
 }
 
+// Tasks being deleted (here, by Clear, or because another device deleted them) close their items in open entries with
+// their last known state; one deleted while still running is recorded as removed. Without this the entry waited 48 h
+// for a task that was never coming back. Returns the entries that changed.
+export function closeRemovedItems(logs, removedTasks) {
+  const byId = new Map(removedTasks.map(t => [t.id, t]));
+  const out = [];
+  for (const log of logs) {
+    if (!isOpenLog(log) || !log.tasks.some(i => i?.id && byId.has(i.id))) continue;
+    const items = log.tasks.map(i => {
+      const t = i?.id ? byId.get(i.id) : null;
+      if (!t) return i;
+      return IN_FLIGHT.has(t.status) ? { ...itemOf(t), status: "failed", error: REMOVED_ERROR } : itemOf(t);
+    });
+    out.push({ ...log, tasks: items, totalCost: totalOf(items) });
+  }
+  return out;
+}
+
 // Whether two versions of an entry carry the same outcomes (an upload that resolves late must not clear a newer
 // version from the failed-sync queue).
 export const sameLogContent = (a, b) => JSON.stringify(a?.tasks || []) === JSON.stringify(b?.tasks || []) && a?.totalCost === b?.totalCost;
