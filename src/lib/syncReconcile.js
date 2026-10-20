@@ -49,6 +49,11 @@ export function planTaskSync({ local, cloud, cloudIds, tombstones, pending, dele
       if (!lostConnection) update.push({ id: c.id, outputs: Array.isArray(c.outputs) ? c.outputs : [], finish: outcomeOf(c) });
       continue;
     }
+    // Completed elsewhere, failed or cancelled here: the result stands (the server never lets a failure replace it).
+    if (l.status === "failed" && c.status === "completed" && Array.isArray(c.outputs) && c.outputs.length > 0) {
+      update.push({ id: c.id, outputs: c.outputs, finish: outcomeOf(c) });
+      continue;
+    }
     if (FINISHED.has(l.status) && IN_FLIGHT.has(c.status)) {
       if (!deleting.has(l.id) && (l.endTime || l.startTime || 0) < since - graceMs) resend.push(l);
       continue;
@@ -67,11 +72,12 @@ export function planTaskSync({ local, cloud, cloudIds, tombstones, pending, dele
   return { add, update, remove, upload: [...upload, ...resend] };
 }
 
-// Applies one `update` entry: new outputs, plus another device's outcome while the task is still running here (one
-// cancelled or finished here meanwhile keeps its own state).
+// Applies one `update` entry: new outputs, plus another device's outcome while the task is still running here or has
+// failed here while it completed there. A task finished here meanwhile otherwise keeps its own state.
 export function applyCloudUpdate(task, u) {
   if (!u.finish) return { ...task, outputs: u.outputs };
-  return IN_FLIGHT.has(task.status) ? { ...task, outputs: u.outputs, ...u.finish } : task;
+  const takes = IN_FLIGHT.has(task.status) || (task.status === "failed" && u.finish.status === "completed");
+  return takes ? { ...task, outputs: u.outputs, ...u.finish } : task;
 }
 
 export function planLogSync({ local, cloud, cloudIds, tombstones, pending, deleting, since, graceMs = SYNC_GRACE_MS }) {

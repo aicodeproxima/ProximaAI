@@ -128,12 +128,27 @@ test("a running cloud copy never overrides a finished task here, and the result 
   assert.deepEqual(queued.upload, [], "the queue will send it");
 });
 
+// The server keeps a completed row completed (a cancel or failure from another device never replaces it), so a device
+// whose copy says failed — cancelled there, or failed by an older build — takes the completed result instead.
+test("a result completed on another device replaces a failure or cancel here", () => {
+  const done = task("c", { taskId: "pred-c", endTime: NOW - 1000 });
+  const p = planTaskSync({ ...base, local: [task("c", { status: "failed", error: "Cancelled", outputs: [] })], cloud: [done], cloudIds: new Set(["c"]) });
+  assert.equal(p.update[0]?.finish?.status, "completed");
+  const applied = applyCloudUpdate(task("c", { status: "failed", error: "Cancelled", outputs: [] }), p.update[0]);
+  assert.deepEqual([applied.status, applied.error, applied.outputs], ["completed", null, done.outputs]);
+  const reverse = planTaskSync({ ...base, local: [task("c")], cloud: [task("c", { status: "failed", error: "Cancelled", outputs: [] })], cloudIds: new Set(["c"]) });
+  assert.deepEqual(reverse.update, [], "a cloud failure never replaces a completed result here");
+});
+
 test("applying a cloud outcome: only to a task still running here; plain output refreshes as before", () => {
   const u = { id: "r", outputs: ["https://cdn/r.png"], finish: { status: "completed", error: null, endTime: NOW, wallClockMs: 9, inferenceMs: 7, nsfw: null } };
   const applied = applyCloudUpdate(running("r"), u);
   assert.deepEqual([applied.status, applied.outputs, applied.endTime, applied.taskId], ["completed", ["https://cdn/r.png"], NOW, "pred-r"]);
-  const cancelled = task("r", { status: "failed", error: "Cancelled", outputs: [] });
-  assert.equal(applyCloudUpdate(cancelled, u), cancelled, "finished here meanwhile: kept");
+  const doneHere = task("r", { outputs: ["https://cdn/mine.png"] });
+  assert.equal(applyCloudUpdate(doneHere, u), doneHere, "completed here meanwhile: kept");
+  const failedHere = task("r", { status: "failed", error: "Generation failed", outputs: [] });
+  const failedThere = { ...u, outputs: [], finish: { ...u.finish, status: "failed", error: "Cancelled" } };
+  assert.equal(applyCloudUpdate(failedHere, failedThere), failedHere, "a failure never replaces a failure here");
   assert.deepEqual(applyCloudUpdate(task("a"), { id: "a", outputs: ["https://supabase/a.png"] }).outputs, ["https://supabase/a.png"]);
 });
 
