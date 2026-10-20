@@ -441,10 +441,6 @@ export const MODELS = {
       params: { resolution: null, aspectRatio: AR_NANO2, negativePrompt: false, seed: false } },
     { id: "google/nano-banana-pro/text-to-image", name: "Nano Banana Pro", provider: "Google", price: 0.14, hot: true,
       params: { resolution: RES_NANO, aspectRatio: AR_NANO_PRO, negativePrompt: false, seed: false } },
-    // Retired upstream: WaveSpeed answers "Model not found" (public page 404 since 2026-09-29).
-    // Kept so old history still resolves; `retired` hides it from the picker and blocks regenerate.
-    { id: "google/imagen4", name: "Imagen 4", provider: "Google", price: 0.08, retired: true,
-      params: { resolution: RES_NANO_12, negativePrompt: true, seed: true } },
 
     // Flux
     { id: "wavespeed-ai/flux-dev", name: "Flux Dev", provider: "WaveSpeed", price: 0.03,
@@ -486,10 +482,6 @@ export const MODELS = {
       params: { resolution: RES_QWEN_PRO, negativePrompt: false, seed: true } },
     { id: "wavespeed-ai/phota/text-to-image", name: "Phota", provider: "WaveSpeed", price: 0.03,
       params: { resolution: RES_PHOTA, aspectRatio: AR_PHOTA, negativePrompt: false, seed: false, maxBatchImages: 4 } },
-
-    // OpenAI
-    { id: "openai/dall-e-3", name: "DALL-E 3", provider: "OpenAI", price: 0.08,
-      params: { resolution: { paramName: "size", options: [{ label: "1024x1024", value: "1024*1024" }, { label: "1024x1792", value: "1024*1792" }, { label: "1792x1024", value: "1792*1024" }], default: "1024*1024" }, negativePrompt: false, seed: false, outputFormat: false } },
 
     // Luma
     { id: "luma/photon", name: "Luma Photon", provider: "Luma", price: 0.03,
@@ -567,8 +559,6 @@ export const MODELS = {
         optional: { promptOptimizationMode: { paramName: "prompt_optimization_mode", type: "enum", values: ["standard", "fast"], default: "standard" } } } },
     { id: "bytedance/seedream-v4.5/edit", name: "Seedream 4.5 Edit", provider: "ByteDance", price: 0.04,
       params: { resolution: RES_SEEDREAM, negativePrompt: false, seed: false, outputFormat: false, maxImages: 10 } },
-    { id: "bytedance/seededit-v3", name: "SeedEdit V3", provider: "ByteDance", price: 0.03,
-      params: { resolution: RES_SEEDREAM, negativePrompt: false, seed: true, imageParam: "image" } },
 
     // Alibaba WAN Edit
     { id: "alibaba/wan-2.7/image-edit", name: "WAN 2.7 Edit", provider: "Alibaba", price: 0.03, hot: true,
@@ -1007,22 +997,6 @@ export const MODELS = {
         optional: { guidanceScale: { paramName: "guidance_scale", type: "number", default: 6, min: 0, max: 20 }, numInferenceSteps: { paramName: "num_inference_steps", type: "number", default: 28, min: 1, max: 50 } } } },
     { id: "alibaba/wan-2.7/reference-to-video", name: "WAN 2.7 Reference", provider: "Alibaba", price: 0.50,
       params: { resolution: RES_VIDEO_720_1080, duration: { options: [5, 10, 15], default: 5 }, negativePrompt: true, seed: true, referenceVideos: "videos", optional: { enablePromptExpansion: { paramName: "enable_prompt_expansion", type: "boolean", default: false } } } },
-
-    // ─── 2026-06 additions (spicy / uncensored) ───
-    { id: "bytedance/seedance-2.0/image-to-video-spicy", name: "Seedance 2.0 Spicy", provider: "ByteDance", price: 0.60,
-      params: { resolution: RES_VIDEO_480_1080, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: true } },
-    { id: "bytedance/seedance-2.0-fast/image-to-video-spicy", name: "Seedance 2.0 Fast Spicy", provider: "ByteDance", price: 0.50,
-      params: { resolution: RES_VIDEO_480_1080, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: true } },
-    { id: "bytedance/seedance-2.0-mini/image-to-video-spicy", name: "Seedance 2.0 Mini Spicy", provider: "ByteDance", price: 0.30,
-      params: { resolution: RES_VIDEO_480_4K, aspectRatio: AR_SEEDANCE, duration: DUR_SEEDANCE, negativePrompt: false, seed: true } },
-    { id: "bytedance/seedance-v1.5-pro/image-to-video-spicy", name: "Seedance 1.5 Pro Spicy", provider: "ByteDance", price: 0.06,
-      params: { resolution: RES_VIDEO_480_1080, aspectRatio: AR_SEEDANCE, duration: { options: [4, 5, 6, 7, 8, 9, 10, 11, 12], default: 5 }, negativePrompt: false, seed: true } },
-    { id: "wavespeed-ai/wan-2.2-spicy/image-to-video", name: "WAN 2.2 Spicy", provider: "Alibaba", price: 0.15,
-      params: { resolution: RES_VIDEO_480_720, duration: { options: [5, 8], default: 5 }, negativePrompt: false, seed: true } },
-    { id: "alibaba/wan-2.6/image-to-video-spicy", name: "WAN 2.6 Spicy", provider: "Alibaba", price: 0.50,
-      params: { resolution: RES_VIDEO_720_1080, duration: { options: [5, 10, 15], default: 5 }, negativePrompt: false, seed: true } },
-    { id: "alibaba/wan-2.7/image-to-video-spicy", name: "WAN 2.7 Spicy", provider: "Alibaba", price: 0.50,
-      params: { resolution: RES_VIDEO_720_1080, duration: { options: [5, 10, 15], default: 5 }, negativePrompt: false, seed: true } },
   ],
 
   v2v: [
