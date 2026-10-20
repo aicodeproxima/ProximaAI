@@ -6,6 +6,7 @@ import { draftTask, unitQuote, taskUserSettings } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE } from "./lib/api.js";
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
+import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
@@ -220,6 +221,30 @@ function LoginScreen({ onSignedIn, notice = "" }) {
 
 const font = `'JetBrains Mono', 'Fira Code', monospace`;
 const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
+
+// ─── UPDATE BANNER ───
+// Shown once a newer deployment is live (a long-open tab otherwise keeps running old code). Reloading is safe
+// mid-generation: in-flight tasks resume from IndexedDB after the reload.
+function UpdateBanner() {
+  const available = useUpdateAvailable();
+  if (!available) return null;
+  return (
+    <div role="status" style={{
+      position: "fixed", top: "calc(8px + env(safe-area-inset-top))", left: "50%", transform: "translateX(-50%)", zIndex: 3000,
+      display: "flex", alignItems: "center", gap: 10, padding: "4px 4px 4px 14px", borderRadius: 999,
+      maxWidth: "calc(100vw - 32px)", boxSizing: "border-box",
+      background: "rgba(245,158,11,0.16)", border: "1px solid rgba(245,158,11,0.5)", color: "#fbbf24",
+      fontFamily: font, fontSize: 12, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
+      boxShadow: "0 4px 20px rgba(0,0,0,0.35)",
+    }}>
+      <span style={{ whiteSpace: "nowrap" }}>New version ready</span>
+      <button onClick={() => window.location.reload()} style={{
+        minHeight: 44, minWidth: 80, padding: "0 16px", borderRadius: 999, border: "none", background: "#f59e0b",
+        color: "#1a1204", fontFamily: font, fontWeight: 700, fontSize: 12, cursor: "pointer",
+      }}>Reload</button>
+    </div>
+  );
+}
 
 // ─── SIDEBAR SAVE-STATUS BUTTON ───
 // Lives in the nav bar. Tap to force-flush pending cloud writes.
@@ -2811,6 +2836,7 @@ export default function ProximaApp() {
         <div className="proxima-app">
           <LoginScreen onSignedIn={handleSignedIn} notice={sessionNotice} />
         </div>
+        <UpdateBanner />
       </>
     );
   }
@@ -2821,6 +2847,7 @@ export default function ProximaApp() {
     <>
       <style>{css}</style>
       <BackgroundLayer type={background} accent={activeAccent} paused={activeCount > 0} />
+      <UpdateBanner />
       <div className="proxima-app">
         {/* Sidebar */}
         <div className="sidebar">

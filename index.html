@@ -13,8 +13,8 @@
     <title>ProximaAI — Parallel AI Generation Cockpit</title>
     <script>
       // Right after a deploy, an edge server can still hand out the previous index.html, whose /assets/* bundle the
-      // new deployment no longer serves: a 404 leaves a blank page and the app never runs to show its stale-build
-      // banner (seen live 2026-10-20). Reload once (after a short wait) to fetch the current HTML; the
+      // new deployment no longer serves: a 404 leaves a blank page and the app never runs to show its "New version
+      // ready" banner (seen live 2026-10-20). Reload once (after a short wait) to fetch the current HTML; the
       // sessionStorage mark stops a loop if the same file keeps failing. Must stay above Vite's bundle tag.
       addEventListener('error', function (e) {
         var t = e.target, src = (t && (t.src || t.href)) || '';
