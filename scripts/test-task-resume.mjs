@@ -80,7 +80,14 @@ test("poll outcome: failed", () => {
 test("poll outcome: a purged prediction (WaveSpeed answers status 'deleted') is gone, not running", () => {
   assert.equal(pollOutcome({ status: "deleted", outputs: [] }), "gone");
   assert.equal(pollOutcome({ status: "expired" }), "gone");
-  assert.equal(pollOutcome({ status: "canceled" }), "gone");
+});
+
+test("poll outcome: WaveSpeed's own timeout and cancel end the task as failed, with a clear reason", () => {
+  assert.equal(pollOutcome({ status: "timeout" }), "failed");
+  assert.equal(pollOutcome({ status: "cancelled" }), "failed");
+  assert.equal(applyPoll(task("a"), { status: "timeout" }, NOW).error, "WaveSpeed timed out this generation");
+  assert.equal(applyPoll(task("a"), { status: "cancelled" }, NOW).error, "Cancelled on WaveSpeed");
+  assert.equal(applyPoll(task("a"), { status: "timeout", error: "queue timeout" }, NOW).error, "queue timeout");
 });
 
 test("poll outcome: still running", () => {

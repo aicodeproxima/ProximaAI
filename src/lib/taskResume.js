@@ -16,7 +16,10 @@ export const GONE_ERROR = "Expired: WaveSpeed deleted the result before the app 
 export const UNSUBMITTED_ERROR = "Interrupted before WaveSpeed accepted the request";
 
 const IN_FLIGHT = new Set(["pending", "processing"]);
-const GONE = new Set(["deleted", "expired", "canceled", "cancelled"]);
+const GONE = new Set(["deleted", "expired"]);
+// Terminal failures WaveSpeed reports besides "failed" (its docs list timeout and cancelled); before 2026-10-20 a
+// "timeout" answer kept a video polling for the whole 48 h window.
+const FAILED_REASON = { failed: "Generation failed", timeout: "WaveSpeed timed out this generation", cancelled: "Cancelled on WaveSpeed", canceled: "Cancelled on WaveSpeed" };
 
 export const failTask = (task, now, error) => ({ ...task, status: "failed", error, endTime: now });
 
@@ -51,7 +54,7 @@ export function planResume(rows, now) {
 export function pollOutcome(data) {
   const status = data?.status;
   if (status === "completed" && data.outputs?.length > 0) return "completed";
-  if (status === "failed") return "failed";
+  if (status in FAILED_REASON) return "failed";
   if (GONE.has(status)) return "gone";
   return "running";
 }
@@ -65,7 +68,7 @@ export function applyPoll(task, data, now) {
       return { ...task, status: "completed", outputs: data.outputs, endTime: now, wallClockMs: wallClock,
         inferenceMs: data?.timings?.inference || wallClock, nsfw: data?.has_nsfw_contents };
     }
-    case "failed": return { ...task, status: "failed", error: data.error || "Generation failed", endTime: now };
+    case "failed": return { ...task, status: "failed", error: data.error || FAILED_REASON[data.status] || "Generation failed", endTime: now };
     case "gone": return failTask(task, now, GONE_ERROR);
     default: return null;
   }
