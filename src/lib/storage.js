@@ -2,6 +2,8 @@
 // Optimized for: tasks with outputs, generation history, settings, favorites, presets
 // Falls back to localStorage if IndexedDB unavailable.
 
+import { planResume } from "./taskResume.js";
+
 const DB_NAME = "proximaai";
 const DB_VERSION = 3;
 
@@ -273,8 +275,11 @@ export async function getCompletedTasks(limit = 200) {
   try {
     const store = await tx("tasks");
     const all = await wrapRequest(store.getAll());
-    // Only return terminal states
-    const terminal = all.filter(t => t.status === "completed" || t.status === "failed");
+    // In-flight rows that can no longer be resumed are failed and written back first, so they load,
+    // persist and sync like any finished task instead of staying "processing" in IndexedDB forever.
+    const { expire } = planResume(all, Date.now());
+    if (expire.length) await batchPut("tasks", expire);
+    const terminal = [...all.filter(t => t.status === "completed" || t.status === "failed"), ...expire];
     terminal.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
     // Auto-prune beyond limit
     if (terminal.length > MAX_TASKS) {
@@ -285,21 +290,13 @@ export async function getCompletedTasks(limit = 200) {
   } catch { return []; }
 }
 
-// Returns tasks still in-flight (pending/processing) so we can resume their polls
-// after page refresh, tab close, or OS killing the app. Stale tasks (>30 min old)
-// are auto-failed since WaveSpeed predictions expire.
+// Returns in-flight tasks whose poll can still be resumed after a page refresh, tab close or OS kill
+// (see taskResume.js). The ones past WaveSpeed's retention are failed by getCompletedTasks on the same load.
 export async function getPendingTasks() {
   try {
     const store = await tx("tasks");
     const all = await wrapRequest(store.getAll());
-    const STALE_MS = 30 * 60 * 1000;
-    const now = Date.now();
-    const pending = all.filter(t =>
-      (t.status === "pending" || t.status === "processing") &&
-      t.pollUrl && // must have pollUrl to resume
-      (now - (t.startTime || 0)) < STALE_MS
-    );
-    return pending;
+    return planResume(all, Date.now()).resume;
   } catch { return []; }
 }
 

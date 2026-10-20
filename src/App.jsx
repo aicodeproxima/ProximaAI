@@ -9,6 +9,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync } from "./lib/syncReconcile.js";
+import { mergeLoadedTasks, pollOutcome, failTask, EXPIRED_ERROR, GONE_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -1351,7 +1352,9 @@ export default function ProximaApp() {
       const savedTasks = await getCompletedTasks(500);
       if (savedTasks?.length && !cancelled) {
         for (const t of savedTasks) savedTaskIds.current.add(t.id);
-        setTasks(savedTasks);
+        // Merge, never replace: the resume effect's read resolves first and has already put the resumed
+        // tasks in state. Replacing dropped them, so their results were never saved.
+        setTasks(prev => mergeLoadedTasks(prev, savedTasks));
       }
       const savedImgRes = await getSetting("defaultImageRes");
       if (savedImgRes && !cancelled) setDefaultImageRes(savedImgRes);
@@ -1777,14 +1780,16 @@ export default function ProximaApp() {
         const maxTimeout = tFast ? 300000 : Infinity;
         const pollUrl = task.pollUrl;
         const poll = async () => {
-          if (maxTimeout !== Infinity && Date.now() - task.startTime > maxTimeout) {
-            setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "failed", error: "Timeout (resumed)", endTime: Date.now() } : t));
+          // Guard: no resumed poll (429 retries included) outlives WaveSpeed's copy of the result.
+          if (Date.now() - task.startTime > RESUME_WINDOW_MS) {
+            setTasks(prev => prev.map(t => t.id === task.id ? failTask(t, Date.now(), EXPIRED_ERROR) : t));
             return;
           }
           try {
             const result = await pollResult(apiKey, pollUrl);
             const data = result?.data || result;
-            if (data.status === "completed" && data.outputs?.length > 0) {
+            const outcome = pollOutcome(data);
+            if (outcome === "completed") {
               const wallClock = Date.now() - task.startTime;
               setTasks(prev => prev.map(t => t.id === task.id ? {
                 ...t, status: "completed", outputs: data.outputs,
@@ -1792,10 +1797,16 @@ export default function ProximaApp() {
                 inferenceMs: data?.timings?.inference || wallClock,
                 nsfw: data?.has_nsfw_contents
               } : t));
-            } else if (data.status === "failed") {
+            } else if (outcome === "failed") {
               setTasks(prev => prev.map(t => t.id === task.id ? {
                 ...t, status: "failed", error: data.error || "Generation failed", endTime: Date.now()
               } : t));
+            } else if (outcome === "gone") {
+              // WaveSpeed purged it and answers status "deleted": polling again can never finish it.
+              setTasks(prev => prev.map(t => t.id === task.id ? failTask(t, Date.now(), GONE_ERROR) : t));
+            } else if (Date.now() - task.startTime > maxTimeout) {
+              // Timed out only after at least one poll: an image interrupted minutes ago has usually finished.
+              setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "failed", error: "Timeout (resumed)", endTime: Date.now() } : t));
             } else {
               pollRefs.current[task.id] = setTimeout(poll, pollInterval);
             }
