@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useReducer, memo } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { buildPayload, getEffectiveImageBatchCount, getImageBatchLimit, planImageBatchRequests } from "./lib/payloadBuilder.js";
+import { quoteRequest, requestCost } from "./lib/pricing.js";
 import { submitTask, pollResult, checkBalance, uploadMedia, API_BASE, proxiedFetch } from "./lib/api.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs } from "./lib/storage.js";
@@ -865,6 +866,24 @@ function formatTime(ms) {
   return s >= 60 ? `${(s / 60).toFixed(1)}m` : `${s.toFixed(1)}s`;
 }
 function formatCost(c) { return `$${c.toFixed(4)}`; }
+// What buildPayload() receives for a task. Shared by submit, regenerate and the cost estimate, so every
+// price is computed from the payload that is actually sent.
+function taskUserSettings(task, type = task.genType) {
+  return {
+    prompt: task.prompt, negPrompt: task.negPrompt,
+    resolution: task.resolution, duration: task.duration,
+    seed: task.seed, aspectRatio: task.aspectRatio,
+    sourceImageUrl: task.sourceImageUrl,
+    sourceImageUrls: task.sourceImageUrls || [],
+    sourceVideoUrl: type === "v2v" ? task.sourceImageUrl : (task.sourceVideoUrl || ""),
+    sourceAudioUrl: task.sourceAudioUrl || "",
+    perModelResolution: task.perModelResolution || {},
+    numImages: task.numImages || 1,
+    ...(task.optionalParams || {}),
+    briaPresets: task.briaPresets || {},
+    endFrameUrl: task.endFrameUrl, refVideoUrl: task.refVideoUrl,
+  };
+}
 // "1 model · 4 images" when a batch fans out (or natively batches) one model into several images.
 function logModelsLabel(log) {
   const models = new Set(log.models || []).size;
@@ -1874,10 +1893,39 @@ export default function ProximaApp() {
     && categoryFavoriteIds.every(id => selectedFavoriteSet.has(id));
   const selectedModelConfigs = selectedModels.map(id => models.find(m => m.id === id)).filter(Boolean);
   const effectiveImageBatchCount = getEffectiveImageBatchCount(selectedModelConfigs, numImages, genType);
-  const estCost = selectedModels.reduce((sum, id) => {
-    const m = models.find(x => x.id === id);
-    return sum + (m?.price || 0) * effectiveImageBatchCount;
-  }, 0);
+
+  // One planned request as a task, priced from the payload it will send. The estimate and
+  // handleGenerate both use it, so the estimate is the sum of the prices the tasks will carry.
+  function quoteDraftTask({ model, nativeBatch, requestIndex, requestCount, imagesPerRequest, totalImages }, batchId = null) {
+    const modelId = model.id;
+    // C4: coercion-aware resolution/duration this model will ACTUALLY receive (for the card)
+    const rp = model?.params?.resolution;
+    const chosenR = rp ? (perModelRes[modelId] || resolution || rp.default) : null;
+    const actualResOpt = rp ? (rp.options.find(o => o.value === chosenR) || rp.options.find(o => o.value === rp.default)) : null;
+    const dp = model?.params?.duration;
+    const actualDur = dp ? (dp.options.includes(Number(duration)) ? Number(duration) : dp.default) : null;
+    const parsedSeed = Number.parseInt(seed, 10);
+    const taskSeed = !nativeBatch && requestCount > 1 && Number.isFinite(parsedSeed) && seed !== "-1"
+      ? String(parsedSeed + requestIndex) : seed;
+    const task = {
+      id: genId(), batchId, modelId, modelName: model?.name || modelId,
+      provider: model?.provider || "Unknown", price: 0,
+      status: "pending", startTime: Date.now(), endTime: null,
+      wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
+      genType, prompt, negPrompt, resolution, duration, seed: taskSeed, aspectRatio, sourceImageUrl,
+      sourceImageUrls: sourceImageUrls.length > 0 ? sourceImageUrls : (sourceImageUrl ? [sourceImageUrl] : []),
+      perModelResolution: perModelRes, numImages: imagesPerRequest, requestedImages: totalImages,
+      batchImageIndex: requestCount > 1 ? requestIndex + 1 : null,
+      optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl,
+      actualRes: actualResOpt?.label || null, actualDur
+    };
+    const quote = quoteRequest(model, buildPayload(model, taskUserSettings(task), genType), { imagesPerRequest });
+    task.price = quote.cost;
+    return { task, quote };
+  }
+  const estQuotes = planImageBatchRequests(selectedModelConfigs, numImages, genType).map(plan => quoteDraftTask(plan).quote);
+  const estCost = estQuotes.reduce((sum, q) => sum + q.cost, 0);
+  const estExact = estQuotes.every(q => q.exact);
 
   function toggleModel(id) {
     setSelectedModels(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -2059,30 +2107,7 @@ export default function ProximaApp() {
 
     const batchId = genId();
     const batchPlan = planImageBatchRequests(selectedConfigs, numImages, genType);
-    const newTasks = batchPlan.map(({ model, nativeBatch, requestIndex, requestCount, imagesPerRequest, totalImages }) => {
-      const modelId = model.id;
-      // C4: coercion-aware resolution/duration this model will ACTUALLY receive (for the card)
-      const rp = model?.params?.resolution;
-      const chosenR = rp ? (perModelRes[modelId] || resolution || rp.default) : null;
-      const actualResOpt = rp ? (rp.options.find(o => o.value === chosenR) || rp.options.find(o => o.value === rp.default)) : null;
-      const dp = model?.params?.duration;
-      const actualDur = dp ? (dp.options.includes(Number(duration)) ? Number(duration) : dp.default) : null;
-      const parsedSeed = Number.parseInt(seed, 10);
-      const taskSeed = !nativeBatch && requestCount > 1 && Number.isFinite(parsedSeed) && seed !== "-1"
-        ? String(parsedSeed + requestIndex) : seed;
-      return {
-        id: genId(), batchId, modelId, modelName: model?.name || modelId,
-        provider: model?.provider || "Unknown", price: (model?.price || 0) * imagesPerRequest,
-        status: "pending", startTime: Date.now(), endTime: null,
-        wallClockMs: 0, inferenceMs: 0, outputs: [], error: null,
-        genType, prompt, negPrompt, resolution, duration, seed: taskSeed, aspectRatio, sourceImageUrl,
-        sourceImageUrls: sourceImageUrls.length > 0 ? sourceImageUrls : (sourceImageUrl ? [sourceImageUrl] : []),
-        perModelResolution: perModelRes, numImages: imagesPerRequest, requestedImages: totalImages,
-        batchImageIndex: requestCount > 1 ? requestIndex + 1 : null,
-        optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl,
-        actualRes: actualResOpt?.label || null, actualDur
-      };
-    });
+    const newTasks = batchPlan.map(plan => quoteDraftTask(plan, batchId).task);
 
     setTasks(prev => [...newTasks, ...prev]);
 
@@ -2092,22 +2117,8 @@ export default function ProximaApp() {
         try {
           // Build per-model payload using model's params config
           const modelConfig = models.find(m => m.id === task.modelId);
-          const userSettings = {
-            prompt: task.prompt, negPrompt: task.negPrompt,
-            resolution: task.resolution, duration: task.duration,
-            seed: task.seed, aspectRatio: task.aspectRatio,
-            sourceImageUrl: task.sourceImageUrl,
-            sourceImageUrls: task.sourceImageUrls || [],
-            sourceVideoUrl: task.genType === "v2v" ? task.sourceImageUrl : (task.sourceVideoUrl || ""),
-            sourceAudioUrl: task.sourceAudioUrl || "",
-            perModelResolution: task.perModelResolution || {},
-            numImages: task.numImages || 1,
-            ...(task.optionalParams || {}),
-            briaPresets: task.briaPresets || {},
-            endFrameUrl: task.endFrameUrl, refVideoUrl: task.refVideoUrl,
-          };
           const payload = modelConfig?.params
-            ? buildPayload(modelConfig, userSettings, task.genType || genType)
+            ? buildPayload(modelConfig, taskUserSettings(task, task.genType || genType), task.genType || genType)
             : { prompt: task.prompt, resolution: task.resolution };
 
           const submitRes = await submitTask(apiKey, task.modelId, payload);
@@ -2243,6 +2254,12 @@ export default function ProximaApp() {
       error: null,
       seed: Math.floor(Math.random() * 999999).toString(),
     };
+    // Re-price from the payload this run sends (a task made before formula pricing carries a default-settings price).
+    const regenType = newTask.genType || genType;
+    const regenModel = (MODELS[regenType] || []).find(m => m.id === newTask.modelId);
+    if (regenModel?.params) {
+      newTask.price = requestCost(regenModel, buildPayload(regenModel, taskUserSettings(newTask, regenType), regenType), { imagesPerRequest: newTask.numImages || 1 });
+    }
     setTasks(prev => [newTask, ...prev]);
 
     // Timer for live wallClock display on regenerated task
@@ -2261,22 +2278,8 @@ export default function ProximaApp() {
         const taskModels = MODELS[taskGenType] || [];
         const modelConfig = taskModels.find(m => m.id === newTask.modelId);
         if (!modelConfig) throw new Error(`${newTask.modelName || newTask.modelId} is no longer available — pick another model`);
-        const userSettings = {
-          prompt: newTask.prompt, negPrompt: newTask.negPrompt,
-          resolution: newTask.resolution, duration: newTask.duration,
-          seed: newTask.seed, aspectRatio: newTask.aspectRatio,
-          sourceImageUrl: newTask.sourceImageUrl,
-          sourceImageUrls: newTask.sourceImageUrls || [],
-          sourceVideoUrl: taskGenType === "v2v" ? newTask.sourceImageUrl : (newTask.sourceVideoUrl || ""),
-          sourceAudioUrl: newTask.sourceAudioUrl || "",
-          perModelResolution: newTask.perModelResolution || {},
-          numImages: newTask.numImages || 1,
-          ...(newTask.optionalParams || {}),
-          briaPresets: newTask.briaPresets || {},
-          endFrameUrl: newTask.endFrameUrl, refVideoUrl: newTask.refVideoUrl,
-        };
         const payload = modelConfig?.params
-          ? buildPayload(modelConfig, userSettings, taskGenType)
+          ? buildPayload(modelConfig, taskUserSettings(newTask, taskGenType), taskGenType)
           : { prompt: newTask.prompt };
 
         const submitRes = await submitTask(apiKey, newTask.modelId, payload);
@@ -3350,7 +3353,7 @@ export default function ProximaApp() {
                     {selectedModels.length > 0 && (
                       <div className="cost-bar">
                         <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>Est. cost ({selectedModels.length} model{selectedModels.length > 1 ? "s" : ""})</span>
-                        <span className="cost-amount">{formatCost(estCost)}</span>
+                        <span className="cost-amount" title={estExact ? "WaveSpeed price for these settings" : "Includes a default-settings price: an input's length is not measured yet"}>{estExact ? "" : "~"}{formatCost(estCost)}</span>
                       </div>
                     )}
 
