@@ -18,13 +18,23 @@ export const batchLogItems = (tasks) => tasks.map(itemOf);
 export const isOpenLog = (log) => (log?.tasks || []).some(i => IN_FLIGHT.has(i?.status));
 const totalOf = (items) => items.reduce((s, i) => s + (i.status === "completed" ? i.cost || 0 : 0), 0);
 
-// Open logs whose tasks have all finished, rewritten with their outcomes. A task this device lacks may still arrive
-// from another device, so it keeps the log open until the log is past the 48 h window.
+// Entries to rewrite: open ones whose tasks have all finished (with their outcomes), and closed ones with a failed item
+// whose task has since completed. A task this device lacks may still arrive from another device, so it keeps an open
+// entry open until the entry is past the 48 h window.
 export function finishLogs(logs, tasks, now) {
   const byId = new Map(tasks.map(t => [t.id, t]));
   const out = [];
   for (const log of logs) {
-    if (!isOpenLog(log)) continue;
+    if (!isOpenLog(log)) {
+      // A closed entry follows an item whose task turned out completed after all: a result another device or the
+      // webhook saved while this device had already expired its copy (the cloud's completed beats a local failure).
+      const items = (log.tasks || []).map(i => {
+        const t = i?.id && i.status === "failed" ? byId.get(i.id) : null;
+        return t?.status === "completed" && t.outputs?.length ? itemOf(t) : i;
+      });
+      if (items.some((i, k) => i !== log.tasks[k])) out.push({ ...log, tasks: items, totalCost: totalOf(items) });
+      continue;
+    }
     const stale = now - (log.timestamp || 0) > RESUME_WINDOW_MS;
     const items = log.tasks.map(i => {
       const t = i?.id ? byId.get(i.id) : null;

@@ -72,6 +72,18 @@ test("deleting a running task (Clear) closes its item as removed; entries withou
   assert.equal(closeRemovedItems([open], [task("zzz", { status: "completed" })]).length, 0);
 });
 
+// Webhook-session review (2026-10-20): every device closed for more than 48 h while the webhook completed the cloud row.
+// On load the local copy expires as failed and the entry closes with that, then reconcile upgrades the task to the
+// cloud's completed result. The closed entry has to follow, or History says expired / $0 next to a finished image.
+test("a closed entry follows a task that later turns out completed (result from the cloud)", () => {
+  const closed = log([{ id: "a", model: "M-a", status: "failed", error: "Expired", cost: 0.04, outputs: [], wallClockMs: 0 }], { totalCost: 0 });
+  const [fixed] = finishLogs([closed], [task("a", { status: "completed", outputs: ["https://cdn/a.png"] })], NOW);
+  assert.deepEqual([fixed?.tasks[0].status, fixed?.tasks[0].outputs, fixed?.totalCost], ["completed", ["https://cdn/a.png"], 0.04]);
+  assert.deepEqual(finishLogs([fixed], [task("a", { status: "completed", outputs: ["https://cdn/a.png"] })], NOW), [], "settles");
+  const stillFailed = finishLogs([closed], [task("a", { status: "failed", error: "Expired" })], NOW);
+  assert.deepEqual(stillFailed, [], "a failure that stays a failure changes nothing");
+});
+
 test("queue bookkeeping: an upload clears only the version it sent", () => {
   const open = log(batchLogItems([task("a")]));
   const [done] = finishLogs([open], [task("a", { status: "completed", outputs: ["x"] })], NOW);
