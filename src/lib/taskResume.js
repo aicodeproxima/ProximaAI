@@ -96,8 +96,10 @@ export function settlePoll(task, fn) {
 // A phone that loses signal mid-poll used to fail the task on the first fetch error.
 export function pollErrorAction(e) {
   if (e?.session || e?.noKey) return "stop";
-  const code = e?.code;
-  if (typeof code !== "number" || code === 429 || code >= 500) return "retry";
+  // HTTP refusals from api.js are plain objects {code: status}. Anything fetch itself throws is transient: a TypeError
+  // on a network drop, or a DOMException TimeoutError/AbortError, whose legacy numeric .code is not an HTTP status.
+  if (e instanceof Error || typeof e?.code !== "number") return "retry";
+  if (e.code === 429 || e.code >= 500) return "retry";
   return "fail";
 }
 

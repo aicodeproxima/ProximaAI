@@ -223,6 +223,11 @@ test("poll error: rate limits, network drops and server errors retry instead of 
   assert.equal(pollErrorAction({ code: 502 }), "retry");
 });
 
+test("poll error: a request timeout or abort (DOMException, which carries a numeric legacy code) retries", () => {
+  assert.equal(pollErrorAction(new DOMException("signal timed out", "TimeoutError")), "retry");
+  assert.equal(pollErrorAction(new DOMException("The operation was aborted.", "AbortError")), "retry");
+});
+
 test("poll error: WaveSpeed refusing the poll (4xx) fails the task", () => {
   assert.equal(pollErrorAction({ code: 404 }), "fail");
   assert.equal(pollErrorAction({ code: 0, message: "Refusing to poll a non-WaveSpeed URL" }), "fail");

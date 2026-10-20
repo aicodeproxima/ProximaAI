@@ -55,8 +55,13 @@ export async function submitTask(modelSlug, payload) {
   return res.json();
 }
 
+// Each poll gives up after 15 s: when Android freezes the app it kills its sockets, and a request stuck on a dead
+// connection would otherwise leave the poll loop waiting with nothing scheduled. The TimeoutError has no HTTP code,
+// so the loop treats it as a network drop and retries.
+const POLL_TIMEOUT_MS = 15_000;
 export async function pollResult(pollUrl) {
-  const res = await wsFetch(toProxyUrl(pollUrl));
+  const signal = typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(POLL_TIMEOUT_MS) : undefined;
+  const res = await wsFetch(toProxyUrl(pollUrl), signal ? { signal } : {});
   if (!res.ok) throw { code: res.status, message: res.statusText };
   return res.json();
 }
