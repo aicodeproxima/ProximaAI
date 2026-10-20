@@ -1224,5 +1224,11 @@ export const MODELS = {
   ],
 };
 
+// Picker order in every tab (owner, 2026-10-20): GPT → Nano Banana / Veo → Seedream / Seedance → Qwen → WAN → everything else.
+// Gemini *-image models are Nano Banana under Google's other name. Array sort is stable, so each family keeps its registry order.
+export const MODEL_FAMILY_ORDER = [/gpt/, /nano-banana|gemini-[\d.]+-(pro|flash)-image|veo\d/, /seedream|seedance/, /qwen/, /(^|\/)wan-/];
+export const modelFamilyRank = id => { const i = MODEL_FAMILY_ORDER.findIndex(re => re.test(id)); return i < 0 ? MODEL_FAMILY_ORDER.length : i; };
+for (const list of Object.values(MODELS)) list.sort((a, b) => modelFamilyRank(a.id) - modelFamilyRank(b.id));
+
 export const TYPE_LABELS = { image: "Image", i2i: "Image Edit", i23d: "Image → 3D", t2v: "Text → Video", i2v: "Image → Video", v2v: "Video Edit", avatar: "Avatar" };
 export const TYPE_ICONS = { image: "🖼️", i2i: "✏️", i23d: "🧊", t2v: "🎬", i2v: "📸→🎬", v2v: "🎞️", avatar: "🧑‍🎤" };
