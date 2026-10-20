@@ -35,8 +35,11 @@ function backupCodeError(r) {
   return `Wrong backup code · ${r?.attempts_left ?? 0} tr${r?.attempts_left === 1 ? "y" : "ies"} left before a 15-minute pause`;
 }
 
-// The backup code is masked like a password but is NOT a password field, so password managers never offer to save it.
+// The backup code is masked with CSS and is not a password field. Password managers would still take the last text
+// field before a new-password field as the USERNAME (autocomplete="off" is ignored), so every code field is marked
+// autocomplete="one-time-code" (never a username candidate) and each reset form carries a real username field first.
 const maskedCodeStyle = (shown) => (shown ? {} : { WebkitTextSecurity: "disc" });
+const visuallyHidden = { position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 };
 
 function LoginScreen({ onSignedIn, notice = "" }) {
   const [mode, setMode] = useState("signin"); // "signin" | "reset" (forgot password) | "unlock" (locked out)
@@ -150,6 +153,13 @@ function LoginScreen({ onSignedIn, notice = "" }) {
                 autoComplete="current-password" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
           </>) : (<>
+            {mode === "reset" && (
+              <div>
+                <label htmlFor="login-reset-username" style={labelStyle}>Username</label>
+                <input id="login-reset-username" type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
+                  autoComplete="username" autoCapitalize="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+              </div>
+            )}
             <div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <label htmlFor="login-backup-code" style={{ ...labelStyle, marginBottom: 0 }}>Backup code</label>
@@ -157,7 +167,7 @@ function LoginScreen({ onSignedIn, notice = "" }) {
                   style={{ ...linkStyle, padding: "0 4px", fontSize: 11, minWidth: 44 }}>{showCode ? "Hide" : "Show"}</button>
               </div>
               <input id="login-backup-code" type="text" value={backupCode} onChange={e => { setBackupCode(e.target.value); setError(""); }}
-                autoFocus autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                autoFocus autoComplete="one-time-code" autoCapitalize="off" autoCorrect="off" spellCheck={false}
                 style={{ ...loginInputStyle, ...maskedCodeStyle(showCode) }} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
             {mode === "reset" && (<>
@@ -644,13 +654,14 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
           <form onSubmit={submitResetWithCode}>
             <div style={title}>Reset Password</div>
             <div style={subtitle}>For a forgotten password. Your backup code sets a new one and signs out every device, this one included.</div>
+            <input type="text" name="username" autoComplete="username" value={creds?.username || ""} readOnly tabIndex={-1} aria-hidden="true" style={visuallyHidden} />
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <label htmlFor="acct-reset-code" style={{ ...label, marginBottom: 0 }}>Backup Code</label>
               <button type="button" onClick={() => setShowResetCode(v => !v)} aria-pressed={showResetCode} aria-controls="acct-reset-code"
                 style={{ background: "transparent", border: "none", color: "#818cf8", fontFamily: font, fontSize: 11, cursor: "pointer", minHeight: 44, minWidth: 44, padding: "0 4px" }}>{showResetCode ? "Hide" : "Show"}</button>
             </div>
             <input id="acct-reset-code" type="text" value={resetCode} onChange={e => { setResetCode(e.target.value); setError(""); }}
-              style={{ ...input, ...maskedCodeStyle(showResetCode) }} autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} autoFocus />
+              style={{ ...input, ...maskedCodeStyle(showResetCode) }} autoComplete="one-time-code" autoCapitalize="off" autoCorrect="off" spellCheck={false} autoFocus />
             <label htmlFor="acct-reset-new-password" style={{ ...label, marginTop: 12 }}>New Password (8+ characters)</label>
             <input id="acct-reset-new-password" type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} style={input} autoComplete="new-password" />
             <label htmlFor="acct-reset-confirm-password" style={{ ...label, marginTop: 12 }}>Confirm New Password</label>
