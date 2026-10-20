@@ -374,15 +374,23 @@ test("matches the history item shape WaveSpeed documents (slug model, nanosecond
   assert.equal(adopt[0]?.taskId, "e6832d4abffb4d79bfbca19783fca133");
 });
 
-// Review wf_d4a468a3-746 #4: an orphan's own prediction is created after it started. One from the 30 s before (a task
-// deleted or cancelled just before) must not win just because it is older; the pre-start skew is only a fallback for
-// a device clock running ahead, and then the prediction closest to the start wins.
-test("an orphan prefers a prediction created after it started over a leftover from just before", () => {
-  const { adopt } = planOrphans([orphan("o")], [item("leftover", { created_at: new Date(NOW - 75_000).toISOString() }), item("own")], new Set(), NOW);
+// Regression review wf_9ad3cd3b-5c8 #1: a "prefer created after the start" tie-break (cbbb695) swapped two same-model
+// lost submits whenever the device clock ran slightly ahead of WaveSpeed. Leftovers of deleted or cancelled tasks are
+// excluded by ownership (released ids, cloud ids), so oldest-to-oldest pairing is right under any uniform skew.
+test("two same-model orphans keep their own predictions when the device clock runs ahead", () => {
+  const a = orphan("A", { startTime: NOW - 60_000 }), b = orphan("B", { startTime: NOW - 59_000 });
+  for (const skew of [200, 700, 3000, 20_000]) {
+    const items = [item("PB", { created_at: new Date(NOW - 59_000 + 300 - skew).toISOString() }),
+      item("PA", { created_at: new Date(NOW - 60_000 + 300 - skew).toISOString() })];
+    const { adopt } = planOrphans([b, a], items, new Set(), NOW);
+    assert.deepEqual(adopt.map(t => [t.id, t.taskId]), [["A", "PA"], ["B", "PB"]], `clock ${skew} ms ahead`);
+  }
+});
+
+test("a released leftover from just before is skipped by ownership, not by timing", () => {
+  const items = [item("leftover", { created_at: new Date(NOW - 75_000).toISOString() }), item("own")];
+  const { adopt } = planOrphans([orphan("o")], items, liveReleased(rememberReleased({}, ["leftover"], NOW), NOW), NOW);
   assert.equal(adopt[0].taskId, "own");
-  const skewOnly = planOrphans([orphan("o")], [item("far", { created_at: new Date(NOW - 85_000).toISOString() }),
-    item("near", { created_at: new Date(NOW - 62_000).toISOString() })], new Set(), NOW);
-  assert.equal(skewOnly.adopt[0].taskId, "near", "inside the skew, the one closest to the start");
 });
 
 test("released prediction ids (deleted tasks) are remembered for an hour, then forgotten", () => {

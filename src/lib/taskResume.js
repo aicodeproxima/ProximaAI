@@ -109,11 +109,11 @@ export function planOrphans(orphans, items, owned, now) {
   const used = new Set(), adopt = [], fail = [];
   const sameModel = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
   for (const t of [...orphans].sort((a, b) => a.startTime - b.startTime)) {
-    const fits = pool.filter(x => !used.has(x.i.id) && sameModel(x.i.model, t.modelId)
+    // Oldest orphan takes the oldest fit: right under any uniform clock skew between this device and WaveSpeed (a
+    // "prefer created after the start" rule swapped same-model siblings when the device clock ran ahead). Leftovers of
+    // deleted or cancelled tasks never get here: they are in `owned` (released ids, cloud ids).
+    const hit = pool.find(x => !used.has(x.i.id) && sameModel(x.i.model, t.modelId)
       && x.at >= t.startTime - LOOKUP_SKEW_MS && x.at <= t.startTime + ORPHAN_GRACE_MS);
-    // Its own prediction is created after it started. The pre-start skew (a device clock running ahead) is only a
-    // fallback, and then the closest to the start wins, never an older leftover from a task just before it.
-    const hit = fits.find(x => x.at >= t.startTime) || fits[fits.length - 1];
     if (hit) {
       used.add(hit.i.id);
       adopt.push({ ...t, status: "processing", taskId: hit.i.id, pollUrl: hit.i.urls?.get || pollUrlFor({ taskId: hit.i.id }) });
