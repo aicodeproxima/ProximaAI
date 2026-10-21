@@ -614,6 +614,22 @@ export async function deleteBackup(id) {
   } catch { return false; }
 }
 
+// The "Automatic backups" switch (migration 20261021171500; off by default). While off, the 2-day job, the app's
+// pre-* snapshots and the restore's safety snapshot take no copy, so a delete leaves nothing recoverable. null = unknown
+// (read failed): callers must treat that as "do not assume a backup exists".
+export async function getAutoBackups() {
+  try { return !!(await sessionRpc("get_auto_backups")); } catch { return null; }
+}
+export async function setAutoBackups(enabled) {
+  return !!(await sessionRpc("set_auto_backups", { p_enabled: !!enabled }));
+}
+// Removes deleted generations (task ids), their History entries (log ids) and their items from existing backups.
+export async function purgeMyBackupsOf(taskIds, logIds) {
+  const r = await sessionRpc("purge_my_backups_of", { p_task_ids: taskIds || [], p_log_ids: logIds || [] });
+  if (!r?.ok) throw new Error("Backup purge failed");
+  return r;
+}
+
 // ─── Sign-in and account (server-side; bcrypt; 3 failed sign-ins lock it until a backup code unlocks) ───
 
 // Returns the server's answer: { ok, token, expires_at, username, rehash_required } or
