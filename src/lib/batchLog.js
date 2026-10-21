@@ -47,6 +47,29 @@ export function finishLogs(logs, tasks, now) {
   return out;
 }
 
+// "Delete means delete" (owner, 2026-10-21): deleting generations removes their History too. An entry whose batch has
+// no generation left is removed; one that keeps some loses only the deleted items (cost recomputed). Items carry
+// task ids since 2026-10-20; older entries are matched by batch (entry id = batch id) and, when partly kept, by output
+// URL. `removeEntries: false` (another device's delete arriving by sync) only drops items: the deleting device removes
+// whole entries, and that reaches here by tombstone.
+export function purgeLogsForDeleted(logs, removedTasks, keptTasks, { removeEntries = true } = {}) {
+  const removedIds = new Set(removedTasks.map(t => t.id));
+  const removedOutputs = new Set(removedTasks.flatMap(t => t.outputs || []));
+  const removedBatches = new Set(removedTasks.map(t => t.batchId).filter(Boolean));
+  const keptBatches = new Set(keptTasks.map(t => t.batchId).filter(Boolean));
+  const remove = [], rewrite = [];
+  for (const log of logs) {
+    const items = Array.isArray(log.tasks) ? log.tasks : [];
+    const hit = removedBatches.has(log.id) || items.some(i => i?.id && removedIds.has(i.id));
+    if (!hit) continue;
+    if (removeEntries && !keptBatches.has(log.id)) { remove.push(log.id); continue; }
+    const left = items.filter(i => i?.id ? !removedIds.has(i.id) : !(i?.outputs || []).some(o => removedOutputs.has(o)));
+    if (removeEntries && left.length === 0) { remove.push(log.id); continue; }
+    if (left.length !== items.length) rewrite.push({ ...log, tasks: left, totalCost: totalOf(left) });
+  }
+  return { remove, rewrite };
+}
+
 // Entries still open here whose cloud copy another device already finished: that outcome wins (merged over the local
 // entry, which keeps fields the cloud row does not store, such as the source audio and video URLs replay uses). A
 // stale local copy would otherwise close or finish the entry from its own out-of-date tasks and overwrite the cloud.

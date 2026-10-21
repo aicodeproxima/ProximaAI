@@ -10,7 +10,7 @@
 // Queue: {predictionId: {at, attempts, next, running}}. A dedicated queue, not the 200-entry failed-sync queue, so a
 // mass delete never evicts pending uploads.
 
-import { pollErrorAction } from "./taskResume.js";
+import { pollErrorAction, isRecoverableFailure } from "./taskResume.js";
 
 export const WS_DELETE_CHUNK = 50;               // ids per request (WaveSpeed states no maximum)
 export const RUNNING_RETRY_MS = 10 * 60 * 1000;  // a prediction still running when deleted: ask again after this
@@ -18,12 +18,15 @@ export const MAX_RUNNING_ATTEMPTS = 6;           // ~1 h of retries for one that
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 const IN_FLIGHT = new Set(["pending", "processing"]);
 
-// Adds the prediction ids of deleted tasks. A task never submitted has no id and nothing to delete on WaveSpeed.
+// Adds the prediction ids of deleted tasks. A task never submitted has no id and nothing to delete on WaveSpeed. One
+// may still be running there although the app shows it failed: Cancel only stops the app's poll, and a lost
+// connection leaves WaveSpeed generating (review wf_9d0e3664-ab7 #2), so those are retried like running ones.
 export function queueDeletes(queue, tasks, now) {
   const out = { ...(queue || {}) };
   for (const t of tasks) {
     if (!t?.taskId || out[t.taskId]) continue;
-    out[t.taskId] = { at: now, attempts: 0, next: now, running: IN_FLIGHT.has(t.status) };
+    const running = IN_FLIGHT.has(t.status) || t.error === "Cancelled" || isRecoverableFailure(t, now);
+    out[t.taskId] = { at: now, attempts: 0, next: now, running };
   }
   return out;
 }

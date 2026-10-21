@@ -115,7 +115,7 @@ export function planOrphans(orphans, items, owned, now, claimants = [], { answer
     // A prediction deleted on WaveSpeed stays in its history as "deleted" (no outputs): never adopt it.
     .filter(x => x.i?.id && !owned.has(x.i.id) && Number.isFinite(x.at) && x.i.status !== "deleted")
     .sort((a, b) => a.at - b.at);
-  const used = new Set(), adopt = [], fail = [], claimed = [], resolved = [];
+  const used = new Set(), adopt = [], fail = [], claimed = [], resolved = [], claims = [];
   const model = (m) => String(m || "").toLowerCase();
   const inWindow = (x, t) => x.at >= t.startTime - LOOKUP_SKEW_MS && x.at <= t.startTime + ORPHAN_GRACE_MS;
   const groups = new Map();
@@ -147,7 +147,7 @@ export function planOrphans(orphans, items, owned, now, claimants = [], { answer
         const hit = claim && !withClaimants ? null : fits.find(x => !used.has(x.i.id) && inWindow(x, t));
         if (hit) used.add(hit.i.id);
         if (claim) {
-          if (hit) { claimed.push(hit.i.id); resolved.push(t.id); }
+          if (hit) { claimed.push(hit.i.id); resolved.push(t.id); claims.push({ claimantId: t.id, predictionId: hit.i.id, deleted: !!t.deleted }); }
           else if (closed(t) && didAnswer(t)) resolved.push(t.id);   // its window closed and answered with nothing: done
           continue;
         }
@@ -156,18 +156,20 @@ export function planOrphans(orphans, items, owned, now, claimants = [], { answer
       }
     }
   }
-  return { adopt, fail, claimed, resolved };
+  return { adopt, fail, claimed, resolved, claims };
 }
 
 // Claimants kept across reloads, as {taskId: {modelId, startTime, at}}; an hour, like released ids.
-export function rememberClaimants(map, tasks, now) {
+// `deleted`: the claimant was deleted (Clear Outputs / Reset Everything), not just cancelled: its prediction is then
+// deleted on WaveSpeed as well once it turns up.
+export function rememberClaimants(map, tasks, now, { deleted = false } = {}) {
   const out = {};
   for (const [id, c] of Object.entries(map || {})) if (now - c.at <= RELEASED_TTL_MS) out[id] = c;
-  for (const t of tasks) if (t?.id) out[t.id] = { modelId: t.modelId, startTime: t.startTime, at: now };
+  for (const t of tasks) if (t?.id) out[t.id] = { modelId: t.modelId, startTime: t.startTime, at: now, deleted: !!deleted };
   return out;
 }
 export const liveClaimants = (map, now) => Object.entries(map || {}).filter(([, c]) => now - c.at <= RELEASED_TTL_MS)
-  .map(([id, c]) => ({ id, modelId: c.modelId, startTime: c.startTime }));
+  .map(([id, c]) => ({ id, modelId: c.modelId, startTime: c.startTime, deleted: !!c.deleted }));
 export function dropClaimants(map, ids) {
   const out = { ...(map || {}) };
   for (const id of ids) delete out[id];

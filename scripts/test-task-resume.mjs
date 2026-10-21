@@ -444,6 +444,18 @@ test("a claimant whose window is still open and has no prediction yet stays", ()
   assert.deepEqual(r.resolved, []);
 });
 
+// Review wf_9d0e3664-ab7 #3: a claimant from Clear Outputs / Reset Everything is a DELETED generation; when its
+// prediction turns up it must be deleted on WaveSpeed too (a plain Cancel's claimant is not: cancel is not delete).
+test("a claim says which claimant took which prediction, and whether that claimant was deleted", () => {
+  const map = rememberClaimants({}, [claimant("C", NOW - 70_000)], NOW, { deleted: true });
+  const [c] = liveClaimants(map, NOW);
+  assert.equal(c.deleted, true);
+  const r = planOrphans([orphan("O", { startTime: NOW - 60_000 })],
+    [item("Pc", { created_at: new Date(NOW - 69_000).toISOString() }), item("Po", { created_at: new Date(NOW - 59_000).toISOString() })], new Set(), NOW, [c]);
+  assert.deepEqual(r.claims, [{ claimantId: "C", predictionId: "Pc", deleted: true }]);
+  assert.equal(liveClaimants(rememberClaimants({}, [claimant("K", NOW)], NOW), NOW)[0].deleted, false, "a cancel's claimant");
+});
+
 test("claimants are kept an hour and dropped once resolved", () => {
   let m = rememberClaimants({}, [claimant("A", NOW - 1000), { id: "noModel", startTime: NOW }], NOW);
   assert.deepEqual(liveClaimants(m, NOW + 59 * 60_000).map(c => c.id), ["A", "noModel"]);

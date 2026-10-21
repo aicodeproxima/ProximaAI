@@ -445,9 +445,10 @@ export const writeWsDeletes = (q) => { try { localStorage.setItem(WS_DELETES_KEY
 const CLAIMANTS_KEY = "proximaai-orphan-claimants";
 const readClaimants = () => { try { return JSON.parse(localStorage.getItem(CLAIMANTS_KEY) || "{}") || {}; } catch { return {}; } };
 const writeClaimants = (m) => { try { localStorage.setItem(CLAIMANTS_KEY, JSON.stringify(m)); } catch {} };
-export function recordClaimants(tasks) {
+// `deleted: true` for Clear Outputs / Reset Everything: the claimant's prediction is then deleted on WaveSpeed too.
+export function recordClaimants(tasks, opts) {
   const list = (tasks || []).filter(t => t?.status === "pending" && !t.taskId);
-  if (list.length) writeClaimants(rememberClaimants(readClaimants(), list, Date.now()));
+  if (list.length) writeClaimants(rememberClaimants(readClaimants(), list, Date.now(), opts));
 }
 export const storedClaimants = () => liveClaimants(readClaimants(), Date.now());
 export function resolveClaimants(ids) { if (ids?.length) writeClaimants(dropClaimants(readClaimants(), ids)); }

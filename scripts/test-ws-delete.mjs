@@ -17,6 +17,14 @@ test("deleted generations are queued by prediction id, running ones marked; task
   assert.deepEqual([q.p1.running, q.p2.running, q.p1.next], [false, true, NOW]);
 });
 
+// Review wf_9d0e3664-ab7 #2: Cancel only stops the app's poll; WaveSpeed keeps generating. A cancelled (or
+// connection-lost) task deleted right after is still running there, so it must be retried, not dropped as skipped.
+test("a cancelled or connection-lost generation counts as possibly still running on WaveSpeed", () => {
+  const q = queueDeletes({}, [{ taskId: "c", status: "failed", error: "Cancelled" }, { taskId: "n", status: "failed", error: "Failed to fetch", startTime: NOW - 60_000 },
+    { taskId: "f", status: "failed", error: "Generation failed" }], NOW);
+  assert.deepEqual([q.c.running, q.n.running, q.f.running], [true, true, false]);
+});
+
 test("due ids come in chunks the endpoint accepts, never one that is waiting", () => {
   const tasks = Array.from({ length: WS_DELETE_CHUNK + 7 }, (_, i) => ({ taskId: `p${i}`, status: "completed" }));
   let q = queueDeletes({}, tasks, NOW);

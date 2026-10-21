@@ -10,12 +10,13 @@ import { getSession, setSession, clearSession, onSessionExpired } from "./lib/se
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes } from "./lib/storage.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, purgeMyBackupsOf } from "./lib/supabase.js";
+import { storagePathsToDelete } from "./lib/purge.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud } from "./lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -1473,6 +1474,14 @@ export default function ProximaApp() {
   const [backups, setBackups] = useState([]);
   const [showBackupsPanel, setShowBackupsPanel] = useState(false);
   const [backupsReloading, setBackupsReloading] = useState(false);
+  // "Automatic backups" switch (server-side, off by default; supabase.js getAutoBackups). null = not read yet.
+  const [autoBackups, setAutoBackupsState] = useState(null);
+  useEffect(() => {
+    if (!isAuthed) { setAutoBackupsState(null); return; }
+    let live = true;
+    getAutoBackups().then(v => { if (live) setAutoBackupsState(v); });
+    return () => { live = false; };
+  }, [isAuthed]);
 
   // Track any in-flight cloud write (lets the floating save button show live status)
   const markWriteStart = useCallback((key) => {
@@ -1860,7 +1869,7 @@ export default function ProximaApp() {
       const logsFromCloud = takeFinishedFromCloud(logsRef.current, remote.history || []).filter(l => !deletingLogIds.current.has(l.id));
       if (logsFromCloud.length) {
         const byId = new Map(logsFromCloud.map(l => [l.id, l]));
-        logsRef.current = logsRef.current.map(l => byId.get(l.id) || l); // closeLogsFor below reads the ref
+        logsRef.current = logsRef.current.map(l => byId.get(l.id) || l); // dropLogItemsFor below reads the ref
         setLogs(prev => prev.map(l => byId.get(l.id) || l));
         for (const l of logsFromCloud) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
       }
@@ -1895,7 +1904,7 @@ export default function ProximaApp() {
           // one stops polling here. Their prediction ids are released (no lost submit may adopt them).
           const removedHere = tasksRef.current.filter(t => rmTasks.has(t.id));
           releasePredictions(removedHere.map(t => t.taskId));
-          closeLogsFor(removedHere);
+          dropLogItemsFor(removedHere);
           for (const id of rmTasks) {
             savedTaskIds.current.delete(id); removeFailedSync("task", id);
             clearTimeout(pollRefs.current[id]); delete pollRefs.current[id];
@@ -1970,12 +1979,16 @@ export default function ProximaApp() {
       .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
   }, [trackedSync]);
 
-  // Tasks being deleted close their items in open History entries with their last state (batchLog.js), so an entry
-  // never waits 48 h for a task that is gone.
-  const closeLogsFor = useCallback((removed) => {
-    const changed = closeRemovedItems(logsRef.current, removed).filter(l => !deletingLogIds.current.has(l.id));
+  // Generations deleted on another device: their items leave this device's History entries too ("delete means delete").
+  // The deleting device removes whole entries, which reach here by tombstone (batchLog.js purgeLogsForDeleted).
+  const dropLogItemsFor = useCallback((removed) => {
+    const gone = new Set(removed.map(t => t.id));
+    const kept = tasksRef.current.filter(t => !gone.has(t.id));
+    const { rewrite } = purgeLogsForDeleted(logsRef.current, removed, kept, { removeEntries: false });
+    const changed = rewrite.filter(l => !deletingLogIds.current.has(l.id));
     if (!changed.length) return;
     const byId = new Map(changed.map(l => [l.id, l]));
+    logsRef.current = logsRef.current.map(l => byId.get(l.id) || l);
     setLogs(prev => prev.map(l => byId.get(l.id) || l));
     for (const l of changed) persistLog(l);
   }, [persistLog]);
@@ -2172,7 +2185,10 @@ export default function ProximaApp() {
     if (!predictionId) return;
     releasePredictions([predictionId]);
     const cur = tasksRef.current.find(t => t.id === id);
-    if (!cur || cur.taskId) return;
+    // Deleted (or cleared) while its submit was on the wire: delete the prediction on WaveSpeed too. A task that was only
+    // cancelled is still here and keeps its result there (cancel is not delete). Review wf_9d0e3664-ab7 #3.
+    if (!cur) { deleteOnWaveSpeed([{ taskId: predictionId, status: "processing" }]); return; }
+    if (cur.taskId) return;
     setTasks(prev => prev.map(t => t.id === id && !t.taskId ? { ...t, taskId: predictionId } : t));
     saveTask({ ...cur, taskId: predictionId });
   }
@@ -2214,9 +2230,12 @@ export default function ProximaApp() {
         cloudOwned.push(...ids);
       }
       const owned = new Set([...tasksRef.current.map(t => t.taskId).filter(Boolean), ...releasedPredictions(), ...cloudOwned]);
-      const { adopt, fail, claimed, resolved } = planOrphans(orphans, items, owned, Date.now(), claimants, { answeredFor });
+      const { adopt, fail, claimed, resolved, claims } = planOrphans(orphans, items, owned, Date.now(), claimants, { answeredFor });
       releasePredictions(claimed);
       resolveClaimants(resolved);
+      // A claimant from Clear Outputs / Reset Everything was deleted: its prediction goes on WaveSpeed too.
+      const deletedClaims = claims.filter(c => c.deleted).map(c => ({ taskId: c.predictionId, status: "processing" }));
+      if (deletedClaims.length) deleteOnWaveSpeed(deletedClaims);
       const decided = new Map([...adopt, ...fail].map(t => [t.id, t]));
       if (!decided.size) return;
       // Only a task still waiting takes the outcome (not one cancelled while the lookup ran).
@@ -2266,6 +2285,46 @@ export default function ProximaApp() {
     writeWsDeletes(queueDeletes(readWsDeletes(), removed, Date.now()));
     flushWsDeletes();
   }, [flushWsDeletes]);
+
+  // ─── DELETE MEANS DELETE (owner, 2026-10-21: "literally everything as far as can be reached should be deleted and
+  // unrecoverable") ───
+  // Called by bulk delete, Clear Outputs and Reset Everything after they removed the rows here and in the cloud. It
+  // removes what else holds those generations: WaveSpeed's copy (wsDelete.js), their History entries or items
+  // (batchLog.js purgeLogsForDeleted), their archived and uploaded files no kept generation uses (purge.js) and, when
+  // no safety backup was taken (Automatic backups off), any copy in existing backups (purge_my_backups_of).
+  // `history: false` + `alsoLogs`: the caller clears History itself (Reset Everything) and passes the entries it removed,
+  // so their files and backup copies go too.
+  const purgeEverywhere = useCallback(async (removed, kept, { backupTaken, history = true, alsoLogs = [] } = {}) => {
+    if (!removed.length && !alsoLogs.length) return;
+    deleteOnWaveSpeed(removed);
+    const alsoIds = new Set(alsoLogs.map(l => l.id));
+    let keptLogs = logsRef.current.filter(l => !alsoIds.has(l.id));
+    const goneLogs = [...alsoLogs];
+    if (history) {
+      const { remove, rewrite } = purgeLogsForDeleted(logsRef.current, removed, kept);
+      const gone = new Set(remove), byId = new Map(rewrite.map(l => [l.id, l]));
+      goneLogs.push(...logsRef.current.filter(l => gone.has(l.id)));
+      keptLogs = logsRef.current.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l);
+      logsRef.current = keptLogs;
+      setLogs(prev => prev.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l));
+      for (const l of rewrite) persistLog(l);
+      if (remove.length) {
+        for (const id of remove) {
+          deletingLogIds.current.add(id); savedLogIds.current.delete(id); removeFailedSync("history", id);
+          addFailedSync({ kind: "history-delete", id, data: id });
+        }
+        await deleteHistoryEntries(remove);
+        const hr = await deleteHistoryRemote(remove);
+        if (hr?.ok) for (const id of remove) removeFailedSync("history-delete", id);
+      }
+    }
+    const paths = storagePathsToDelete([...removed, ...goneLogs], kept, keptLogs);
+    if (paths.length) {
+      Promise.allSettled(paths.map(p => deleteArchivedPath(p))).then(() => getArchiveStats().then(s => setArchiveStats(s)));
+    }
+    if (!backupTaken) purgeMyBackupsOf(removed.map(t => t.id), goneLogs.map(l => l.id)).catch(e => console.warn("[delete] backup scrub failed", e));
+    setFailedSyncCount(getFailedSyncs().length);
+  }, [deleteOnWaveSpeed, persistLog]);
   useEffect(() => {
     if (!isAuthed || keyBlocked) return;
     flushWsDeletes();
@@ -2890,15 +2949,15 @@ export default function ProximaApp() {
     if (targets.length === 0) { exitSelectMode(); return; }
     const n = targets.length;
     const noun = n === 1 ? "1 generation" : `${n} generations`;
-    if (!confirm(`Delete ${noun}? This removes ${n === 1 ? "it" : "them"} from this device and the cloud.\n\nA safety backup is taken first, so you can restore from Settings → Cloud Backups.`)) return;
+    if (!confirm(`Delete ${noun}? This removes ${n === 1 ? "it" : "them"} everywhere: this device, the cloud, WaveSpeed, its files and its History.\n\n${autoBackups ? "Automatic backups is on: a safety backup is taken first, so you can restore from Settings → Cloud Backups." : "This is permanent: nothing can restore it (Automatic backups is off)."}`)) return;
     const ids = targets.map(t => t.id);
     setBulkDeleting(true);
     setSaveStatus("saving");
     // 0. Mark these ids as deleting BEFORE any await, so the debounced persistence effect,
     //    the unload flush, forceSaveAll and the mount replay all refuse to re-upload them.
     for (const id of ids) deletingIds.current.add(id);
-    // 1. Pre-destructive snapshot (HARD RULE). If the backup can't be confirmed, abort the
-    //    delete entirely — never destroy data without a recovery point, and never claim one.
+    // 1. Safety snapshot while Automatic backups is on (the server skips it when off: ok without an id). If an
+    //    expected backup can't be confirmed, abort: never destroy data without the recovery point the owner chose.
     const bk = await createBackup("pre-bulk-delete", `Before deleting ${noun}`);
     if (!bk?.ok) {
       for (const id of ids) deletingIds.current.delete(id);
@@ -2918,20 +2977,14 @@ export default function ProximaApp() {
     // 4. Optimistic local removal from React state. Their prediction ids are released, so a lost submit of the same
     //    model never adopts a deleted task's result.
     releasePredictions(targets.map(t => t.taskId));
-    deleteOnWaveSpeed(targets); // and on WaveSpeed's servers (after the safety backup above)
-    closeLogsFor(targets);
     setTasks(prev => prev.filter(t => !idSet.has(t.id)));
     // 5. Local IndexedDB delete (single transaction, awaited).
     await deleteTasks(ids);
     // 6. Cloud delete (batched, device-scoped). On success, clear the replay intents.
     const r = await deleteTasksRemote(ids);
     if (r.ok) for (const id of ids) removeFailedSync("task-delete", id);
-    // 7. Best-effort cleanup of any cloud-archived storage objects these tasks owned.
-    const paths = targets.flatMap(t => t.archivedPaths || []).filter(Boolean);
-    if (paths.length) {
-      Promise.allSettled(paths.map(p => deleteArchivedPath(p)))
-        .then(() => getArchiveStats().then(s => setArchiveStats(s)));
-    }
+    // 7. Everywhere else: WaveSpeed, History, archived and uploaded files, backup copies (purgeEverywhere).
+    await purgeEverywhere(targets, tasksRef.current.filter(t => !idSet.has(t.id)), { backupTaken: !!bk.id });
     // 8. Refresh counters + status (honest: only say "done" when the cloud delete confirmed).
     setFailedSyncCount(getFailedSyncs().length);
     getStorageStats().then(s => setStorageStats(s));
@@ -2939,7 +2992,7 @@ export default function ProximaApp() {
     exitSelectMode();
     if (r.ok) {
       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
-      setAccountToast(`Deleted ${noun} — safety backup saved`);
+      setAccountToast(bk.id ? `Deleted ${noun} — safety backup saved` : `Deleted ${noun} permanently, everywhere`);
     } else {
       setSaveStatus("error");
       setAccountToast(`Removed ${noun} locally — the cloud delete will finish on your next save or reload`);
@@ -3045,7 +3098,7 @@ export default function ProximaApp() {
     exitLogSelectMode();
     if (r.ok) {
       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
-      setAccountToast(`Deleted ${noun} — safety backup saved`);
+      setAccountToast(bk.id ? `Deleted ${noun} — safety backup saved` : `Deleted ${noun} permanently`);
     } else {
       setSaveStatus("error");
       setAccountToast(`Removed ${noun} locally — the cloud delete will finish on your next save or reload`);
@@ -4244,36 +4297,66 @@ export default function ProximaApp() {
                   )}
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
-                      if (!confirm("Clear all generation logs? (local + cloud)\n\nA safety backup will be created first so you can restore it from the Backups panel.")) return;
+                      if (!confirm(`Clear all generation logs? (local + cloud)\n\n${autoBackups ? "Automatic backups is on: a safety backup is taken first so you can restore it from the Backups panel." : "This is permanent (Automatic backups is off)."}`)) return;
                       setSaveStatus("saving");
-                      await createBackup("pre-clear-logs", "Before Clear Logs");
+                      const bk = await createBackup("pre-clear-logs", "Before Clear Logs");
+                      if (!bk?.ok) {
+                        setSaveStatus("error");
+                        setAccountToast(`Couldn't create the safety backup (${bk?.error || "unknown error"}) — nothing was deleted.`);
+                        setTimeout(() => setAccountToast(""), 6000);
+                        return;
+                      }
                       setLogs([]); savedLogIds.current.clear();
                       await clearHistory();
                       await clearHistoryRemote();
                       getStorageStats().then(s => setStorageStats(s));
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
-                      setAccountToast("Logs cleared — safety backup saved");
+                      setAccountToast(bk.id ? "Logs cleared — safety backup saved" : "Logs cleared permanently");
                       setTimeout(() => setAccountToast(""), 5000);
                     }}>Clear Logs</button>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
-                      if (!confirm("Clear all saved outputs? (local + cloud)\n\nA safety backup will be created first so you can restore it from the Backups panel.")) return;
+                      if (!confirm(`Clear ALL generations? They are removed everywhere: this device, the cloud, WaveSpeed, their files and their History.\n\n${autoBackups ? "Automatic backups is on: a safety backup is taken first, so you can restore it from the Backups panel." : "This is permanent: nothing can restore them (Automatic backups is off)."}`)) return;
                       setSaveStatus("saving");
-                      await createBackup("pre-clear-outputs", "Before Clear Outputs");
-                      releasePredictions(tasksRef.current.map(t => t.taskId)); recordClaimants(tasksRef.current);
-                      deleteOnWaveSpeed(tasksRef.current);
-                      closeLogsFor(tasksRef.current);
+                      // A backup the owner chose (switch on) must exist before anything is destroyed (review wf_9d0e3664-ab7 #1).
+                      const bk = await createBackup("pre-clear-outputs", "Before Clear Outputs");
+                      if (!bk?.ok) {
+                        setSaveStatus("error");
+                        setAccountToast(`Couldn't create the safety backup (${bk?.error || "unknown error"}) — nothing was deleted.`);
+                        setTimeout(() => setAccountToast(""), 6000);
+                        return;
+                      }
+                      // Every generation this account has: here and those only in the cloud.
+                      const remote = await pullAllRemoteData().catch(() => null);
+                      const all = new Map(tasksRef.current.map(t => [t.id, t]));
+                      for (const t of remote?.tasks || []) if (!all.has(t.id)) all.set(t.id, t);
+                      const removed = [...all.values()];
+                      releasePredictions(removed.map(t => t.taskId)); recordClaimants(removed, { deleted: true });
                       setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
+                      await purgeEverywhere(removed, [], { backupTaken: !!bk.id });
                       getStorageStats().then(s => setStorageStats(s));
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
-                      setAccountToast("Outputs cleared — safety backup saved");
+                      setAccountToast(bk.id ? "Generations cleared — safety backup saved" : "Generations cleared permanently, everywhere");
                       setTimeout(() => setAccountToast(""), 5000);
                     }}>Clear Outputs</button>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
-                      if (!confirm("Clear ALL data? This removes everything locally AND from the cloud.\n\nA full safety backup will be created first so you can restore it from the Backups panel.")) return;
+                      if (!confirm(`Clear ALL data? This removes everything: this device, the cloud, WaveSpeed, all files and all History.\n\n${autoBackups ? "Automatic backups is on: a full safety backup is taken first, so you can restore it from the Backups panel." : "This is permanent: nothing can restore it (Automatic backups is off)."}`)) return;
                       setSaveStatus("saving");
-                      // Full pre-destructive snapshot
+                      // A backup the owner chose (switch on) must exist before anything is destroyed (review wf_9d0e3664-ab7 #1).
                       try { await favoriteSyncChainRef.current; } catch {}
-                      await createBackup("pre-reset", "Before Reset Everything");
+                      const bk = await createBackup("pre-reset", "Before Reset Everything");
+                      if (!bk?.ok) {
+                        setSaveStatus("error");
+                        setAccountToast(`Couldn't create the safety backup (${bk?.error || "unknown error"}) — nothing was deleted.`);
+                        setTimeout(() => setAccountToast(""), 6000);
+                        return;
+                      }
+                      // Everything this account has, here and only in the cloud: the purge needs it after the clears below.
+                      const remote = await pullAllRemoteData().catch(() => null);
+                      const allTasks = new Map(tasksRef.current.map(t => [t.id, t]));
+                      for (const t of remote?.tasks || []) if (!allTasks.has(t.id)) allTasks.set(t.id, t);
+                      const allLogs = new Map(logsRef.current.map(l => [l.id, l]));
+                      for (const l of remote?.history || []) if (!allLogs.has(l.id)) allLogs.set(l.id, l);
+                      const removedTasks = [...allTasks.values()], removedLogs = [...allLogs.values()];
                       // Clear local state
                       const favoriteScope = getDeviceId();
                       const emptyFavorites = emptyModelFavorites();
@@ -4283,8 +4366,7 @@ export default function ProximaApp() {
                       setSelectedModels([]);
                       removeFailedSync("model-favorites", favoriteScope);
                       await setSetting(localModelFavoritesKey(favoriteScope), createModelFavoritesSetting(emptyFavorites, favoriteModelsUpdatedAtRef.current));
-                      releasePredictions(tasksRef.current.map(t => t.taskId)); recordClaimants(tasksRef.current);
-                      deleteOnWaveSpeed(tasksRef.current);
+                      releasePredictions(removedTasks.map(t => t.taskId)); recordClaimants(removedTasks, { deleted: true });
                       setLogs([]); setTasks([]);
                       savedLogIds.current.clear();
                       savedTaskIds.current.clear();
@@ -4300,11 +4382,13 @@ export default function ProximaApp() {
                         clearSettingsRemote(),
                         clearFavoritesRemote(),
                       ]);
+                      // Everywhere else: WaveSpeed, all files, backup copies (History was cleared above).
+                      await purgeEverywhere(removedTasks, [], { backupTaken: !!bk.id, history: false, alsoLogs: removedLogs });
                       // Clear local settings
                       setBalance(null);
                       getStorageStats().then(s => setStorageStats(s));
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
-                      setAccountToast("Everything cleared — safety backup saved");
+                      setAccountToast(bk.id ? "Everything cleared — safety backup saved" : "Everything cleared permanently, everywhere");
                       setTimeout(() => setAccountToast(""), 5000);
                     }}>Reset Everything</button>
                   </div>
@@ -4336,6 +4420,39 @@ export default function ProximaApp() {
                         setShowBackupsPanel(v => !v);
                       }}>{showBackupsPanel ? "Hide" : "View"} ({backups.length || "·"})</button>
                     </div>
+                  </div>
+
+                  {/* Automatic backups switch (server-side, off by default; owner, 2026-10-21). Manual snapshots above
+                      always work; this covers the 2-day job and the safety copies before deletes, clears and restores. */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "6px 0 12px" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, color: "var(--text-primary)" }}>Automatic backups</div>
+                      <div className="setting-hint" style={{ marginTop: 2 }}>
+                        {autoBackups === null ? "Checking…"
+                          : autoBackups ? "On: a safety copy before every delete, clear or restore, and every 2 days. Deleted generations can be restored."
+                          : "Off: nothing is copied. Deleting is final everywhere: this device, the cloud, WaveSpeed and backups."}
+                      </div>
+                    </div>
+                    <button type="button" role="switch" aria-checked={!!autoBackups} aria-label="Automatic backups" disabled={autoBackups === null}
+                      onClick={async () => {
+                        const next = !autoBackups;
+                        try {
+                          const v = await setAutoBackups(next);
+                          setAutoBackupsState(v);
+                          setAccountToast(v ? "Automatic backups on" : "Automatic backups off — deletes are now final");
+                        } catch (e) {
+                          setAccountToast("Couldn't change Automatic backups: " + (e?.message || "unknown error"));
+                        }
+                        setTimeout(() => setAccountToast(""), 4000);
+                      }}
+                      style={{ flex: "0 0 auto", width: 56, height: 44, display: "flex", alignItems: "center", justifyContent: "center",
+                        background: "transparent", border: "none", cursor: autoBackups === null ? "default" : "pointer", padding: 0 }}>
+                      <span aria-hidden="true" style={{ width: 44, height: 24, borderRadius: 12, position: "relative", transition: "background 0.2s",
+                        background: autoBackups ? "var(--accent)" : "rgba(148,163,184,0.35)", opacity: autoBackups === null ? 0.5 : 1 }}>
+                        <span style={{ position: "absolute", top: 2, left: autoBackups ? 22 : 2, width: 20, height: 20, borderRadius: 10,
+                          background: "#fff", transition: "left 0.2s" }} />
+                      </span>
+                    </button>
                   </div>
 
                   {/* Sync & Backup status strip */}
