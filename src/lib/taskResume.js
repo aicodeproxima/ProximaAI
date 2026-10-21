@@ -112,7 +112,8 @@ export function planOrphans(orphans, items, owned, now, claimants = [], { answer
   // created_at carries nanoseconds ("2025-05-19T06:09:15.948268264Z"); trimmed to ms so every engine parses it.
   const pool = items
     .map(i => ({ i, at: Date.parse(String(i?.created_at || "").replace(/(\.\d{3})\d+/, "$1")) }))
-    .filter(x => x.i?.id && !owned.has(x.i.id) && Number.isFinite(x.at))
+    // A prediction deleted on WaveSpeed stays in its history as "deleted" (no outputs): never adopt it.
+    .filter(x => x.i?.id && !owned.has(x.i.id) && Number.isFinite(x.at) && x.i.status !== "deleted")
     .sort((a, b) => a.at - b.at);
   const used = new Set(), adopt = [], fail = [], claimed = [], resolved = [];
   const model = (m) => String(m || "").toLowerCase();

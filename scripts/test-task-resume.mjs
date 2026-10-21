@@ -466,6 +466,13 @@ test("released prediction ids (deleted tasks) are remembered for an hour, then f
   assert.deepEqual(Object.keys(rememberReleased(map, ["p3"], NOW + 61 * 60_000)), ["p3"], "old entries pruned on write");
 });
 
+// A prediction deleted on WaveSpeed (from this app or WaveSpeed's site) stays in its history with status "deleted" and
+// no outputs; it must never be adopted, so it never shows up here.
+test("a lost submit never adopts a prediction WaveSpeed lists as deleted", () => {
+  const { adopt } = planOrphans([orphan("o")], [item("gone", { status: "deleted" }), item("own", { created_at: new Date(NOW - 57_000).toISOString() })], new Set(), NOW);
+  assert.equal(adopt[0]?.taskId, "own");
+});
+
 test("a failed submit may have reached WaveSpeed on a network drop, timeout or 5xx, never on a refusal", () => {
   assert.equal(submitMayHaveLanded(new TypeError("Failed to fetch")), true, "the phone left the app mid-submit");
   assert.equal(submitMayHaveLanded(new DOMException("signal timed out", "TimeoutError")), true, "numeric legacy .code is not an HTTP status");
