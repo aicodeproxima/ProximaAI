@@ -24,7 +24,8 @@ Auto-loaded when any Claude session works in this repo.
 4. Summarize what shipped + why
 
 Vercel deploys itself in ~30s. **Never run `npm run dev` or local preview** — user
-tests on the live URL. User's primary device is a 6.7" iPhone Pro Max (19.5:9).
+tests on the live URL. User's primary device is a Galaxy S24 Ultra, measured at 384×782 CSS px (DPR 3.75);
+check 384 first, 412 second. Chrome on it freezes the app in the background and kills its sockets.
 
 ## Supabase management — direct SQL when needed
 - Management API endpoint: `https://api.supabase.com/v1/projects/vhznmpxlcjbdzntmfvvy/database/query`
