@@ -95,6 +95,23 @@ export async function listPredictions({ after, before }) {
   return items;
 }
 
+// Deletes finished predictions on WaveSpeed (POST /api/v3/predictions/delete), so a generation deleted in the app is
+// gone there too. Returns the ids WaveSpeed deleted now; running, unknown and already-deleted ids it skips silently
+// (wsDelete.js settles those). A malformed answer throws a plain Error, which the queue retries rather than drops.
+export async function deletePredictions(ids) {
+  const res = await wsFetch(`${API_BASE}/predictions/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+    signal: timeoutSignal(POLL_TIMEOUT_MS),
+  });
+  if (!res.ok) throw { code: res.status, message: res.statusText };
+  const json = await res.json();
+  if (typeof json?.code === "number" && json.code !== 200) throw { code: json.code, message: json.message || "Delete refused" };
+  if (!Array.isArray(json?.data?.deleted_ids)) throw new Error("Unexpected delete response");
+  return json.data.deleted_ids;
+}
+
 // keyStatus: "ok" (key works), "missing" (none saved on the server), "invalid" (WaveSpeed rejected it),
 // "unknown" (network/session trouble — don't block generation on it).
 export async function checkBalance() {

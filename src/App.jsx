@@ -4,11 +4,12 @@ import { buildPayload, getEffectiveImageBatchCount, getImageBatchLimit, planImag
 import { requestCost } from "./lib/pricing.js";
 import { draftTask, unitQuote, taskUserSettings } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
-import { submitTask, pollResult, listPredictions, checkBalance, uploadMedia, API_BASE } from "./lib/api.js";
+import { submitTask, pollResult, listPredictions, deletePredictions, checkBalance, uploadMedia, API_BASE } from "./lib/api.js";
+import { queueDeletes, dueDeletes, settleDeletes, failDeletes } from "./lib/wsDelete.js";
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes } from "./lib/storage.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats } from "./lib/supabase.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
@@ -2237,6 +2238,48 @@ export default function ProximaApp() {
     return () => clearInterval(id);
   }, [isAuthed, keyBlocked, recoverOrphans]);
 
+  // ─── DELETES REACH WAVESPEED TOO (rules in wsDelete.js) ───
+  // A generation deleted here (bulk delete, Clear Outputs, Reset Everything) is deleted on WaveSpeed as well. The ids
+  // are queued first and the queue is sent now, on return to the app, when back online and every minute while it
+  // holds anything; each answer settles each id (deleted, skipped, still running, or a transient failure).
+  const wsDeleteRunning = useRef(false);
+  const flushWsDeletes = useCallback(async () => {
+    if (wsDeleteRunning.current) return;
+    wsDeleteRunning.current = true;
+    try {
+      for (const ids of dueDeletes(readWsDeletes(), Date.now())) {
+        try {
+          const deleted = await deletePredictions(ids);
+          writeWsDeletes(settleDeletes(readWsDeletes(), ids, deleted, Date.now()));
+        } catch (e) {
+          writeWsDeletes(failDeletes(readWsDeletes(), ids, e, Date.now()));
+          const ks = keyStatusAfter(e);
+          if (ks) setKeyStatus(ks);
+          if (pollErrorAction(e) !== "fail") break; // network or key trouble: the rest waits for the next pass
+        }
+      }
+    } finally {
+      wsDeleteRunning.current = false;
+    }
+  }, []);
+  const deleteOnWaveSpeed = useCallback((removed) => {
+    writeWsDeletes(queueDeletes(readWsDeletes(), removed, Date.now()));
+    flushWsDeletes();
+  }, [flushWsDeletes]);
+  useEffect(() => {
+    if (!isAuthed || keyBlocked) return;
+    flushWsDeletes();
+    const again = () => { if (document.visibilityState === "visible") flushWsDeletes(); };
+    const id = setInterval(again, 60000);
+    document.addEventListener("visibilitychange", again);
+    window.addEventListener("online", again);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", again);
+      window.removeEventListener("online", again);
+    };
+  }, [isAuthed, keyBlocked, flushWsDeletes]);
+
   // ─── RESUME POLLING for in-flight tasks after refresh/close/OS-kill ───
   // On mount (after auth), load any pending/processing tasks from IndexedDB
   // with their saved pollUrl, inject them into state, and restart their polls.
@@ -2875,6 +2918,7 @@ export default function ProximaApp() {
     // 4. Optimistic local removal from React state. Their prediction ids are released, so a lost submit of the same
     //    model never adopts a deleted task's result.
     releasePredictions(targets.map(t => t.taskId));
+    deleteOnWaveSpeed(targets); // and on WaveSpeed's servers (after the safety backup above)
     closeLogsFor(targets);
     setTasks(prev => prev.filter(t => !idSet.has(t.id)));
     // 5. Local IndexedDB delete (single transaction, awaited).
@@ -4216,6 +4260,7 @@ export default function ProximaApp() {
                       setSaveStatus("saving");
                       await createBackup("pre-clear-outputs", "Before Clear Outputs");
                       releasePredictions(tasksRef.current.map(t => t.taskId)); recordClaimants(tasksRef.current);
+                      deleteOnWaveSpeed(tasksRef.current);
                       closeLogsFor(tasksRef.current);
                       setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
                       getStorageStats().then(s => setStorageStats(s));
@@ -4239,6 +4284,7 @@ export default function ProximaApp() {
                       removeFailedSync("model-favorites", favoriteScope);
                       await setSetting(localModelFavoritesKey(favoriteScope), createModelFavoritesSetting(emptyFavorites, favoriteModelsUpdatedAtRef.current));
                       releasePredictions(tasksRef.current.map(t => t.taskId)); recordClaimants(tasksRef.current);
+                      deleteOnWaveSpeed(tasksRef.current);
                       setLogs([]); setTasks([]);
                       savedLogIds.current.clear();
                       savedTaskIds.current.clear();

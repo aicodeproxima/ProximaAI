@@ -434,6 +434,12 @@ export function releasePredictions(ids) {
 }
 export const releasedPredictions = () => liveReleased(readReleased(), Date.now());
 
+// Prediction deletes waiting to reach WaveSpeed (rules in wsDelete.js). Its own small queue: a mass delete must never
+// evict entries from the 200-entry failed-sync queue.
+const WS_DELETES_KEY = "proximaai-ws-deletes";
+export const readWsDeletes = () => { try { return JSON.parse(localStorage.getItem(WS_DELETES_KEY) || "{}") || {}; } catch { return {}; } };
+export const writeWsDeletes = (q) => { try { localStorage.setItem(WS_DELETES_KEY, JSON.stringify(q || {})); } catch {} };
+
 // Tasks cancelled or cleared before their submit gave a prediction id: the lost-submit lookup pairs them with their
 // prediction so no other task adopts it (taskResume.js planOrphans `claimants`).
 const CLAIMANTS_KEY = "proximaai-orphan-claimants";
