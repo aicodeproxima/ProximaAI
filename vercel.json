@@ -1,10 +1,6 @@
 {
   "rewrites": [
     {
-      "source": "/wavespeed/:path*",
-      "destination": "https://api.wavespeed.ai/:path*"
-    },
-    {
       "source": "/api/wavespeed-v2/:path*",
       "destination": "/api/ws-proxy?p=:path*"
     }
