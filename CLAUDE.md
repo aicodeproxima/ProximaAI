@@ -45,7 +45,12 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
 - **Validate payloads defensively**: `validatePayload()` is the final pass in
   `buildPayload()`. Don't trust the primary path — stale service-worker bundles
   have shipped invalid payloads before (DALL-E "1k" incident, commit 5c32917).
-- **Pre-destructive snapshots**: Clear/Reset buttons always `createBackup("pre-*")` first.
+- **Delete means delete (owner, 2026-10-21)**: deleting generations removes them everywhere the app can reach — this
+  device, the cloud, WaveSpeed (`POST /api/v3/predictions/delete`), their uploaded and archived files, their History,
+  and backup copies — via `purgeEverywhere` in App.jsx. Destructive buttons still call `createBackup("pre-*")` first,
+  but the server only takes it while **Automatic backups** (Settings → Cloud Backups, `app_secrets.auto_backups`) is
+  ON; it is OFF by the owner's choice. When ON, a failed backup aborts the delete. Never add a copy of deleted data
+  anywhere without going through that switch.
 - **Back-button trap**: PWA must not exit on Android back gesture (kills in-flight polls).
 
 ## Transparency + theming
