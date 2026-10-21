@@ -486,6 +486,18 @@ export function removeFailedSync(kind, id, onlyIf) {
   } catch {}
 }
 
+// Clear Outputs / Reset Everything: a queued upload of a cleared row must never replay, or a generation whose upload had
+// failed (never in the cloud, so no tombstone stops it) comes back. Returns the dropped ids per kind.
+export function dropQueuedUploads(kinds) {
+  const dropped = Object.fromEntries(kinds.map(k => [k, []]));
+  try {
+    const keep = [];
+    for (const e of getFailedSyncs()) (kinds.includes(e.kind) ? dropped[e.kind].push(e.id) : keep.push(e));
+    localStorage.setItem(FAILED_KEY, JSON.stringify(keep));
+  } catch {}
+  return dropped;
+}
+
 export function clearFailedSyncs() {
   try { localStorage.removeItem(FAILED_KEY); } catch {}
 }

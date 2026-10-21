@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes } from "./lib/wsDe
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes } from "./lib/storage.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, purgeMyBackupsOf } from "./lib/supabase.js";
 import { storagePathsToDelete } from "./lib/purge.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -2288,6 +2288,22 @@ export default function ProximaApp() {
 
   // ─── DELETE MEANS DELETE (owner, 2026-10-21: "literally everything as far as can be reached should be deleted and
   // unrecoverable") ───
+  // After Clear Logs / Clear Outputs / Reset Everything: whatever the cloud still holds goes into the delete queue (replayed
+  // on Save and on load), so a clear that failed is retried instead of reported done (review wf_1945b758-923 #1). An
+  // unreadable cloud retries every removed id. True only when the cloud is confirmed empty of them.
+  const queueCloudLeftovers = async ({ tasks, history }) => {
+    const left = await pullCloudIds();
+    let clean = true;
+    for (const [kind, table, ids] of [["task-delete", "tasks", tasks], ["history-delete", "history", history]]) {
+      if (!ids) continue;
+      const rest = left?.[table] ? [...left[table]] : ids;
+      for (const id of rest) addFailedSync({ kind, id, data: id });
+      if (rest.length) clean = false;
+    }
+    setFailedSyncCount(getFailedSyncs().length);
+    return clean;
+  };
+
   // Called by bulk delete, Clear Outputs and Reset Everything after they removed the rows here and in the cloud. It
   // removes what else holds those generations: WaveSpeed's copy (wsDelete.js), their History entries or items
   // (batchLog.js purgeLogsForDeleted), their archived and uploaded files no kept generation uses (purge.js) and, when
@@ -4306,10 +4322,21 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
+                      // No cleared entry may be uploaded again: queued uploads and this session's replays (review wf_1945b758-923 #1).
+                      const removedLogIds = logsRef.current.map(l => l.id);
+                      const { history: queuedLogIds } = dropQueuedUploads(["history"]);
+                      for (const id of [...removedLogIds, ...queuedLogIds]) deletingLogIds.current.add(id);
                       setLogs([]); savedLogIds.current.clear();
                       await clearHistory();
                       await clearHistoryRemote();
+                      const logsGone = await queueCloudLeftovers({ history: removedLogIds });
                       getStorageStats().then(s => setStorageStats(s));
+                      if (!logsGone) {
+                        setSaveStatus("error");
+                        setAccountToast("Logs cleared here — the cloud clear will finish on your next save or reload");
+                        setTimeout(() => setAccountToast(""), 6000);
+                        return;
+                      }
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
                       setAccountToast(bk.id ? "Logs cleared — safety backup saved" : "Logs cleared permanently");
                       setTimeout(() => setAccountToast(""), 5000);
@@ -4330,10 +4357,23 @@ export default function ProximaApp() {
                       const all = new Map(tasksRef.current.map(t => [t.id, t]));
                       for (const t of remote?.tasks || []) if (!all.has(t.id)) all.set(t.id, t);
                       const removed = [...all.values()];
+                      // Nothing removed may be uploaded again: the debounced queue, queued uploads (a failed upload left no
+                      // tombstone to stop it) and this session's later replays (review wf_1945b758-923 #1).
+                      if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
+                      taskSyncQueueRef.current = [];
+                      const { task: queuedTaskIds } = dropQueuedUploads(["task"]);
+                      for (const id of [...removed.map(t => t.id), ...queuedTaskIds]) deletingIds.current.add(id);
                       releasePredictions(removed.map(t => t.taskId)); recordClaimants(removed, { deleted: true });
                       setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
                       await purgeEverywhere(removed, [], { backupTaken: !!bk.id });
+                      const outputsGone = await queueCloudLeftovers({ tasks: removed.map(t => t.id) });
                       getStorageStats().then(s => setStorageStats(s));
+                      if (!outputsGone) {
+                        setSaveStatus("error");
+                        setAccountToast("Generations cleared here — the cloud clear will finish on your next save or reload");
+                        setTimeout(() => setAccountToast(""), 6000);
+                        return;
+                      }
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
                       setAccountToast(bk.id ? "Generations cleared — safety backup saved" : "Generations cleared permanently, everywhere");
                       setTimeout(() => setAccountToast(""), 5000);
@@ -4371,7 +4411,11 @@ export default function ProximaApp() {
                       savedLogIds.current.clear();
                       savedTaskIds.current.clear();
                       taskSyncQueueRef.current = [];
-                      if (taskSyncTimerRef.current) clearTimeout(taskSyncTimerRef.current);
+                      if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
+                      // No removed row may be uploaded again (review wf_1945b758-923 #1, as in Clear Outputs).
+                      const { task: queuedTaskIds, history: queuedLogIds } = dropQueuedUploads(["task", "history"]);
+                      for (const id of [...removedTasks.map(t => t.id), ...queuedTaskIds]) deletingIds.current.add(id);
+                      for (const id of [...removedLogs.map(l => l.id), ...queuedLogIds]) deletingLogIds.current.add(id);
                       // Clear local IndexedDB
                       await clearHistory();
                       await clearTasksDB();
@@ -4384,9 +4428,16 @@ export default function ProximaApp() {
                       ]);
                       // Everywhere else: WaveSpeed, all files, backup copies (History was cleared above).
                       await purgeEverywhere(removedTasks, [], { backupTaken: !!bk.id, history: false, alsoLogs: removedLogs });
+                      const resetGone = await queueCloudLeftovers({ tasks: removedTasks.map(t => t.id), history: removedLogs.map(l => l.id) });
                       // Clear local settings
                       setBalance(null);
                       getStorageStats().then(s => setStorageStats(s));
+                      if (!resetGone) {
+                        setSaveStatus("error");
+                        setAccountToast("Everything cleared here — the cloud clear will finish on your next save or reload");
+                        setTimeout(() => setAccountToast(""), 6000);
+                        return;
+                      }
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
                       setAccountToast(bk.id ? "Everything cleared — safety backup saved" : "Everything cleared permanently, everywhere");
                       setTimeout(() => setAccountToast(""), 5000);
