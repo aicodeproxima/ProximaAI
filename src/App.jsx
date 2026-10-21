@@ -10,6 +10,7 @@ import { getSession, setSession, clearSession, onSessionExpired } from "./lib/se
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes } from "./lib/storage.js";
+import { backupNotice } from "./lib/backupNotice.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, purgeMyBackupsOf } from "./lib/supabase.js";
 import { storagePathsToDelete } from "./lib/purge.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -1474,14 +1475,25 @@ export default function ProximaApp() {
   const [backups, setBackups] = useState([]);
   const [showBackupsPanel, setShowBackupsPanel] = useState(false);
   const [backupsReloading, setBackupsReloading] = useState(false);
-  // "Automatic backups" switch (server-side, off by default; supabase.js getAutoBackups). null = not read yet.
+  // "Automatic backups" switch (server-side, off by default; supabase.js getAutoBackups). null = unknown (not read yet,
+  // or the read failed). Read again right before every destructive confirm, and whenever the tab comes back or goes
+  // online, so a change made on the other device shows here (review wf_1945b758-923 #13/#14). Returns the value read.
   const [autoBackups, setAutoBackupsState] = useState(null);
+  const [autoBackupsChecking, setAutoBackupsChecking] = useState(false);
+  const readAutoBackups = useCallback(async () => {
+    setAutoBackupsChecking(true);
+    const v = await getAutoBackups();
+    setAutoBackupsState(v); setAutoBackupsChecking(false);
+    return v;
+  }, []);
   useEffect(() => {
     if (!isAuthed) { setAutoBackupsState(null); return; }
-    let live = true;
-    getAutoBackups().then(v => { if (live) setAutoBackupsState(v); });
-    return () => { live = false; };
-  }, [isAuthed]);
+    readAutoBackups();
+    const onBack = () => { if (document.visibilityState === "visible") readAutoBackups(); };
+    document.addEventListener("visibilitychange", onBack);
+    window.addEventListener("online", onBack);
+    return () => { document.removeEventListener("visibilitychange", onBack); window.removeEventListener("online", onBack); };
+  }, [isAuthed, readAutoBackups]);
 
   // Track any in-flight cloud write (lets the floating save button show live status)
   const markWriteStart = useCallback((key) => {
@@ -2965,7 +2977,8 @@ export default function ProximaApp() {
     if (targets.length === 0) { exitSelectMode(); return; }
     const n = targets.length;
     const noun = n === 1 ? "1 generation" : `${n} generations`;
-    if (!confirm(`Delete ${noun}? This removes ${n === 1 ? "it" : "them"} everywhere: this device, the cloud, WaveSpeed, its files and its History.\n\n${autoBackups ? "Automatic backups is on: a safety backup is taken first, so you can restore from Settings → Cloud Backups." : "This is permanent: nothing can restore it (Automatic backups is off)."}`)) return;
+    const ab = await readAutoBackups();
+    if (!confirm(`Delete ${noun}? This removes ${n === 1 ? "it" : "them"} everywhere: this device, the cloud, WaveSpeed, its files and its History.\n\n${backupNotice(ab, { what: n === 1 ? "it" : "them" })}`)) return;
     const ids = targets.map(t => t.id);
     setBulkDeleting(true);
     setSaveStatus("saving");
@@ -3080,7 +3093,8 @@ export default function ProximaApp() {
     if (targets.length === 0) { exitLogSelectMode(); return; }
     const n = targets.length;
     const noun = n === 1 ? "1 log entry" : `${n} log entries`;
-    if (!confirm(`Delete ${noun}? This removes ${n === 1 ? "it" : "them"} from this device and the cloud.\n\nA safety backup is taken first, so you can restore from Settings → Cloud Backups.`)) return;
+    const ab = await readAutoBackups();
+    if (!confirm(`Delete ${noun}? This removes ${n === 1 ? "it" : "them"} from this device and the cloud.\n\n${backupNotice(ab, { what: n === 1 ? "it" : "them" })}`)) return;
     const ids = targets.map(l => l.id);
     setBulkDeletingLogs(true);
     setSaveStatus("saving");
@@ -4313,7 +4327,8 @@ export default function ProximaApp() {
                   )}
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
-                      if (!confirm(`Clear all generation logs? (local + cloud)\n\n${autoBackups ? "Automatic backups is on: a safety backup is taken first so you can restore it from the Backups panel." : "This is permanent (Automatic backups is off)."}`)) return;
+                      const ab = await readAutoBackups();
+                      if (!confirm(`Clear all generation logs? (local + cloud)\n\n${backupNotice(ab, { what: "them" })}`)) return;
                       setSaveStatus("saving");
                       const bk = await createBackup("pre-clear-logs", "Before Clear Logs");
                       if (!bk?.ok) {
@@ -4342,7 +4357,8 @@ export default function ProximaApp() {
                       setTimeout(() => setAccountToast(""), 5000);
                     }}>Clear Logs</button>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
-                      if (!confirm(`Clear ALL generations? They are removed everywhere: this device, the cloud, WaveSpeed, their files and their History.\n\n${autoBackups ? "Automatic backups is on: a safety backup is taken first, so you can restore it from the Backups panel." : "This is permanent: nothing can restore them (Automatic backups is off)."}`)) return;
+                      const ab = await readAutoBackups();
+                      if (!confirm(`Clear ALL generations? They are removed everywhere: this device, the cloud, WaveSpeed, their files and their History.\n\n${backupNotice(ab, { what: "them" })}`)) return;
                       setSaveStatus("saving");
                       // A backup the owner chose (switch on) must exist before anything is destroyed (review wf_9d0e3664-ab7 #1).
                       const bk = await createBackup("pre-clear-outputs", "Before Clear Outputs");
@@ -4379,7 +4395,8 @@ export default function ProximaApp() {
                       setTimeout(() => setAccountToast(""), 5000);
                     }}>Clear Outputs</button>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
-                      if (!confirm(`Clear ALL data? This removes everything: this device, the cloud, WaveSpeed, all files and all History.\n\n${autoBackups ? "Automatic backups is on: a full safety backup is taken first, so you can restore it from the Backups panel." : "This is permanent: nothing can restore it (Automatic backups is off)."}`)) return;
+                      const ab = await readAutoBackups();
+                      if (!confirm(`Clear ALL data? This removes everything: this device, the cloud, WaveSpeed, all files and all History.\n\n${backupNotice(ab)}`)) return;
                       setSaveStatus("saving");
                       // A backup the owner chose (switch on) must exist before anything is destroyed (review wf_9d0e3664-ab7 #1).
                       try { await favoriteSyncChainRef.current; } catch {}
@@ -4479,13 +4496,15 @@ export default function ProximaApp() {
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 13, color: "var(--text-primary)" }}>Automatic backups</div>
                       <div className="setting-hint" style={{ marginTop: 2 }}>
-                        {autoBackups === null ? "Checking…"
+                        {autoBackupsChecking ? "Checking…"
+                          : autoBackups === null ? "Couldn't check it. Tap the switch to try again."
                           : autoBackups ? "On: a safety copy before every delete, clear or restore, and every 2 days. Deleted generations can be restored."
                           : "Off: nothing is copied. Deleting is final everywhere: this device, the cloud, WaveSpeed and backups."}
                       </div>
                     </div>
-                    <button type="button" role="switch" aria-checked={!!autoBackups} aria-label="Automatic backups" disabled={autoBackups === null}
+                    <button type="button" role="switch" aria-checked={!!autoBackups} aria-label="Automatic backups" disabled={autoBackupsChecking}
                       onClick={async () => {
+                        if (autoBackups === null) { readAutoBackups(); return; }   // unknown: a tap retries the read
                         const next = !autoBackups;
                         try {
                           const v = await setAutoBackups(next);
@@ -4497,7 +4516,7 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 4000);
                       }}
                       style={{ flex: "0 0 auto", width: 56, height: 44, display: "flex", alignItems: "center", justifyContent: "center",
-                        background: "transparent", border: "none", cursor: autoBackups === null ? "default" : "pointer", padding: 0 }}>
+                        background: "transparent", border: "none", cursor: autoBackupsChecking ? "default" : "pointer", padding: 0 }}>
                       <span aria-hidden="true" style={{ width: 44, height: 24, borderRadius: 12, position: "relative", transition: "background 0.2s",
                         background: autoBackups ? "var(--accent)" : "rgba(148,163,184,0.35)", opacity: autoBackups === null ? 0.5 : 1 }}>
                         <span style={{ position: "absolute", top: 2, left: autoBackups ? 22 : 2, width: 20, height: 20, borderRadius: 10,
@@ -4558,7 +4577,7 @@ export default function ProximaApp() {
                     );
                   })()}
 
-                  <div className="setting-hint">Auto-backup runs every 2 days. Manual backups are saved immediately. Destructive actions (Clear / Reset) auto-create a backup first. Rolling retention: 30 auto + all manual.</div>
+                  <div className="setting-hint">Auto-backup runs every 2 days. Manual backups are saved immediately. While Automatic backups is on, deletes, clears and restores take a safety backup first. Rolling retention: 30 auto + all manual.</div>
                   {showBackupsPanel && (
                     <div style={{ marginTop: 12, maxHeight: 360, overflowY: "auto", background: "rgba(8,12,25,0.4)", border: "1px solid var(--glass-border)", borderRadius: 10, padding: 6 }}>
                       {backups.length === 0 ? (
@@ -4577,7 +4596,8 @@ export default function ProximaApp() {
                           </div>
                           <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                             <button onClick={async () => {
-                              if (!confirm(`Restore this backup from ${formatTimestamp(b.created_at)}?\n\nThis replaces current data with the snapshot. A safety backup of your CURRENT state is taken first.`)) return;
+                              const ab = await readAutoBackups();
+                              if (!confirm(`Restore this backup from ${formatTimestamp(b.created_at)}?\n\nThis replaces current data with the snapshot. ${backupNotice(ab, { restore: true })}`)) return;
                               setSaveStatus("saving");
                               const r = await restoreBackup(b.id);
                               if (r.ok) {
