@@ -7,6 +7,7 @@
 // Gracefully no-ops otherwise (local-only mode).
 
 import { sessionToken, isSessionError, reportSessionExpired, isSuperseded } from "./session.js";
+import { removedPaths } from "./storageRemove.js";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -525,11 +526,13 @@ export async function archiveUrl(url, { taskId, index = 0 } = {}) {
   } catch (e) { return { ok: false, error: e.message || "Archive failed" }; }
 }
 
+// true only when the server confirms it deleted this file (storageRemove.js): a refused or already-gone path answers 200
+// with an empty list, which used to read as success.
 export async function deleteArchivedPath(path) {
   if (!supabase || !path) return false;
   try {
-    const { error } = await supabase.storage.from(ARCHIVE_BUCKET).remove([path]);
-    return !error;
+    const { data, error } = await supabase.storage.from(ARCHIVE_BUCKET).remove([path]);
+    return !error && removedPaths([path], data).has(path);
   } catch { return false; }
 }
 
