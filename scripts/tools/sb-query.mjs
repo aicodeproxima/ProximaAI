@@ -5,13 +5,10 @@
 //   node scripts/tools/sb-query.mjs -f some.sql
 //   node scripts/tools/sb-query.mjs --write -f migration.sql     anything that changes data or schema needs --write
 //
-// Token: env SUPABASE_ACCESS_TOKEN, else the sbp_ personal access token in the owner's Claude memory
-// (~/.claude/projects/C--Users-aicod--claude/memory/reference_supabase.md).
+// Token: see accessToken() in supabase-admin.mjs.
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { sql as runSql } from "./supabase-admin.mjs";
 
-const REF = "vhznmpxlcjbdzntmfvvy";
 const args = process.argv.slice(2);
 const write = args.includes("--write");
 const fi = args.indexOf("-f");
@@ -25,19 +22,5 @@ if (!write && /\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|c
   process.exit(3);
 }
 
-function token() {
-  if (process.env.SUPABASE_ACCESS_TOKEN) return process.env.SUPABASE_ACCESS_TOKEN.trim();
-  const mem = path.join(os.homedir(), ".claude/projects/C--Users-aicod--claude/memory/reference_supabase.md");
-  const t = fs.readFileSync(mem, "utf8").match(/sbp_[A-Za-z0-9]{20,}/)?.[0];
-  if (!t) throw new Error("no sbp_ token in " + mem);
-  return t;
-}
-
-const r = await fetch(`https://api.supabase.com/v1/projects/${REF}/database/query`, {
-  method: "POST",
-  headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
-  body: JSON.stringify({ query: sql }),
-});
-const text = await r.text();
-if (!r.ok) { console.error(`HTTP ${r.status}: ${text.slice(0, 2000)}`); process.exit(1); }
-console.log(text);
+try { console.log(JSON.stringify(await runSql(sql))); }
+catch (e) { console.error(e.message); process.exit(1); }
