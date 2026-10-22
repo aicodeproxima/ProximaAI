@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
 import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
@@ -3211,6 +3211,7 @@ export default function ProximaApp() {
     // 0. Mark these ids as deleting BEFORE any await, so the debounced persistence effect,
     //    the unload flush, forceSaveAll and the mount replay all refuse to re-upload them.
     for (const id of ids) deletingIds.current.add(id);
+    forgetConfirmed("task-delete", ids);   // an older confirmation must not release them while this delete runs (review round 7)
     // 1. Safety snapshot while Automatic backups is on (the server skips it when off: ok without an id). If an
     //    expected backup can't be confirmed, abort: never destroy data without the recovery point the owner chose.
     const bk = await createBackup("pre-bulk-delete", `Before deleting ${noun}`);
@@ -3228,7 +3229,7 @@ export default function ProximaApp() {
     taskSyncQueueRef.current = taskSyncQueueRef.current.filter(t => !idSet.has(t.id));
     for (const id of ids) { savedTaskIds.current.delete(id); removeFailedSync("task", id); }
     // 3. Enqueue cloud-delete intents BEFORE firing, so a tab-close/network drop replays them.
-    queueDeleteIntents("task-delete", ids);   // one queue time for the action: one server-checked replay call (review round 5)
+    const queuedAt = queueDeleteIntents("task-delete", ids);   // one queue time for the action (review rounds 5 and 7)
     // 4. Optimistic local removal. Fresh copies: a submit that answered during the backup gave its task a prediction id
     //    the snapshot lacks. Their ids are released, so a lost submit of the same model never adopts a deleted result. A
     //    task whose submit never answered (Cancelled and then lost to a freeze or reload) becomes a deleted claimant, so
@@ -3242,12 +3243,26 @@ export default function ProximaApp() {
     const plan = stagePurge(latest, tasksRef.current.filter(t => !idSet.has(t.id)));
     // 5. Local IndexedDB delete (single transaction, awaited).
     await deleteTasks(ids);
-    // 6. Cloud delete (batched, device-scoped). On success, clear the replay intents.
-    const r = await deleteTasksRemote(ids);
+    // 6. Cloud delete (server-checked, stamped with the action's queue time). On success, clear the replay intents.
+    const r = await deleteTasksRemote(ids, queuedAt);
     if (r.ok) confirmDeleteIntents("task-delete", ids);
+    else if (r.deleted?.length) confirmDeleteIntents("task-delete", r.deleted);
+    // 6b. A restore on another device that landed after this delete was queued kept some of them (voided, review round
+    //     7): their intents are settled, they stop being "deleted" here, and the History work stagePurge queued is
+    //     withdrawn, so nothing below rewrites or removes the restored entries. The next pass adopts the cloud's copies;
+    //     items of ids that were deleted leave History through their user tombstones (tombstonedItems).
+    const voided = r.voided || [];
+    if (voided.length) {
+      settleDeleteIntents("task-delete", voided);
+      for (const id of voided) deletingIds.current.delete(id);
+      for (const l of plan.rewrite || []) removeFailedSync("history", l.id);
+      settleDeleteIntents("history-delete", plan.remove || []);
+      for (const id of plan.remove || []) deletingLogIds.current.delete(id);
+    }
     // 7. Everywhere else, now that the row delete answered: WaveSpeed, History, files (purgeEverywhere). Backup copies
-    //    are scrubbed by the server (migration 20261021175100).
-    const { note } = await purgeEverywhere(plan);
+    //    are scrubbed by the server (migration 20261021175100). Not after a voided delete: the cloud checks hold the
+    //    WaveSpeed copies and files of what the restore kept, and its History is left to the restore.
+    const { note } = voided.length ? { note: "" } : await purgeEverywhere(plan);
     // 8. Refresh counters + status (honest: only say "done" when the cloud delete confirmed).
     setFailedSyncCount(getFailedSyncs().length);
     getStorageStats().then(s => setStorageStats(s));
@@ -3256,6 +3271,9 @@ export default function ProximaApp() {
     if (r.ok) {
       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
       setAccountToast(bk.id ? `Deleted ${noun} — safety backup saved${note}` : note ? `Deleted ${noun}${note}` : `Deleted ${noun} permanently, everywhere`);
+    } else if (voided.length) {
+      setSaveStatus("idle");
+      setAccountToast(`A restore on another device kept ${voided.length === n ? (n === 1 ? "it" : "them") : `${voided.length} of them`} — they come back on the next sync`);
     } else {
       setSaveStatus("error");
       setAccountToast(`Removed ${noun} locally — the cloud delete will finish on your next save or reload`);
@@ -3334,6 +3352,7 @@ export default function ProximaApp() {
     setSaveStatus("saving");
     // 0. Guard against any in-flight history upsert resurrecting these ids.
     for (const id of ids) deletingLogIds.current.add(id);
+    forgetConfirmed("history-delete", ids);   // an older confirmation must not release them while this delete runs (review round 7)
     // 1. Pre-destructive snapshot (HARD RULE) — abort if it can't be confirmed.
     const bk = await createBackup("pre-bulk-delete-logs", `Before deleting ${noun}`);
     if (!bk?.ok) {

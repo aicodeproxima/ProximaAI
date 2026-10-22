@@ -587,14 +587,17 @@ export function removeFailedSync(kind, id, onlyIf) {
 // request fires (CLAUDE.md queue-first), so a tab killed mid-clear replays it and the mount replay keeps those ids
 // deleting (review wf_ec400a67-988 #1). Delete intents are never capped.
 export function queueDeleteIntents(kind, ids) {
+  // Returns the queue time, so the action's first send carries it (review round 7): a restore between queueing and
+  // sending then voids it, as it would a replay.
+  const now = serverNow();   // server time: compared with a restore's (restoreGuard)
   try {
     const want = new Set((ids || []).filter(Boolean));
-    if (!want.size) return;
-    const now = serverNow();   // server time: compared with a restore's (restoreGuard)
+    if (!want.size) return now;
     const list = getFailedSyncs().filter(e => !(e.kind === kind && want.has(e.id)));
     for (const id of want) list.push({ kind, id, data: id, ts: now, attempts: 1 });
     localStorage.setItem(FAILED_KEY, JSON.stringify(list));
   } catch {}
+  return now;
 }
 // A restore on any device (settings 'last_restore_at', epoch ms; migration 20261022180000) supersedes every delete
 // intent queued before it: replayed, a pending clear would delete what the restore brought back (review round 2).
@@ -688,6 +691,16 @@ export function confirmDeleteIntents(kind, ids) {
     for (const k of Object.keys(all)) for (const [id, at] of Object.entries(all[k] || {})) if (!(at > cut)) delete all[k][id];
     all[kind] = all[kind] || {};
     for (const id of ids || []) if (id) all[kind][id] = now;
+    localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
+  } catch {}
+}
+// A new delete of these ids starts: their older confirmations no longer say anything (a restore brought them back and
+// they are going again), so releaseRestored must not release them while this delete is in flight (review round 7).
+export function forgetConfirmed(kind, ids) {
+  try {
+    const all = readConfirmed();
+    if (!all[kind]) return;
+    for (const id of ids || []) delete all[kind][id];
     localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
   } catch {}
 }

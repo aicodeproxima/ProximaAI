@@ -198,11 +198,17 @@ await test("deleteTasksRemote: through delete_queued_rows, chunks of 100, stampe
   c.rpc = async (fn, args) => { seen.push([fn, args.p_kind, args.p_ids.length, args.p_queued_at]); return { data: { ok: true, voided: false, deleted: args.p_ids.length }, error: null }; };
   sb.__setClientForTests(c);
   const before = Date.now() - 5000;
-  assert.deepEqual(await sb.deleteTasksRemote(ids(250)), { ok: true });
+  assert.equal((await sb.deleteTasksRemote(ids(250))).ok, true);
   assert.deepEqual(seen.map(s => s.slice(0, 3)), [["delete_queued_rows", "task", 100], ["delete_queued_rows", "task", 100], ["delete_queued_rows", "task", 50]]);
   assert.ok(seen.every(s => s[3] >= before), "stamped with the current (server) time");
+  // Review round 7: stamped with the action's own queue time when given (a restore between queueing and sending wins),
+  // and the voided ids are reported so the caller purges nothing for them.
+  seen.length = 0;
+  const r = await sb.deleteTasksRemote(["a", "b"], 12345);
+  assert.deepEqual([r.ok, r.deleted, r.voided, seen[0][3]], [true, ["a", "b"], [], 12345]);
   c.rpc = async () => ({ data: { ok: true, voided: true, deleted: 0 }, error: null });
-  assert.equal((await sb.deleteTasksRemote(["a"])).ok, false, "voided: the rows were restored, not deleted");
+  const v = await sb.deleteTasksRemote(["a"], 1);
+  assert.deepEqual([v.ok, v.voided, v.deleted], [false, ["a"], []], "voided: the rows were restored, not deleted");
   c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
   assert.equal((await sb.deleteTasksRemote(["a"])).ok, false);
 });

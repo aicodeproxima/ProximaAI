@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -192,6 +192,16 @@ test("intentGroups: one group per queue time; queueDeleteIntents stamps one time
   const groups = intentGroups("task-delete");
   assert.deepEqual(groups.map(([, ids]) => ids), [["old1"], ["old2"], ["n1", "n2", "n3"]]);
   assert.deepEqual(intentGroups("history-delete"), [[5, ["h"]]]);
+});
+
+// Review round 7: an action's queue time comes back to the caller, so its first send carries it (not the send time),
+// and a new delete of an id forgets its older confirmation (a restore brought it back; it is going again).
+test("queueDeleteIntents returns its queue time; forgetConfirmed drops older confirmations of these ids", () => {
+  const ts = queueDeleteIntents("task-delete", ["q1", "q2"]);
+  assert.ok(Number.isFinite(ts) && getFailedSyncs().filter(e => e.id === "q1" || e.id === "q2").every(e => e.ts === ts));
+  confirmDeleteIntents("task-delete", ["q1", "q2"]);
+  forgetConfirmed("task-delete", ["q1"]);
+  assert.deepEqual([confirmedDeletes("task-delete").has("q1"), confirmedDeletes("task-delete").has("q2")], [false, true]);
 });
 
 // Review round 6: confirmations are shared by the browser's tabs (another tab may have pre-loaded the intent this one

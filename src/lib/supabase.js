@@ -269,14 +269,13 @@ async function deleteByIds(site, table, ids) {
   } catch (err) { warnOnce(site, err); return { ok: false, error: err?.message }; }
 }
 
-// Through delete_queued_rows, stamped now (review round 6): the server records a user tombstone even for a generation
-// without a tasks row (History-only, e.g. after a restore), so other devices drop it from History too. Voided (a restore
-// landed first) counts as not deleted: the intents stay queued and the replay settles them.
-export async function deleteTasksRemote(ids) {
-  const r = await deleteQueuedRemote("task", ids, serverNow());
-  if (!r.ok) return { ok: false, error: "delete_queued_rows failed" };
-  if (r.voided.length) return { ok: false, error: "voided by a restore" };
-  return { ok: true };
+// Through delete_queued_rows (review round 6): the server records a user tombstone even for a generation without a tasks
+// row (History-only, e.g. after a restore), so other devices drop it from History too. `queuedAt`: the action's own queue
+// time (queueDeleteIntents), so a restore between queueing and sending voids it (review round 7); now when absent.
+// { ok, voided, deleted }: ok only when every id was deleted; voided ids were kept by a restore and must not be purged.
+export async function deleteTasksRemote(ids, queuedAt = serverNow()) {
+  const r = await deleteQueuedRemote("task", ids, queuedAt);
+  return { ok: r.ok && !r.voided.length, voided: r.voided, deleted: r.deleted, ...(r.ok ? {} : { error: "delete_queued_rows failed" }) };
 }
 
 // A replayed delete intent (queued earlier, still pending): the server refuses it when a restore committed after
