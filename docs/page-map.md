@@ -122,6 +122,9 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   topic (`get_my_account` → `sync_topic`); a device reconciles ~0.4–1.4 s after a write elsewhere (measured on both
   devices). Manual ping: `node scripts/tools/sb-query.mjs --write "select realtime.send('{}'::jsonb, 'changed',
   proxima_auth.sync_topic(), false)"`.
+- Vercel function logs: this folder is NOT linked (`vercel env ls` fails), so use the Vercel MCP `get_runtime_logs` with
+  projectId `prj_sF9ANOmJleWmAN9EBRIXqY5ZA9GM`, teamId `team_vILmEnHlW1iEzWxhM3UJhzim`, environment production and a
+  `query` (e.g. "rate limiting DISABLED": the proxy's limiter was off in production, measured 2026-10-22 22:12 UTC).
 - SQL / logs without connector prompts: `scripts/tools/sb-query.mjs`, `scripts/tools/sb-logs.mjs` (Management API).
   Database tests (each rolls back; run alone against live): scripts/test-rls-{tables,storage,triggers,plan,rpcs,
   rename,phase0}.sql, rollback proof scripts/test-rls-rollback-before.sql + phase-2 file + rollback file +
