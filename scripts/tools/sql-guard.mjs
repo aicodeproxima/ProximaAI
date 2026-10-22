@@ -20,7 +20,8 @@ function scan(sql) {
       i = j; code += " "; continue;
     }
     if (c === "'" || c === '"') {
-      const escapes = c === "'" && /[e]$/i.test(code) && !/[a-z0-9_$]$/i.test(code.slice(0, -1));
+      // E'..' only when the e is not the end of a longer identifier (non-ASCII letters included, review round 6).
+      const escapes = c === "'" && /[e]$/i.test(code) && !/[a-z0-9_$\u0080-￿]$/i.test(code.slice(0, -1));
       let j = i + 1;
       while (j < sql.length) {
         if (escapes && sql[j] === "\\") { j += 2; continue; }

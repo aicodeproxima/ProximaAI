@@ -92,5 +92,13 @@ test("dollar-quote tags with non-ASCII letters are read as tags", () => {
   assert.equal(readOnlyEscape("select $é$ab'c$é$"), null);
 });
 
+// Review round 6: `ée'...'` is the identifier `ée` and a plain string in Postgres; the E-string test still used an
+// ASCII-only identifier class and took it for E'...'.
+test("an e' after a non-ASCII identifier letter is a plain string, not an escape string", () => {
+  for (const q of ["do $$ begin if false then perform ée'\\'; end if; commit; set transaction read write; end $$",
+                   "select ée'\\'; commit; begin read write; select 'x'"]) assert.ok(readOnlyEscape(q), q);
+  assert.equal(readOnlyEscape("select E'it\\'s'"), null);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;
