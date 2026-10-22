@@ -194,6 +194,17 @@ test("intentGroups: one group per queue time; queueDeleteIntents stamps one time
   assert.deepEqual(intentGroups("history-delete"), [[5, ["h"]]]);
 });
 
+// Review round 6: confirmations are shared by the browser's tabs (another tab may have pre-loaded the intent this one
+// confirmed), kept 30 days.
+test("confirmedDeletes: another tab's confirmation is visible; entries older than 30 days are pruned", () => {
+  const DAY = 24 * 3600_000;
+  localStorage.setItem("proximaai-confirmed-deletes", JSON.stringify({ "task-delete": { other: Date.now() - DAY, ancient: Date.now() - 31 * DAY } }));
+  assert.ok(confirmedDeletes("task-delete").has("other"), "written by another tab");
+  confirmDeleteIntents("task-delete", ["mine"]);
+  const m = confirmedDeletes("task-delete");
+  assert.deepEqual([m.has("mine"), m.has("other"), m.has("ancient")], [true, true, false]);
+});
+
 // Review round 6: the WaveSpeed flush lets a row's own pending delete skip the cloud hold only when that intent was
 // queued after the last restore (an older one is voided, and the restore kept the row); unknown restore time: none.
 test("deletesGoingSince: task-delete intents queued at or after the restore; unknown restore time -> none", () => {

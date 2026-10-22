@@ -673,17 +673,28 @@ export function intentGroups(kind) {
   return [...byTs.entries()].sort((a, b) => a[0] - b[0]);
 }
 
-// A delete the cloud confirmed: its intents leave the queue, and this tab records when (review round 5). A later pass
+// A delete the cloud confirmed: its intents leave the queue, and the browser records when (review round 5). A later pass
 // whose reads began after that, and whose cloud holds the id again, knows a restore brought it back (only a restore
-// re-inserts a tombstoned id) and releases it (syncReconcile.js releaseRestored). Per tab, in memory: each tab releases
-// only what it marked itself.
-const confirmed = { "task-delete": new Map(), "history-delete": new Map() };
+// re-inserts a tombstoned id) and releases it (syncReconcile.js releaseRestored). Shared by the browser's tabs (another
+// tab may have pre-loaded the intent this one confirmed, review round 6) and kept 30 days.
+const CONFIRMED_KEY = "proximaai-confirmed-deletes";
+const CONFIRMED_FOR_MS = 30 * 24 * 60 * 60 * 1000;
+const readConfirmed = () => { try { return JSON.parse(localStorage.getItem(CONFIRMED_KEY) || "{}") || {}; } catch { return {}; } };
 export function confirmDeleteIntents(kind, ids) {
   settleDeleteIntents(kind, ids);
-  const at = Date.now(), m = confirmed[kind];
-  if (m) for (const id of ids || []) if (id) m.set(id, at);
+  if (kind !== "task-delete" && kind !== "history-delete") return;
+  try {
+    const all = readConfirmed(), now = Date.now(), cut = now - CONFIRMED_FOR_MS;
+    for (const k of Object.keys(all)) for (const [id, at] of Object.entries(all[k] || {})) if (!(at > cut)) delete all[k][id];
+    all[kind] = all[kind] || {};
+    for (const id of ids || []) if (id) all[kind][id] = now;
+    localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
+  } catch {}
 }
-export const confirmedDeletes = (kind) => confirmed[kind] || new Map();
+export function confirmedDeletes(kind) {
+  const cut = Date.now() - CONFIRMED_FOR_MS;
+  return new Map(Object.entries(readConfirmed()[kind] || {}).filter(([, at]) => at > cut));
+}
 
 // The intents a confirmed clear settled (clearOutcome.js clearSettlement), removed in one write.
 export function settleDeleteIntents(kind, ids) {
