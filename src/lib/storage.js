@@ -566,6 +566,21 @@ export function dropDeleteIntentsBefore(ts) {
   return dropped;
 }
 
+// The restore check every replay of delete intents goes through (review round 3). It voids first and only then reports
+// the intents still pending, so a caller marks as "being deleted" only ids that survived the void. `settings`: the cloud
+// settings map, or null when it could not be read: then the restore time is unknown, nothing is dropped, and the caller
+// must not replay delete intents this pass (they stay queued, and still keep their rows from being re-seeded).
+export function restoreGuard(settings) {
+  const known = !!settings;
+  const voided = known ? dropDeleteIntentsBefore(Number(settings.last_restore_at) || 0) : { task: [], history: [] };
+  const pending = { task: [], history: [] };
+  for (const e of getFailedSyncs()) {
+    if (e.kind === "task-delete") pending.task.push(e.id);
+    else if (e.kind === "history-delete") pending.history.push(e.id);
+  }
+  return { known, voided, pending };
+}
+
 // The intents a confirmed clear settled (clearOutcome.js clearSettlement), removed in one write.
 export function settleDeleteIntents(kind, ids) {
   try {

@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  publishFormPaths, readFormPublications } = await import("../src/lib/storage.js");
+  restoreGuard, publishFormPaths, readFormPublications } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -97,6 +97,24 @@ test("a restore drops the delete intents queued before it, and says which ids it
   assert.deepEqual(dropDeleteIntentsBefore(after), { task: ["old1", "old2"], history: ["oldL"] });
   assert.deepEqual(getFailedSyncs().map(e => `${e.kind}:${e.id}`), ["task:up", "task-delete:new1"]);
   assert.deepEqual(dropDeleteIntentsBefore(0), { task: [], history: [] }, "no restore recorded: nothing dropped");
+});
+
+// Review round 3: the bootstrap marked every queued intent as "deleting" before the restore void ran, so voided ids
+// stayed marked all session (restored rows hidden, their WaveSpeed copies not held). restoreGuard voids first and only
+// then reports what is still pending; unreadable settings (null) mean "restore time unknown": nothing is dropped and
+// the caller replays no delete intents.
+test("restoreGuard: voids before it reports pending intents; unknown settings drop nothing", () => {
+  const R = 1_000_000;
+  const seed = () => localStorage.setItem("proximaai-failed-syncs", JSON.stringify([
+    { kind: "task-delete", id: "a", data: "a", ts: R - 5 }, { kind: "task-delete", id: "b", data: "b", ts: R + 5 },
+    { kind: "history-delete", id: "L", data: "L", ts: R - 5 }, { kind: "task", id: "up", data: { id: "up" }, ts: R - 5 }]));
+  seed();
+  assert.deepEqual(restoreGuard({ last_restore_at: R }),
+    { known: true, voided: { task: ["a"], history: ["L"] }, pending: { task: ["b"], history: [] } });
+  seed();
+  assert.deepEqual(restoreGuard(null), { known: false, voided: { task: [], history: [] }, pending: { task: ["a", "b"], history: ["L"] } });
+  assert.equal(getFailedSyncs().length, 4, "unknown: queue untouched");
+  assert.deepEqual(restoreGuard({}).voided, { task: [], history: [] }, "no restore recorded");
 });
 
 // RLS design panel wf_89f53ef9-80f (2026-10-22): favorites retries are keyed by the account scope and replayed only for
