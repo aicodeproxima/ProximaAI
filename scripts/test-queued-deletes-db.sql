@@ -221,17 +221,18 @@ begin
 
   -- 14. Review round 9 (migration 20261022301000): the restore marker belongs to the server. A browser role with a valid
   --     session can neither delete nor change it (an older bundle's Reset deleted every settings row); the rest still goes.
-  declare v_m text; v_k int;
+  declare v_m text; v_k int; v_revoked boolean := false;
   begin
     insert into settings (device_id, key, value) values (u, 'theme', '"y"') on conflict (device_id, key) do nothing;
     perform set_config('request.headers', json_build_object('x-proxima-session', v_tok)::text, true);
     execute 'set local role anon';
     update settings set value = '1' where device_id = u and key = 'last_restore_at';
-    delete from settings where device_id = u;
+    begin delete from settings where device_id = u;
+    exception when sqlstate '42501' then v_revoked := true; end;   -- browser deletes revoked altogether (round 10): fine too
     execute 'reset role';
     select value #>> '{}' into v_m from settings where device_id = u and key = 'last_restore_at';
     v_k := (select count(*) from settings where device_id = u and key = 'theme');
-    out := out || case when v_m = '5000' and v_k = 0 then 'ok marker-server-only; '
+    out := out || case when v_m = '5000' and (v_k = 0 or v_revoked) then 'ok marker-server-only; '
       else format('FAIL marker-server-only marker=%s theme=%s; ', v_m, v_k) end;
   exception when others then execute 'reset role'; out := out || format('FAIL marker-server-only %s %s; ', sqlstate, sqlerrm); end;
 
@@ -267,6 +268,96 @@ begin
     end if;
   exception when others then execute 'reset role'; out := out || format('FAIL rewrite-queued %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 16. Review round 10 (migration 20261022310000): Clear Outputs bounds its clear by the time it took BEFORE its read, so a
+  --     row another device uploaded during the read (never seen, so never purged) stays; named rows go whenever written.
+  --     History-only generations are tombstoned by the server from the entries that existed by then (the client no longer
+  --     names them, so a row that appears for one is never deleted unpurged); a restore's tombstone becomes a user one.
+  declare v_q bigint := (extract(epoch from now() - interval '30 seconds') * 1000)::bigint; v_left text; v_e1 jsonb; v_e2 jsonb;
+  begin
+    insert into tasks (id, device_id, status, start_time, outputs, created_at) values
+      ('qd-s10-old', u, 'completed', 1, '[]', now() - interval '1 minute'),
+      ('qd-s10-late', u, 'completed', 1, '[]', now() + interval '1 hour'),
+      ('qd-s10-known', u, 'completed', 1, '[]', now() + interval '1 hour');
+    insert into history (id, device_id, timestamp, tasks, total_cost, created_at) values
+      ('qd-S10-E1', u, 1, '[{"id":"qd-s10-old","status":"completed","cost":1,"outputs":[]},{"id":"qd-s10-ho","status":"completed","cost":1,"outputs":[]},{"id":"qd-s10-late","status":"completed","cost":1,"outputs":[]}]', 3, now() - interval '1 minute'),
+      ('qd-S10-E2', u, 1, '[{"id":"qd-s10-ho2","status":"completed","cost":1,"outputs":[]}]', 1, now() + interval '1 hour');
+    insert into sync_tombstones (id, kind, device_id, deleted_at, by_restore) values ('qd-s10-ho', 'task', u, now(), true);
+    r := clear_queued_rows(v_tok, 'task', v_q, array['qd-s10-known']);
+    select string_agg(id, ',' order by id) into v_left from tasks where id like 'qd-s10-%';
+    select tasks into v_e1 from history where id = 'qd-S10-E1';
+    select tasks into v_e2 from history where id = 'qd-S10-E2';
+    out := out || case when not (r->>'voided')::boolean and v_left = 'qd-s10-late'
+                        and v_e1 = '[{"id":"qd-s10-late","status":"completed","cost":1,"outputs":[]}]'
+                        and jsonb_array_length(v_e2) = 1
+                        and exists (select 1 from sync_tombstones where id = 'qd-s10-ho' and not coalesce(by_restore, false))
+                        and not exists (select 1 from sync_tombstones where id = 'qd-s10-ho2')
+      then 'ok clear-snapshot; ' else format('FAIL clear-snapshot %s left=%s E1=%s E2=%s; ', r, v_left, v_e1, v_e2) end;
+  exception when others then out := out || format('FAIL clear-snapshot %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 17. Review round 10: a large Clear Outputs fits anon's 3 s statement timeout (the History touch compared every item
+  --     with every id; a generic plan nested-looped). 6000 named rows, 2000 entries of 3 items, generated and rolled back.
+  declare v_q bigint := (extract(epoch from now()) * 1000)::bigint + 1000; v_names text[]; v_t0 timestamptz; v_ms int;
+  begin
+    insert into tasks (id, device_id, status, start_time, outputs, created_at)
+      select 'qd-p-' || g, u, 'completed', 1, '[]', now() - interval '1 minute' from generate_series(1, 6000) g;
+    insert into history (id, device_id, timestamp, tasks, total_cost, created_at)
+      select 'qd-P-' || j, u, 1, jsonb_build_array(
+               jsonb_build_object('id', 'qd-p-' || (3 * j - 2), 'status', 'completed', 'cost', 1, 'outputs', '[]'::jsonb),
+               jsonb_build_object('id', 'qd-p-' || (3 * j - 1), 'status', 'completed', 'cost', 1, 'outputs', '[]'::jsonb),
+               jsonb_build_object('id', 'qd-p-' || (3 * j), 'status', 'completed', 'cost', 1, 'outputs', '[]'::jsonb)), 3,
+             now() - interval '1 minute'
+        from generate_series(1, 2000) j;
+    v_names := array(select 'qd-p-' || g from generate_series(1, 6000) g);
+    v_t0 := clock_timestamp();
+    r := clear_queued_rows(v_tok, 'task', v_q, v_names);
+    v_ms := (extract(epoch from clock_timestamp() - v_t0) * 1000)::int;
+    out := out || case when (r->>'deleted')::int >= 6000 and v_ms < 2500
+                        and not exists (select 1 from history where id like 'qd-P-%')
+      then format('ok clear-perf (%s ms); ', v_ms) else format('FAIL clear-perf %s in %s ms; ', r, v_ms) end;
+  exception when others then out := out || format('FAIL clear-perf %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 18. Review round 10 (migration 20261022310000): settings.updated_at is the server's (a client clock cannot move it),
+  --     and the settings clear takes only rows written by its time: another device's later settings stay.
+  declare v_at timestamptz; v_n int;
+  begin
+    insert into settings (device_id, key, value, updated_at) values (u, 'qd-stamp', '"v"', '2000-01-01')
+      on conflict (device_id, key) do update set value = excluded.value, updated_at = excluded.updated_at;
+    select updated_at into v_at from settings where device_id = u and key = 'qd-stamp';
+    perform clear_queued_rows(v_tok, 'settings', (extract(epoch from now() - interval '30 seconds') * 1000)::bigint);
+    v_n := (select count(*) from settings where device_id = u and key = 'qd-stamp');
+    perform clear_queued_rows(v_tok, 'settings', (extract(epoch from now()) * 1000)::bigint + 1000);
+    out := out || case when v_at = now() and v_n = 1 and not exists (select 1 from settings where device_id = u and key = 'qd-stamp')
+      then 'ok settings-stamped; ' else format('FAIL settings-stamped at=%s kept-early=%s; ', v_at, v_n) end;
+  exception when others then out := out || format('FAIL settings-stamped %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 19. Review round 10: Reset clears all four kinds in ONE restore-checked transaction (four calls let a restore void the
+  --     later ones after the earlier ones had deleted). Voided: nothing changes.
+  declare v_q bigint := (extract(epoch from now() - interval '30 seconds') * 1000)::bigint; v_n int;
+  begin
+    insert into tasks (id, device_id, status, start_time, outputs, created_at) values
+      ('qd-r-old', u, 'completed', 1, '[]', now() - interval '1 minute'), ('qd-r-named', u, 'completed', 1, '[]', now() + interval '1 hour'),
+      ('qd-r-later', u, 'completed', 1, '[]', now() + interval '1 hour');
+    insert into history (id, device_id, timestamp, tasks, total_cost, created_at) values
+      ('qd-R-old', u, 1, '[]', 0, now() - interval '1 minute'), ('qd-R-named', u, 1, '[]', 0, now() + interval '1 hour');
+    insert into favorites (id, device_id, prompt, created_at) values ('qd-rf-old', u, 'p', now() - interval '1 minute');
+    r := reset_queued_rows(v_tok, 4000, array['qd-r-named'], array['qd-R-named']);   -- before the marker (5000): voided
+    v_n := (select count(*) from tasks where id like 'qd-r-%') + (select count(*) from history where id like 'qd-R-%')
+         + (select count(*) from favorites where id = 'qd-rf-old');
+    if not (r->>'voided')::boolean or v_n <> 6 then
+      out := out || format('FAIL reset-queued voided %s n=%s; ', r, v_n);
+    else
+      execute 'set local role anon';
+      r := reset_queued_rows(v_tok, v_q, array['qd-r-named'], array['qd-R-named']);
+      execute 'reset role';
+      out := out || case when not (r->>'voided')::boolean
+                          and (select string_agg(id, ',') from tasks where id like 'qd-r-%') = 'qd-r-later'
+                          and not exists (select 1 from history where id like 'qd-R-%')
+                          and not exists (select 1 from favorites where id = 'qd-rf-old')
+                          and exists (select 1 from settings where device_id = u and key = 'last_restore_at')
+        then 'ok reset-queued; ' else format('FAIL reset-queued %s; ', r) end;
+    end if;
+  exception when others then execute 'reset role'; out := out || format('FAIL reset-queued %s %s; ', sqlstate, sqlerrm); end;
+
   -- 7. Review round 6 (migration 20261022261000): the backup-scrub drain takes each account's restore marker before it
   --    touches the queue or the backups, like restore, rename and replayed deletes (a cron drain and a rename locked
   --    backup_scrub_queue / data_backups in opposite orders).
@@ -284,7 +375,7 @@ begin
     select string_agg(p.proname, ',') into v_bad
       from pg_proc p
      where p.pronamespace = 'public'::regnamespace
-       and p.proname in ('restore_my_backup_phase2', 'delete_queued_rows', 'rename_my_account', 'clear_queued_rows', 'upsert_queued_history')
+       and p.proname in ('restore_my_backup_phase2', 'delete_queued_rows', 'rename_my_account', 'clear_queued_rows', 'upsert_queued_history', 'reset_queued_rows')
        and not (position('last_restore_at'' for' in p.prosrc) > 0      -- the lock statement: "... 'last_restore_at' for update|share"
                 and position('last_restore_at'' for' in p.prosrc)
                     < least(coalesce(nullif(position('delete from tasks' in p.prosrc), 0), 999999),
