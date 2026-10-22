@@ -20,6 +20,8 @@ const test = (name, fn) => {
 };
 
 const stage = () => between("const stagePurge = useCallback(", "const purgeEverywhere = useCallback(");
+const outputs = () => between('createBackup("pre-clear-outputs"', ">Clear Outputs</button>");
+const reset = () => between('createBackup("pre-reset"', ">Reset Everything</button>");
 const purge = () => between("const purgeEverywhere = useCallback(", "}, [flushWsDeletes");
 
 test("stagePurge removes every History entry it drops locally from IndexedDB, not only the ones it sends", () => {
@@ -50,16 +52,35 @@ test("every voided delete puts its claimant records back (bulk delete, Clear Out
   assert.equal(src.match(/claimantRecords\(/g)?.length, 3);
   assert.doesNotMatch(src, /resolveClaimants\(voided\)/);
 });
-test("Reset clears settings and favorites restore-checked, at the reset's queue time", () => {
-  assert.match(src, /clearQueuedRemote\("settings", resetAt\)/);
-  assert.match(src, /clearQueuedRemote\("favorites", resetAt\)/);
+// Review round 10 (F6): Reset's four restore-checked calls could be half-voided; it is one reset_queued_rows call now.
+test("Reset clears History, generations, settings and favorites in ONE restore-checked call at its snapshot time", () => {
+  const h = reset();
+  assert.match(h, /await resetQueuedRemote\(resetAt, clearedTaskIds, clearedLogIds\)/);
+  assert.doesNotMatch(src, /clearQueuedRemote\([^)]*resetAt/, "no separate clears at the reset's time");
   assert.doesNotMatch(src, /clearSettingsRemote|clearFavoritesRemote|deleteTaskRemote\b/);
+  assert.match(h, /queueDeleteIntents\("task-delete", clearedTaskIds, resetAt\)/);
+  assert.match(h, /queueDeleteIntents\("history-delete", clearedLogIds, resetAt\)/);
 });
-test("clears name the ids their device knew", () => {
-  assert.match(src, /clearQueuedRemote\("task", queuedAt, clearedTaskIds\)/);
-  assert.match(src, /clearQueuedRemote\("task", resetAt, clearedTaskIds\)/);
-  assert.match(src, /clearQueuedRemote\("history", resetAt, clearedLogIds\)/);
+test("clears name the ids their device knew (Clear Outputs: rows only; the server tombstones History-only ones)", () => {
+  assert.match(outputs(), /clearQueuedRemote\("task", queuedAt, rowIds\)/);
   assert.match(src, /clearQueuedRemote\("history", queuedAt, clearedLogIds\)/, "Clear Logs");
+  assert.match(outputs(), /settleCloudClear\(\{ tasks: rowIds \}\)/);
+});
+// Review round 10 (F5): a bound taken after the purge read deleted rows uploaded during the read without purging them.
+test("Clear Outputs and Reset take their snapshot time BEFORE their purge read, and skip History created after it", () => {
+  for (const [name, h, v] of [["Clear Outputs", outputs(), "clearAt"], ["Reset", reset(), "resetAt"]]) {
+    const snap = h.indexOf(`const ${v} = serverNow() - CLOCK_MARGIN_MS`), read = h.indexOf("await pullAllForPurge()");
+    assert.ok(snap >= 0 && read > snap, `${name}: snapshot before the read`);
+    assert.match(h, new RegExp(`createdAt[^;]*> ${v}`), `${name}: later History skipped`);
+  }
+  assert.match(outputs(), /stagePurge\([^;]*at: clearAt/);
+  assert.match(outputs(), /queueDeleteIntents\("task-delete", clearedTaskIds, clearAt\)/);
+  assert.match(stage(), /queueDeleteIntents\("history-delete", send\.remove, at\)/);
+});
+// Review round 10 (F2): a confirmed delete kept in deletingIds stripped a generation a later restore brought back.
+test("History uploads leave out only generations whose delete is still in flight", () => {
+  assert.equal(src.match(/withoutDeleting\([^;]*pendingDeleteIds\("task-delete"\)\)/g)?.length, 2);
+  assert.doesNotMatch(src, /withoutDeleting\([^;]*deletingIds\.current/);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

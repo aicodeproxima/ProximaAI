@@ -55,5 +55,12 @@ await test("queued uploads and delete intents are stamped in server time", () =>
   for (const e of getFailedSyncs()) assert.ok(Math.abs(e.ts - (Date.now() + 120_000)) <= 1500, `${e.kind} ts ${e.ts - Date.now()}`);
 });
 
+// Review round 10: Clear Outputs / Reset bound their clear by a time taken before their purge read, less this margin, so
+// a row another device uploads during the read is never inside the bound unread.
+await test("CLOCK_MARGIN_MS covers the estimate's worst error (the Date header's second plus half the quickest round trip)", () => {
+  assert.equal(typeof clock.CLOCK_MARGIN_MS, "number");
+  assert.ok(clock.CLOCK_MARGIN_MS > 1500 + 500, `margin ${clock.CLOCK_MARGIN_MS}`);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

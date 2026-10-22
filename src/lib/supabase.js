@@ -350,6 +350,18 @@ export async function clearQueuedRemote(kind, queuedAt, ids) {
   } catch (err) { warnOnce("clearQueuedRemote", err); return { ok: false, voided: false, deleted: 0 }; }
 }
 
+// Reset Everything: History, generations, settings and favorites of this account through reset_queued_rows, in one
+// transaction under one restore check (review round 10: four separate calls could be half-voided by a restore landing
+// between them). `queuedAt` is the snapshot time taken before the purge read; `taskIds` / `historyIds` the ids this
+// device knew. { ok, voided, deleted: { history, task, settings, favorites } | null }.
+export async function resetQueuedRemote(queuedAt, taskIds, historyIds) {
+  const uniq = (ids) => [...new Set((ids || []).filter(Boolean))];
+  try {
+    const r = await sessionRpc("reset_queued_rows", { p_queued_at: Math.floor(queuedAt || 0), p_task_ids: uniq(taskIds), p_history_ids: uniq(historyIds) });
+    return { ok: !!r?.ok && !r?.voided, voided: !!r?.voided, deleted: r?.deleted ?? null };
+  } catch (err) { warnOnce("resetQueuedRemote", err); return { ok: false, voided: false, deleted: null }; }
+}
+
 // A delete's History rewrites (entries losing items without an id; the server strips the items with one itself) go
 // through upsert_queued_history at the delete's queue time (review round 9): a restore that landed after it voids them,
 // as it voids the delete. 100 per call. { ok, voided: ids, upserted: ids }.
@@ -522,7 +534,9 @@ export async function pullAllForPurge() {
   };
   try {
     const tasks = await all("tasks", rowToTask);
-    const history = tasks && await all("history", rowToLog);
+    // History entries carry their row's created_at: Clear Outputs / Reset skip the ones created after their snapshot
+    // time (review round 10).
+    const history = tasks && await all("history", (row) => ({ ...rowToLog(row), createdAt: row.created_at }));
     return tasks && history ? { tasks, history } : null;
   } catch (err) { warnOnce("pullAllForPurge", err); return null; }
 }

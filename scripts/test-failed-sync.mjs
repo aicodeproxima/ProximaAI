@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload, pendingDeleteIds } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -276,6 +276,26 @@ test("replaceQueuedUpload: replaces a queued upload's data in place, keeping its
   assert.deepEqual([after.data.tasks, after.ts, after.attempts], [[{ id: "Y" }], before.ts, before.attempts]);
   assert.equal(replaceQueuedUpload("history", "F", { id: "F", tasks: [] }), false);
   assert.equal(getFailedSyncs().length, 1);
+});
+
+// Review round 10: Clear Outputs / Reset stamp their intents with the snapshot time taken before their purge read.
+test("queueDeleteIntents stamps the given time and returns it; without one, the current server time", () => {
+  assert.equal(queueDeleteIntents("task-delete", ["s1", "s2"], 12345), 12345);
+  assert.deepEqual(getFailedSyncs().map(e => e.ts), [12345, 12345]);
+  assert.equal(queueDeleteIntents("history-delete", [], 777), 777, "nothing queued: the time still comes back");
+  const ts = queueDeleteIntents("task-delete", ["s3"]);
+  assert.ok(Math.abs(ts - Date.now()) < 5000);
+});
+// Review round 10 (F2): only deletes still in flight keep a generation out of History uploads.
+test("pendingDeleteIds: the ids with a queued intent of that kind; settled ones leave", () => {
+  queueDeleteIntents("task-delete", ["p1", "p2"]);
+  queueDeleteIntents("history-delete", ["L1"]);
+  addFailedSync({ kind: "task", id: "up", data: { id: "up" } });
+  assert.ok(pendingDeleteIds("task-delete") instanceof Set);
+  assert.deepEqual([...pendingDeleteIds("task-delete")].sort(), ["p1", "p2"]);
+  assert.deepEqual([...pendingDeleteIds("history-delete")], ["L1"]);
+  confirmDeleteIntents("task-delete", ["p1"]);
+  assert.deepEqual([...pendingDeleteIds("task-delete")], ["p2"], "a confirmed delete no longer counts");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

@@ -607,10 +607,11 @@ export function removeFailedSync(kind, id, onlyIf) {
 // Clear Outputs / Clear Logs / Reset Everything: every removed id's delete intent, written in one go BEFORE the clear
 // request fires (CLAUDE.md queue-first), so a tab killed mid-clear replays it and the mount replay keeps those ids
 // deleting (review wf_ec400a67-988 #1). Delete intents are never capped.
-export function queueDeleteIntents(kind, ids) {
+export function queueDeleteIntents(kind, ids, at) {
   // Returns the queue time, so the action's first send carries it (review round 7): a restore between queueing and
-  // sending then voids it, as it would a replay.
-  const now = serverNow();   // server time: compared with a restore's (restoreGuard)
+  // sending then voids it, as it would a replay. `at`: a time the caller took earlier (Clear Outputs / Reset stamp the
+  // snapshot taken before their purge read, review round 10); default now.
+  const now = at ?? serverNow();   // server time: compared with a restore's (restoreGuard)
   try {
     const want = new Set((ids || []).filter(Boolean));
     if (!want.size) return now;
@@ -619,6 +620,13 @@ export function queueDeleteIntents(kind, ids) {
     localStorage.setItem(FAILED_KEY, JSON.stringify(list));
   } catch {}
   return now;
+}
+// The ids with a queued delete intent of this kind: deletes still in flight (review round 10). A confirmed one has left
+// the queue, and its id may be one a later restore brought back.
+export function pendingDeleteIds(kind) {
+  const out = new Set();
+  for (const e of getFailedSyncs()) if (e.kind === kind && e.id) out.add(e.id);
+  return out;
 }
 // A restore on any device (settings 'last_restore_at', epoch ms; migration 20261022180000) supersedes every delete
 // intent queued before it: replayed, a pending clear would delete what the restore brought back (review round 2).

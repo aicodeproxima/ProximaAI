@@ -23,13 +23,14 @@ await test("no unchecked bulk delete is exported any more", async () => {
     assert.equal(sb[name], undefined, name);
   }
 });
-await test("Reset's settings and favorites clears go through clear_queued_rows with the reset's queue time", async () => {
+// Review round 10 (F6): four separate restore-checked calls could be half-voided by a restore landing between them.
+await test("Reset is ONE reset_queued_rows call at the reset's snapshot time, no REST delete", async () => {
   const c = fakeClient(); const seen = [];
-  c.rpc = async (fn, args) => { seen.push([fn, args.p_kind, args.p_queued_at]); return { data: { ok: true, voided: false, deleted: 1 }, error: null }; };
+  c.rpc = async (fn, args) => { seen.push([fn, args.p_queued_at]); return { data: { ok: true, voided: false, deleted: { history: 0, task: 0, settings: 1, favorites: 1 } }, error: null }; };
   sb.__setClientForTests(c);
-  assert.deepEqual(await sb.clearQueuedRemote("settings", 42), { ok: true, voided: false, deleted: 1 });
-  assert.deepEqual(await sb.clearQueuedRemote("favorites", 42), { ok: true, voided: false, deleted: 1 });
-  assert.deepEqual(seen, [["clear_queued_rows", "settings", 42], ["clear_queued_rows", "favorites", 42]]);
+  const r = await sb.resetQueuedRemote(42, ["t"], ["h"]);
+  assert.equal(r.ok, true);
+  assert.deepEqual(seen, [["reset_queued_rows", 42]]);
   assert.equal(c.calls.length, 0, "no REST delete");
 });
 

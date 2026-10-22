@@ -9,10 +9,11 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
-import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
-import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, deleteHistoryRemote, upsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
+import { clearSettlement } from "./lib/clearOutcome.js";
+import { serverNow, CLOCK_MARGIN_MS } from "./lib/serverClock.js";
+import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, deleteHistoryRemote, upsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
 import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue, sameFormSet } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -1435,7 +1436,8 @@ export default function ProximaApp() {
   // device is deleting (withoutDeleting); an entry left with no item is dropped instead of sent.
   const replayHistoryUploads = async (queued) => {
     const byId = new Map(queued.filter(f => f.data).map(f => [f.id, f]));
-    const { upload, skip } = withoutDeleting([...byId.values()].map(f => f.data), deletingIds.current);
+    // Only deletes still in flight (a confirmed id may be one a later restore brought back, review round 10).
+    const { upload, skip } = withoutDeleting([...byId.values()].map(f => f.data), pendingDeleteIds("task-delete"));
     for (const id of skip) removeFailedSync("history", id, sentVersion(byId.get(id).data));
     for (const entry of upload) {
       const f = byId.get(entry.id);
@@ -2057,8 +2059,9 @@ export default function ProximaApp() {
           await deleteHistoryEntries([...rmLogs]);
         }
       }
-      // None carries a generation this device is deleting (review round 9 guard): such an entry goes without it.
-      const logUploads = withoutDeleting(logPlan.upload.slice(0, 100), deletingIds.current).upload;
+      // None carries a generation this device is deleting (review round 9 guard): such an entry goes without it. Only
+      // deletes still in flight (a confirmed id may be one a later restore brought back, review round 10).
+      const logUploads = withoutDeleting(logPlan.upload.slice(0, 100), pendingDeleteIds("task-delete")).upload;
       if (logUploads.length) {
         for (const l of logUploads) { savedLogIds.current.add(l.id); addHistoryEntry(l); addFailedSync({ kind: "history", id: l.id, data: l }); }
         try { await syncHistoryBatch(logUploads); for (const l of logUploads) removeFailedSync("history", l.id, sentVersion(l)); } catch {}
@@ -2548,7 +2551,9 @@ export default function ProximaApp() {
   // delete's own transaction, so only entries holding items without an id are sent from here (review round 8). This
   // device's own History is updated in full either way. The returned rewrite/remove are what is sent; localRemove is
   // every entry this device removed.
-  const stagePurge = useCallback((removed, kept, { history = true, alsoLogs = [], all = false, logs, serverHistory = false } = {}) => {
+  // `at`: the History delete intents' queue time (Clear Outputs passes its snapshot time, taken before its purge read,
+  // review round 10); default now.
+  const stagePurge = useCallback((removed, kept, { history = true, alsoLogs = [], all = false, logs, serverHistory = false, at } = {}) => {
     const base = logs || logsRef.current;
     const plan = planPurge(base, removed, kept, { history, alsoLogs, all });
     const now = Date.now();
@@ -2560,7 +2565,7 @@ export default function ProximaApp() {
       logsRef.current = logsRef.current.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l);
       setLogs(prev => prev.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l));
       if (serverHistory) send = clientHistoryWork(base, plan);
-      historyQueuedAt = queueDeleteIntents("history-delete", send.remove);   // one queue time for the action (review round 5)
+      historyQueuedAt = queueDeleteIntents("history-delete", send.remove, at);   // one queue time for the action (review round 5)
       // Every entry dropped here leaves IndexedDB now, sent or not (review round 9): kept there, it came back on reload,
       // and one that never reached the cloud was uploaded again.
       deleteHistoryEntries(plan.remove).catch(() => {});
@@ -4702,6 +4707,9 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
+                      // The clear covers the rows that existed before this read (review round 10): its bound is taken now,
+                      // less the clock estimate's margin, so every row inside it is read and purged; later ones stay.
+                      const clearAt = serverNow() - CLOCK_MARGIN_MS;
                       // Every generation this account has: here and every cloud row (all pages, any status), so the purge
                       // reaches rows beyond the 500 loaded. A failed read clears nothing (review wf_ec400a67-988 #3).
                       const remote = isSupabaseConfigured() ? await pullAllForPurge() : { tasks: [], history: [] };
@@ -4715,8 +4723,10 @@ export default function ProximaApp() {
                       for (const t of remote.tasks) if (!all.has(t.id)) all.set(t.id, t);
                       const realTasks = [...all.values()];
                       // Generations History holds without a tasks row (a restore keeps 500 tasks rows but up to 1000
-                      // entries) go too, with their files (review round 7).
-                      const mergedLogs = mergeLogs(logsRef.current, remote.history);
+                      // entries) go too, with their files (review round 7). Cloud entries created after the snapshot
+                      // belong to generations started after it: left alone (review round 10).
+                      const late = new Set(remote.history.filter(l => Date.parse(l.createdAt) > clearAt).map(l => l.id));
+                      const mergedLogs = mergeLogs(logsRef.current, remote.history).filter(l => !late.has(l.id));
                       const historyOnly = historyOnlyGenerations(mergedLogs, new Set(all.keys()));
                       const removed = [...realTasks, ...historyOnly];
                       // Nothing removed may be uploaded again: the debounced queue, queued uploads (a failed upload left no
@@ -4729,17 +4739,19 @@ export default function ProximaApp() {
                       releasePredictions(realTasks.map(t => t.taskId)); recordClaimants(realTasks, { deleted: true });
                       // Queued before the clears; every generation goes, so no item is outstanding (review #4); planned over
                       // the cloud's History too, so entries beyond the loaded ones go with their files (review round 2).
-                      const plan = stagePurge(removed, [], { all: true, logs: mergedLogs, serverHistory: true });   // the clear strips History server-side
+                      const plan = stagePurge(removed, [], { all: true, logs: mergedLogs, serverHistory: true, at: clearAt });   // the clear strips History server-side
                       const clearedTaskIds = [...removed.map(t => t.id), ...queuedTaskIds];
-                      const queuedAt = queueDeleteIntents("task-delete", clearedTaskIds);   // before the clear fires (review wf_ec400a67-988 #1)
+                      // Rows only: History-only generations are not named (a row that appeared for one after the read
+                      // would be deleted unpurged); the server tombstones them itself (review round 10).
+                      const rowIds = [...realTasks.map(t => t.id), ...queuedTaskIds];
+                      const queuedAt = queueDeleteIntents("task-delete", clearedTaskIds, clearAt);   // before the clear fires (review wf_ec400a67-988 #1)
                       setFailedSyncCount(getFailedSyncs().length);
                       setTasks([]); clearTasksDB(); savedTaskIds.current.clear();
-                      // Restore-checked at the clear's queue time (review round 8), in one transaction: the rows that existed
-                      // then plus every id this device knew (a row created later on another device stays). A named
-                      // generation without a row that History holds (History-only, or its task upload never landed) gets
-                      // its user tombstone there while History still holds it, and the server strips their History items
-                      // in the same transaction (review rounds 7 and 9).
-                      const cr = await clearQueuedRemote("task", queuedAt, clearedTaskIds);
+                      // Restore-checked at the clear's snapshot time (review rounds 8 and 10), in one transaction: the rows
+                      // that existed then plus every row id this device knew (a row created later on another device
+                      // stays). The server gives every generation without a row that History entries existing by then hold
+                      // a user tombstone, and strips their History items in the same transaction (review rounds 7, 9, 10).
+                      const cr = await clearQueuedRemote("task", queuedAt, rowIds);
                       if (cr.voided) {
                         // A restore on another device landed after this clear was queued: it wins, nothing is purged.
                         settleDeleteIntents("task-delete", clearedTaskIds);
@@ -4754,8 +4766,11 @@ export default function ProximaApp() {
                         return;
                       }
                       // Not answered: the intents stay queued and replay (Save, reload); nothing is purged before the rows go.
+                      // History-only intents: the server tombstoned the ones still without a row; one that has a row now is
+                      // a generation another device just made, left alone (review round 10).
+                      if (cr.ok) settleDeleteIntents("task-delete", historyOnly.map(t => t.id));
                       const { note } = cr.ok ? await purgeEverywhere(plan) : { note: "" };
-                      const outputsGone = cr.ok && await settleCloudClear({ tasks: clearedTaskIds });
+                      const outputsGone = cr.ok && await settleCloudClear({ tasks: rowIds });
                       getStorageStats().then(s => setStorageStats(s));
                       if (!outputsGone) {
                         setSaveStatus("error");
@@ -4780,8 +4795,11 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
+                      // The reset covers the rows that existed before this read (review round 10): its bound is taken now,
+                      // less the clock estimate's margin, so every row inside it is read and purged; later ones stay.
+                      const resetAt = serverNow() - CLOCK_MARGIN_MS;
                       // Everything this account has, here and every cloud row (all pages, any status): the purge needs it
-                      // after the clears below. A failed read clears nothing (review wf_ec400a67-988 #3).
+                      // after the clear below. A failed read clears nothing (review wf_ec400a67-988 #3).
                       const remote = isSupabaseConfigured() ? await pullAllForPurge() : { tasks: [], history: [] };
                       if (!remote) {
                         setSaveStatus("error");
@@ -4791,8 +4809,9 @@ export default function ProximaApp() {
                       }
                       const allTasks = new Map(tasksRef.current.map(t => [t.id, t]));
                       for (const t of remote.tasks) if (!allTasks.has(t.id)) allTasks.set(t.id, t);
+                      // Cloud History created after the snapshot belongs to generations started after it: left alone.
                       const allLogs = new Map(logsRef.current.map(l => [l.id, l]));
-                      for (const l of remote.history) if (!allLogs.has(l.id)) allLogs.set(l.id, l);
+                      for (const l of remote.history) if (!allLogs.has(l.id) && !(Date.parse(l.createdAt) > resetAt)) allLogs.set(l.id, l);
                       const removedTasks = [...allTasks.values()], removedLogs = [...allLogs.values()];
                       // Clear local state
                       const favoriteScope = getDeviceId();
@@ -4817,20 +4836,17 @@ export default function ProximaApp() {
                       const plan = stagePurge(removedTasks, [], { history: false, alsoLogs: removedLogs });   // queued before the clears below fire
                       const clearedTaskIds = [...removedTasks.map(t => t.id), ...queuedTaskIds];
                       const clearedLogIds = [...removedLogs.map(l => l.id), ...queuedLogIds];
-                      const resetAt = queueDeleteIntents("task-delete", clearedTaskIds);      // before the clears fire (review wf_ec400a67-988 #1)
-                      queueDeleteIntents("history-delete", clearedLogIds);
+                      queueDeleteIntents("task-delete", clearedTaskIds, resetAt);      // before the clear fires (review wf_ec400a67-988 #1)
+                      queueDeleteIntents("history-delete", clearedLogIds, resetAt);
                       setFailedSyncCount(getFailedSyncs().length);
                       // Clear local IndexedDB
                       await clearHistory();
                       await clearTasksDB();
-                      // Clear cloud: History and generations restore-checked at the reset's queue time (review round 8).
-                      const [hc, tc] = await Promise.all([clearQueuedRemote("history", resetAt, clearedLogIds), clearQueuedRemote("task", resetAt, clearedTaskIds)]);
-                      // Settings and favorites too, restore-checked at the same queue time (review round 9: plain deletes
-                      // wiped a restore that landed after the clears above, its restore marker included). The server keeps
-                      // the restore marker and the form holds.
-                      const cloudClears = hc.voided || tc.voided ? []
-                        : await Promise.allSettled([clearQueuedRemote("settings", resetAt), clearQueuedRemote("favorites", resetAt)]);
-                      if (hc.voided || tc.voided || cloudClears.some(c => c.value?.voided)) {
+                      // Clear cloud: History, generations, settings and favorites in ONE transaction under one restore
+                      // check at the reset's snapshot time (review rounds 8-10: separate calls could be half-voided by a
+                      // restore landing between them). The server keeps the restore marker and the form holds.
+                      const rr = await resetQueuedRemote(resetAt, clearedTaskIds, clearedLogIds);
+                      if (rr.voided) {
                         // A restore on another device landed after this reset was queued: it wins.
                         settleDeleteIntents("task-delete", clearedTaskIds); settleDeleteIntents("history-delete", clearedLogIds);
                         for (const id of clearedTaskIds) deletingIds.current.delete(id);
@@ -4842,12 +4858,12 @@ export default function ProximaApp() {
                         return;
                       }
                       // Tasks and History are re-checked and retried below (settleCloudClear); settings and favorites
-                      // have no retry, so a refused clear must be reported, or the cloud copy returns on the next load.
-                      const prefsLeft = unconfirmedClears(cloudClears, ["settings", "favorites"]);
+                      // have no retry, so a refused reset must be reported, or the cloud copy returns on the next load.
+                      const prefsLeft = rr.ok ? [] : ["settings", "favorites"];
                       // Everywhere else: WaveSpeed, all files, backup copies (History was cleared above). Only once the
                       // rows are gone; otherwise their intents replay first.
-                      const { note } = hc.ok && tc.ok ? await purgeEverywhere(plan) : { note: "" };
-                      const resetGone = hc.ok && tc.ok && await settleCloudClear({ tasks: clearedTaskIds, history: clearedLogIds });
+                      const { note } = rr.ok ? await purgeEverywhere(plan) : { note: "" };
+                      const resetGone = rr.ok && await settleCloudClear({ tasks: clearedTaskIds, history: clearedLogIds });
                       // Clear local settings
                       setBalance(null);
                       getStorageStats().then(s => setStorageStats(s));

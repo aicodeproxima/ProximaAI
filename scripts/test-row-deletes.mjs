@@ -222,6 +222,29 @@ await test("clearQueuedRemote: one clear_queued_rows call; voided and failures r
   assert.deepEqual(await sb.clearQueuedRemote("history", 1), { ok: false, voided: false, deleted: 0 });
 });
 
+// Review round 10: Clear Outputs / Reset skip History entries created after their snapshot time.
+await test("pullAllForPurge: History entries carry the row's created_at as createdAt; tasks unchanged", async () => {
+  sb.__setClientForTests(fakeClient((q) => (q.table === "tasks" ? { data: rows(1), error: null }
+    : { data: [{ id: "h1", device_id: "user:owner", tasks: [], created_at: "2026-10-22T10:00:00Z" }], error: null })));
+  const r = await sb.pullAllForPurge();
+  assert.equal(r.history[0].createdAt, "2026-10-22T10:00:00Z");
+  assert.equal(r.history[0].id, "h1");
+  assert.equal(r.tasks[0].id, "r00000");
+});
+// Review round 10 (F6): Reset is one reset_queued_rows call, one transaction under one restore check.
+await test("resetQueuedRemote: one reset_queued_rows call with the snapshot time and de-duplicated ids; voided / failure reported", async () => {
+  const c = fakeClient(); let seen;
+  const deleted = { history: 1, task: 2, settings: 3, favorites: 4 };
+  c.rpc = async (fn, args) => { seen = [fn, args]; return { data: { ok: true, voided: false, deleted }, error: null }; };
+  sb.__setClientForTests(c);
+  assert.deepEqual(await sb.resetQueuedRemote(1234.7, ["a", "a", null, "b", ""], ["h", "h"]), { ok: true, voided: false, deleted });
+  assert.deepEqual(seen, ["reset_queued_rows", { p_session_token: "tok", p_queued_at: 1234, p_task_ids: ["a", "b"], p_history_ids: ["h"] }]);
+  c.rpc = async () => ({ data: { ok: true, voided: true }, error: null });
+  assert.deepEqual(await sb.resetQueuedRemote(1, [], []), { ok: false, voided: true, deleted: null });
+  c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
+  assert.deepEqual(await sb.resetQueuedRemote(1, [], []), { ok: false, voided: false, deleted: null });
+});
+
 // Review round 9: a clear covers the rows that existed when it was queued plus the ids its device named (p_ids), so a
 // row another device created later stays; Reset's settings and favorites clears go through it too.
 await test("clearQueuedRemote: the ids its device knew go along (p_ids, de-duplicated); none -> p_ids left out", async () => {

@@ -6,6 +6,9 @@ const KEY = "proximaai-clock-offset";
 let offset = (() => { try { return Number(localStorage.getItem(KEY)) || 0; } catch { return 0; } })();
 
 export const serverNow = () => Date.now() + offset;
+// The estimate can be off by the Date header's whole second plus half the quickest round trip (at most 1.5 s), so a
+// snapshot time this much earlier is never after the server's real time (review round 10: Clear Outputs / Reset).
+export const CLOCK_MARGIN_MS = 3000;
 
 // One sample: the header has whole seconds (its midpoint is +500 ms) against the request's midpoint. The server stamps
 // Date when it answers, so a slow request (an upload, a large pull) puts it late and biases the estimate by up to half
