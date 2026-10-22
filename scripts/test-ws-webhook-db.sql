@@ -2,19 +2,24 @@
 -- app, service_role = api/ws-webhook.ts). Everything rolls back: the block always ends in an exception whose message
 -- is the result line. Run before the migration exists by sending "begin;" + the migration + this file in one query;
 -- after it is applied, this file alone. Upserts are written the way PostgREST sends the app's rows: every column
--- from `excluded`. Fixtures use device_id 'webhook-test' (no device pulls that scope).
+-- from `excluded`. Since RLS phase 2 (20261022120000) the app writes as a signed-in device: the block mints a session
+-- token for the live admin (never printed) and sends it as x-proxima-session, and fixtures live in that account's scope
+-- (ids 'wh-*'; everything rolls back, so no device ever sees them).
 do $t$
 declare
+  scope text := 'user:' || (select value->>'username' from app_secrets where key = 'admin_username');
+  tok text := _sign_session_token('admin:' || (select value->>'username' from app_secrets where key = 'admin_username'), now() + interval '12 hours');
   out text := '';
   r text;
   t record;
   ev record;
 begin
+  perform set_config('request.headers', json_build_object('x-proxima-session', tok)::text, true);
   insert into tasks (id, device_id, status, start_time, task_id, outputs) values
-    ('wh-run',  'webhook-test', 'processing', 1000, 'wh-pred-run',  '[]'),
-    ('wh-done', 'webhook-test', 'completed',  1000, 'wh-pred-done', '["https://perm.example/a.png"]'),
-    ('wh-fail', 'webhook-test', 'processing', 1000, 'wh-pred-fail', '[]'),
-    ('wh-orph', 'webhook-test', 'pending',    3000, null,           '[]');
+    ('wh-run',  scope, 'processing', 1000, 'wh-pred-run',  '[]'),
+    ('wh-done', scope, 'completed',  1000, 'wh-pred-done', '["https://perm.example/a.png"]'),
+    ('wh-fail', scope, 'processing', 1000, 'wh-pred-fail', '[]'),
+    ('wh-orph', scope, 'pending',    3000, null,           '[]');
 
   -- Browser roles reach neither the table nor the function.
   set local role anon;
@@ -71,7 +76,7 @@ begin
   out := out || case when r = 'queued' then 'ok queued; ' else format('FAIL queued %s; ', r) end;
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs, error, end_time, wall_clock_ms, inference_ms, nsfw)
-    values ('wh-late', 'webhook-test', 'processing', 2000, 'wh-pred-late', '[]', null, null, 0, 0, null)
+    values ('wh-late', scope, 'processing', 2000, 'wh-pred-late', '[]', null, null, 0, 0, null)
     on conflict (id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
       start_time = excluded.start_time, end_time = excluded.end_time, wall_clock_ms = excluded.wall_clock_ms,
       inference_ms = excluded.inference_ms, nsfw = excluded.nsfw;
@@ -87,7 +92,7 @@ begin
   r := ws_webhook_apply('m5', 'wh-pred-orph', 'completed', '["https://cdn.example/o.png"]', null, 9000);
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs, error, end_time, wall_clock_ms, inference_ms, nsfw)
-    values ('wh-orph', 'webhook-test', 'processing', 3000, 'wh-pred-orph', '[]', null, null, 0, 0, null)
+    values ('wh-orph', scope, 'processing', 3000, 'wh-pred-orph', '[]', null, null, 0, 0, null)
     on conflict (id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
       start_time = excluded.start_time, end_time = excluded.end_time, wall_clock_ms = excluded.wall_clock_ms,
       inference_ms = excluded.inference_ms, nsfw = excluded.nsfw;
@@ -99,7 +104,7 @@ begin
   -- A stale "processing" upload of the finished row stays finished (tasks_keep_finished runs first).
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs, error, end_time, wall_clock_ms, inference_ms, nsfw)
-    values ('wh-run', 'webhook-test', 'processing', 1000, 'wh-pred-run', '[]', null, null, 0, 0, null)
+    values ('wh-run', scope, 'processing', 1000, 'wh-pred-run', '[]', null, null, 0, 0, null)
     on conflict (id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
       start_time = excluded.start_time, end_time = excluded.end_time, wall_clock_ms = excluded.wall_clock_ms,
       inference_ms = excluded.inference_ms, nsfw = excluded.nsfw;
@@ -112,9 +117,9 @@ begin
   -- pending rows without an id are untouched.
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs) values
-    ('wh-copy',  'webhook-test', 'processing', 1000, 'wh-pred-run',  '[]'),
-    ('wh-plain', 'webhook-test', 'processing', 1000, 'wh-pred-none', '[]'),
-    ('wh-pend',  'webhook-test', 'pending',    1000, null,           '[]');
+    ('wh-copy',  scope, 'processing', 1000, 'wh-pred-run',  '[]'),
+    ('wh-plain', scope, 'processing', 1000, 'wh-pred-none', '[]'),
+    ('wh-pend',  scope, 'pending',    1000, null,           '[]');
   reset role;
   out := out || case when (select count(*) from tasks where id in ('wh-copy', 'wh-plain') and status = 'processing') = 2
     and (select status from tasks where id = 'wh-pend') = 'pending'
@@ -137,7 +142,7 @@ begin
   r := ws_webhook_apply('m8', 'wh-pred-own', 'completed', '["https://cdn.example/hook.png"]', null, 5000);
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs, end_time)
-    values ('wh-own', 'webhook-test', 'completed', 1000, 'wh-pred-own', '["https://cdn.example/poll.png"]', 4500);
+    values ('wh-own', scope, 'completed', 1000, 'wh-pred-own', '["https://cdn.example/poll.png"]', 4500);
   reset role;
   select * into t from tasks where id = 'wh-own';
   select * into ev from ws_webhook_events where webhook_id = 'm8';
@@ -148,8 +153,8 @@ begin
   -- A result replaces a failure (as everywhere else: tasks_keep_finished, planTaskSync): a cloud row a device failed
   -- with "Poll error" (or a cancel) takes the completed delivery; a failed delivery never replaces anything finished.
   insert into tasks (id, device_id, status, start_time, task_id, outputs, error) values
-    ('wh-pe',  'webhook-test', 'failed', 1000, 'wh-pred-pe',  '[]', 'Poll error'),
-    ('wh-pe2', 'webhook-test', 'failed', 1000, 'wh-pred-pe2', '[]', 'Poll error');
+    ('wh-pe',  scope, 'failed', 1000, 'wh-pred-pe',  '[]', 'Poll error'),
+    ('wh-pe2', scope, 'failed', 1000, 'wh-pred-pe2', '[]', 'Poll error');
   set local role service_role;
   r := ws_webhook_apply('m9', 'wh-pred-pe', 'completed', '["https://cdn.example/pe.png"]', null, 7000);
   reset role;
@@ -170,8 +175,8 @@ begin
   perform ws_webhook_apply('m12', 'wh-pred-ok', 'failed', null, 'Generation failed', 6000);
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs, error, end_time, wall_clock_ms, inference_ms, nsfw)
-    values ('wh-cx', 'webhook-test', 'failed', 1000, 'wh-pred-cx', '[]', 'Cancelled', 5000, 4000, 4000, null),
-           ('wh-ok', 'webhook-test', 'completed', 1000, 'wh-pred-ok', '["https://cdn.example/ok.png"]', null, 5000, 4000, 4000, null)
+    values ('wh-cx', scope, 'failed', 1000, 'wh-pred-cx', '[]', 'Cancelled', 5000, 4000, 4000, null),
+           ('wh-ok', scope, 'completed', 1000, 'wh-pred-ok', '["https://cdn.example/ok.png"]', null, 5000, 4000, 4000, null)
     on conflict (id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
       start_time = excluded.start_time, end_time = excluded.end_time, wall_clock_ms = excluded.wall_clock_ms,
       inference_ms = excluded.inference_ms, nsfw = excluded.nsfw;
@@ -185,8 +190,8 @@ begin
   -- The sweep heals a delivery that missed its row (both committed at the same instant, neither saw the other):
   -- simulated by a waiting delivery next to a running row, and one next to a row the device already finished.
   insert into tasks (id, device_id, status, start_time, task_id, outputs) values
-    ('wh-sw',  'webhook-test', 'processing', 1000, 'wh-pred-sw',  '[]'),
-    ('wh-sw2', 'webhook-test', 'completed',  1000, 'wh-pred-sw2', '["https://cdn.example/own.png"]');
+    ('wh-sw',  scope, 'processing', 1000, 'wh-pred-sw',  '[]'),
+    ('wh-sw2', scope, 'completed',  1000, 'wh-pred-sw2', '["https://cdn.example/own.png"]');
   insert into ws_webhook_events (webhook_id, task_id, status, outputs, error, end_time) values
     ('m13', 'wh-pred-sw',  'completed', '["https://cdn.example/sw.png"]', null, 3000),
     ('m14', 'wh-pred-sw2', 'completed', '["https://cdn.example/sw2.png"]', null, 3000);
@@ -207,7 +212,7 @@ begin
   -- No advisory locks: a batch upload must not fill the shared lock table or deadlock against the webhook.
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs)
-    select 'wh-batch-' || g, 'webhook-test', case when g % 2 = 0 then 'completed' else 'processing' end, 1000, 'wh-pred-batch-' || g, '[]'
+    select 'wh-batch-' || g, scope, case when g % 2 = 0 then 'completed' else 'processing' end, 1000, 'wh-pred-batch-' || g, '[]'
     from generate_series(1, 50) g;
   reset role;
   out := out || case when (select count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid()) = 0
