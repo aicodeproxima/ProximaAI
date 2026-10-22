@@ -1,7 +1,7 @@
 // Tests for src/lib/purge.js and batchLog.js purgeLogsForDeleted — "delete means delete" (owner, 2026-10-21):
 // deleting generations removes their files and History everywhere it can reach. Run: node scripts/test-purge.mjs
 import assert from "node:assert/strict";
-import { storagePathOf, storagePathsToDelete } from "../src/lib/purge.js";
+import { storagePathOf, storagePathsToDelete, planPurge, pathsInUse, ownedPaths, publicUrlOf } from "../src/lib/purge.js";
 import { purgeLogsForDeleted } from "../src/lib/batchLog.js";
 
 const S = "https://vhznmpxlcjbdzntmfvvy.supabase.co/storage/v1/object/public/generations/";
@@ -64,6 +64,44 @@ test("History on another device (removeEntries: false): items are dropped, whole
 test("entries untouched by the delete are never rewritten", () => {
   const logs = [{ id: "b9", tasks: [{ id: "q", status: "completed", cost: 0.01, outputs: ["q"] }], totalCost: 0.01 }];
   assert.deepEqual(purgeLogsForDeleted(logs, [{ id: "a", batchId: "b1" }], []), { remove: [], rewrite: [] });
+});
+
+// ─── Review #5 (2026-10-22): the whole purge is planned once, before any network call (App.jsx stagePurge) ───
+test("planPurge with history:false + alsoLogs: the caller's removed entries go, their files with them", () => {
+  const L1 = { id: "L1", sourceImageUrl: S + "uploads/u/a.png", tasks: [{ id: "t1", outputs: [S + "u/o1.png"] }] };
+  const L2 = { id: "L2", sourceImageUrl: S + "uploads/u/b.png", tasks: [] };
+  const p = planPurge([L1, L2], [], [{ id: "t1", outputs: [S + "u/o1.png"] }], { history: false, alsoLogs: [L1] });
+  assert.deepEqual(p.paths, ["uploads/u/a.png"]);
+  assert.deepEqual(p.goneLogs, [L1]);
+  assert.deepEqual(p.keptLogs, [L2]);
+});
+
+test("planPurge: a partly kept legacy entry is rewritten, and only the removed item's file goes", () => {
+  const logs = [{ id: "B", tasks: [{ outputs: [S + "u/x.png"] }, { outputs: [S + "u/y.png"] }] }];
+  const p = planPurge(logs, [{ id: "tx", batchId: "B", outputs: [S + "u/x.png"] }], [{ id: "ty", batchId: "B", outputs: [S + "u/y.png"] }]);
+  assert.deepEqual(p.remove, []);
+  assert.equal(p.rewrite.length, 1);
+  assert.deepEqual(p.rewrite[0].tasks.map(i => i.outputs[0]), [S + "u/y.png"]);
+  assert.deepEqual(p.paths, ["u/x.png"]);
+});
+
+test("pathsInUse covers form-shaped objects and skips empties", () => {
+  const used = pathsInUse([{ sourceImageUrl: S + "uploads/u/form.png", endFrameUrl: S + "uploads/u/end.png" }, null]);
+  assert.ok(used.has("uploads/u/form.png") && used.has("uploads/u/end.png"));
+});
+
+test("ownedPaths ignores what is being deleted; an entry left with none of its items owns nothing", () => {
+  const tasks = [{ id: "t1", outputs: [S + "u/a.png"] }, { id: "t2", outputs: [S + "u/b.png"] }];
+  const logs = [{ id: "L", sourceImageUrl: S + "uploads/u/s.png", tasks: [{ id: "t2", outputs: [S + "u/b.png"] }] },
+                { id: "M", tasks: [{ id: "t9", outputs: [S + "u/c.png"] }] }];
+  assert.deepEqual([...ownedPaths(tasks, logs, { taskIds: new Set(["t2"]), logIds: new Set(["M"]) })], ["u/a.png"]);
+});
+
+test("publicUrlOf round-trips through storagePathOf", () => {
+  const url = publicUrlOf("https://x.supabase.co/", "user_X/arch ive.png");
+  assert.equal(url, "https://x.supabase.co/storage/v1/object/public/generations/user_X/arch%20ive.png");
+  assert.equal(storagePathOf(url), "user_X/arch ive.png");
+  assert.equal(publicUrlOf("", "p"), null);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

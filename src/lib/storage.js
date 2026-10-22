@@ -440,6 +440,11 @@ const WS_DELETES_KEY = "proximaai-ws-deletes";
 export const readWsDeletes = () => { try { return JSON.parse(localStorage.getItem(WS_DELETES_KEY) || "{}") || {}; } catch { return {}; } };
 export const writeWsDeletes = (q) => { try { localStorage.setItem(WS_DELETES_KEY, JSON.stringify(q || {})); } catch {} };
 
+// Files of deleted generations still to delete (fileDelete.js). Left alone by sign-out: those paths still need deleting.
+const FILE_DELETES_KEY = "proximaai-file-deletes";
+export const readFileDeletes = () => { try { return JSON.parse(localStorage.getItem(FILE_DELETES_KEY) || "{}") || {}; } catch { return {}; } };
+export const writeFileDeletes = (q) => { try { localStorage.setItem(FILE_DELETES_KEY, JSON.stringify(q || {})); } catch {} };
+
 // Tasks cancelled or cleared before their submit gave a prediction id: the lost-submit lookup pairs them with their
 // prediction so no other task adopts it (taskResume.js planOrphans `claimants`).
 const CLAIMANTS_KEY = "proximaai-orphan-claimants";
