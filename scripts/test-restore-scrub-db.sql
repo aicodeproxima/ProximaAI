@@ -127,5 +127,15 @@ begin
                        else format('FAIL restore-scrubs-history-only ok=%s still-in-B1=%s; ', r->>'ok', v_left) end;
   exception when others then out := out || format('FAIL restore-scrubs-history-only %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 7. Review round 8 (migration 20261022281000): the marker is stamped with the clock at the restore's last statement,
+  --    not now() (the transaction's start), so a delete queued while a long restore ran is still voided by it.
+  declare v_src text;
+  begin
+    select prosrc into v_src from pg_proc where pronamespace = 'public'::regnamespace and proname = 'restore_my_backup_phase2';
+    out := out || case when position('extract(epoch from clock_timestamp())' in v_src) > 0
+                         and position('''last_restore_at'', to_jsonb((extract(epoch from now())' in v_src) = 0
+      then 'ok marker-at-commit; ' else 'FAIL marker-at-commit; ' end;
+  exception when others then out := out || format('FAIL marker-at-commit %s %s; ', sqlstate, sqlerrm); end;
+
   raise exception 'RESULT: %', out;
 end $t$;
