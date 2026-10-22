@@ -445,6 +445,34 @@ const FILE_DELETES_KEY = "proximaai-file-deletes";
 export const readFileDeletes = () => { try { return JSON.parse(localStorage.getItem(FILE_DELETES_KEY) || "{}") || {}; } catch { return {}; } };
 export const writeFileDeletes = (q) => { try { localStorage.setItem(FILE_DELETES_KEY, JSON.stringify(q || {})); } catch {} };
 
+// The Generate form's input paths, published per tab so no tab's file flush deletes a file another tab's form still
+// uses (fileDelete.js liveFormPaths, review #3). One key per page load, so a duplicated tab never shares one.
+const FORM_KEY = "proximaai-form-inputs:";
+const TAB_ID = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const STALE_FORM_KEY_MS = 24 * 60 * 60 * 1000;
+export function publishFormPaths(paths, now = Date.now()) {
+  try {
+    localStorage.setItem(FORM_KEY + TAB_ID, JSON.stringify({ at: now, paths: paths || [] }));
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (!k?.startsWith(FORM_KEY) || k === FORM_KEY + TAB_ID) continue;
+      let at = NaN; try { at = JSON.parse(localStorage.getItem(k))?.at; } catch {}
+      if (!(now - at <= STALE_FORM_KEY_MS)) localStorage.removeItem(k);
+    }
+  } catch {}
+}
+export function readFormPublications() {
+  const out = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(FORM_KEY)) { try { out.push(JSON.parse(localStorage.getItem(k))); } catch {} }
+    }
+  } catch {}
+  return out;
+}
+export function forgetFormPaths() { try { localStorage.removeItem(FORM_KEY + TAB_ID); } catch {} }
+
 // Tasks cancelled or cleared before their submit gave a prediction id: the lost-submit lookup pairs them with their
 // prediction so no other task adopts it (taskResume.js planOrphans `claimants`).
 const CLAIMANTS_KEY = "proximaai-orphan-claimants";

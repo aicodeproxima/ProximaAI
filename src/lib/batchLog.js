@@ -47,12 +47,14 @@ export function finishLogs(logs, tasks, now) {
   return out;
 }
 
-// "Delete means delete" (owner, 2026-10-21): deleting generations removes their History too. An entry whose batch has
-// no generation left is removed; one that keeps some loses only the deleted items (cost recomputed). Items carry
-// task ids since 2026-10-20; older entries are matched by batch (entry id = batch id) and, when partly kept, by output
-// URL. `removeEntries: false` (another device's delete arriving by sync) only drops items: the deleting device removes
-// whole entries, and that reaches here by tombstone.
-export function purgeLogsForDeleted(logs, removedTasks, keptTasks, { removeEntries = true } = {}) {
+// "Delete means delete" (owner, 2026-10-21): deleting generations removes their History too. An entry is removed only
+// when every item with a task id is deleted (entries from before items carried ids: when no kept task here has its
+// batch); one that keeps some loses only the deleted items (cost recomputed). Items carry task ids since 2026-10-20;
+// older entries are matched by batch (entry id = batch id) and, when partly kept, by output URL. `removeEntries: false`
+// (another device's delete arriving by sync) only drops items: the deleting device removes whole entries, and that
+// reaches here by tombstone. `all`: everything is being deleted (Clear Outputs). The server strips deleted items from
+// any later upload (migration 20261021175300).
+export function purgeLogsForDeleted(logs, removedTasks, keptTasks, { removeEntries = true, all = false } = {}) {
   const removedIds = new Set(removedTasks.map(t => t.id));
   const removedOutputs = new Set(removedTasks.flatMap(t => t.outputs || []));
   const removedBatches = new Set(removedTasks.map(t => t.batchId).filter(Boolean));
@@ -62,7 +64,12 @@ export function purgeLogsForDeleted(logs, removedTasks, keptTasks, { removeEntri
     const items = Array.isArray(log.tasks) ? log.tasks : [];
     const hit = removedBatches.has(log.id) || items.some(i => i?.id && removedIds.has(i.id));
     if (!hit) continue;
-    if (removeEntries && !keptBatches.has(log.id)) { remove.push(log.id); continue; }
+    // An item whose task this device lacks (still pending on the other device, which pullTasks never pulls, or beyond
+    // the 500 loaded) is not being deleted: its entry is rewritten, not removed (review #4). `all`: the caller deletes
+    // every generation of the account (Clear Outputs), so nothing is outstanding. Entries from before items carried ids
+    // are decided by batch.
+    const outstanding = !all && items.some(i => i?.id && !removedIds.has(i.id));
+    if (removeEntries && !outstanding && !keptBatches.has(log.id)) { remove.push(log.id); continue; }
     const left = items.filter(i => i?.id ? !removedIds.has(i.id) : !(i?.outputs || []).some(o => removedOutputs.has(o)));
     if (removeEntries && left.length === 0) { remove.push(log.id); continue; }
     if (left.length !== items.length) rewrite.push({ ...log, tasks: left, totalCost: totalOf(left) });

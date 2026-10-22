@@ -3,7 +3,8 @@
 // generation uses again leaves unsent, and nothing is acted on before the load and the first cloud sync.
 // Run: node scripts/test-file-delete.mjs
 import assert from "node:assert/strict";
-import { queueFileDeletes, dueFileDeletes, headOutcome, settleFileDelete, fileFlushReady, pendingOf, filesNote, headStatus, FILE_DELETE_CHUNK } from "../src/lib/fileDelete.js";
+import { queueFileDeletes, dueFileDeletes, headOutcome, settleFileDelete, fileFlushReady, pendingOf, filesNote, headStatus, FILE_DELETE_CHUNK,
+  classifyPath, liveFormPaths, heldOf } from "../src/lib/fileDelete.js";
 
 let n = 0, failed = 0;
 const test = async (name, fn) => {
@@ -72,6 +73,40 @@ await test("headStatus: a HEAD with a cache-buster; a network error or no URL gi
   let called = false;
   assert.equal(await headStatus(null, async () => { called = true; return { status: 200 }; }), 0);
   assert.equal(called, false);
+});
+
+// ─── Review #3 (2026-10-22): a file a Generate form still holds is kept until every form lets go of it ───
+await test("#3: owned beats form; a form-held path is held, anything else is deleted", () => {
+  assert.equal(classifyPath("p", { owned: new Set(["p"]), forms: new Set(["p"]) }), "owned");
+  assert.equal(classifyPath("p", { owned: new Set(), forms: new Set(["p"]) }), "form");
+  assert.equal(classifyPath("p", {}), null);
+});
+
+await test("#3: a form hold never expires, is re-checked every minute, and clears on any other outcome", () => {
+  const now = 1_000_000;
+  const q = { p: { at: 0, attempts: 2, next: 0 } };
+  const h = settleFileDelete(q, "p", "form", now);
+  assert.deepEqual(h.p, { at: 0, attempts: 2, next: now + 60_000, form: true });
+  assert.ok(settleFileDelete(h, "p", "form", now + 30 * 24 * 3600_000).p, "still held after 30 days");
+  const b = settleFileDelete(h, "p", "present", now);
+  assert.equal(b.p.form, undefined);
+  assert.equal(b.p.attempts, 3);
+  assert.deepEqual(settleFileDelete(h, "p", "deleted", now), {});
+});
+
+await test("#3: only live tabs' form publications hold; malformed ones are ignored", () => {
+  const NOW = 10_000_000;
+  const pubs = [{ at: NOW - 60_000, paths: ["a"] }, { at: NOW - 31 * 60_000, paths: ["b"] }, { at: "x", paths: ["c"] }, null, { at: NOW, paths: ["d", 7] }];
+  assert.deepEqual([...liveFormPaths(pubs, NOW)].sort(), ["a", "d"]);
+  assert.equal(classifyPath("a", { owned: new Set(), forms: liveFormPaths(pubs, NOW) }), "form", "another live tab's form holds it");
+});
+
+await test("#3: held files are counted apart from pending ones and named in the toast", () => {
+  const q = { p: { form: true }, r: {} };
+  assert.equal(pendingOf(q, ["p", "r"]), 1);
+  assert.equal(heldOf(q, ["p", "r"]), 1);
+  assert.match(filesNote(0, 1), /kept while the Generate form uses it/);
+  assert.match(filesNote(2, 0), /2 files still/);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

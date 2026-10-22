@@ -9,12 +9,12 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes } from "./lib/wsDe
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears } from "./lib/clearOutcome.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups } from "./lib/supabase.js";
-import { planPurge, ownedPaths, publicUrlOf } from "./lib/purge.js";
-import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, filesNote, fileFlushReady } from "./lib/fileDelete.js";
+import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
+import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, filesNote, fileFlushReady, classifyPath, liveFormPaths } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
@@ -1558,6 +1558,7 @@ export default function ProximaApp() {
   // Same guard for generation logs: any path that would re-upsert a history row skips
   // ids in here, so a just-deleted log can't be resurrected by an in-flight sync.
   const deletingLogIds = useRef(new Set());
+  const draftFormRef = useRef(null);   // the Generate form's inputs, read by flushFileDeletes (declared before draftForm)
   const [failedSyncCount, setFailedSyncCount] = useState(0);
 
   // ─── AUTH HANDLERS ───
@@ -2333,8 +2334,9 @@ export default function ProximaApp() {
       const due = dueFileDeletes(readFileDeletes(), Date.now());
       if (!due.length) return;
       const owned = ownedPaths(tasksRef.current, logsRef.current, { taskIds: deletingIds.current, logIds: deletingLogIds.current });
+      const forms = new Set([...pathsInUse([draftFormRef.current]), ...liveFormPaths(readFormPublications(), Date.now())]);
       for (const p of due) {
-        let outcome = owned.has(p) ? "owned" : null;
+        let outcome = classifyPath(p, { owned, forms });
         if (!outcome) {
           if ((await deleteArchivedPath(p)) || (await deleteArchivedPath(p))) outcome = "deleted";
           else outcome = headOutcome(await headStatus(publicUrlOf(SUPA_BASE, p)));
@@ -2353,8 +2355,8 @@ export default function ProximaApp() {
   // returns the plan; purgeEverywhere(plan) runs it once the caller's row delete has answered, so a rewritten History
   // entry is uploaded after the deleted tasks are tombstoned (review wf_1945b758-923 #5).
   // `history: false` + `alsoLogs`: the caller clears History itself (Reset Everything) and passes the entries it removed.
-  const stagePurge = useCallback((removed, kept, { history = true, alsoLogs = [] } = {}) => {
-    const plan = planPurge(logsRef.current, removed, kept, { history, alsoLogs });
+  const stagePurge = useCallback((removed, kept, { history = true, alsoLogs = [], all = false } = {}) => {
+    const plan = planPurge(logsRef.current, removed, kept, { history, alsoLogs, all });
     const now = Date.now();
     writeWsDeletes(queueDeletes(readWsDeletes(), removed, now));
     writeFileDeletes(queueFileDeletes(readFileDeletes(), plan.paths, now));
@@ -2372,7 +2374,7 @@ export default function ProximaApp() {
     return { ...plan, history };
   }, []);
   const purgeEverywhere = useCallback(async (plan) => {
-    if (!plan) return { filesPending: 0 };
+    if (!plan) return { filesPending: 0, filesHeld: 0 };
     flushWsDeletes();
     if (plan.history) {
       // The current version (finishLogs may have closed it meanwhile): uploaded now, queued already.
@@ -2385,7 +2387,8 @@ export default function ProximaApp() {
     }
     await flushFileDeletes();
     setFailedSyncCount(getFailedSyncs().length);
-    return { filesPending: pendingOf(readFileDeletes(), plan.paths) };
+    const q = readFileDeletes();
+    return { filesPending: pendingOf(q, plan.paths), filesHeld: heldOf(q, plan.paths) };
   }, [flushWsDeletes, persistLog, flushFileDeletes]);
   useEffect(() => {
     if (!isAuthed || keyBlocked) return;
@@ -2546,6 +2549,17 @@ export default function ProximaApp() {
   // (src/lib/taskDraft.js), so a label, the estimate and the task price are the price of the same payload.
   const draftForm = { genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl, sourceImageUrls,
     perModelRes, optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl };
+  draftFormRef.current = draftForm;
+  // This tab's Generate form inputs, published for every tab's file flush (fileDelete.js liveFormPaths, review #3):
+  // refreshed every minute, withdrawn when the tab closes.
+  useEffect(() => {
+    const publish = () => publishFormPaths([...pathsInUse([draftFormRef.current])]);
+    publish();
+    const id = setInterval(publish, 60000);
+    const bye = (e) => { if (!e.persisted) forgetFormPaths(); };
+    window.addEventListener("pagehide", bye);
+    return () => { clearInterval(id); window.removeEventListener("pagehide", bye); };
+  }, [sourceImageUrl, sourceImageUrls, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl]);
   const mediaDuration = url => mediaDurations[url];
   const estQuotes = planImageBatchRequests(selectedModelConfigs, numImages, genType).map(plan => draftTask(plan, draftForm, { mediaDuration }).quote);
   const estCost = estQuotes.reduce((sum, q) => sum + q.cost, 0);
@@ -3066,7 +3080,7 @@ export default function ProximaApp() {
     if (r.ok) for (const id of ids) removeFailedSync("task-delete", id);
     // 7. Everywhere else, now that the row delete answered: WaveSpeed, History, files (purgeEverywhere). Backup copies
     //    are scrubbed by the server (migration 20261021175100).
-    const { filesPending } = await purgeEverywhere(plan);
+    const { filesPending, filesHeld } = await purgeEverywhere(plan);
     // 8. Refresh counters + status (honest: only say "done" when the cloud delete confirmed).
     setFailedSyncCount(getFailedSyncs().length);
     getStorageStats().then(s => setStorageStats(s));
@@ -3074,7 +3088,7 @@ export default function ProximaApp() {
     exitSelectMode();
     if (r.ok) {
       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
-      setAccountToast((bk.id ? `Deleted ${noun} — safety backup saved` : `Deleted ${noun} permanently, everywhere`) + filesNote(filesPending));
+      setAccountToast((bk.id ? `Deleted ${noun} — safety backup saved` : `Deleted ${noun} permanently, everywhere`) + filesNote(filesPending, filesHeld));
     } else {
       setSaveStatus("error");
       setAccountToast(`Removed ${noun} locally — the cloud delete will finish on your next save or reload`);
@@ -4433,9 +4447,9 @@ export default function ProximaApp() {
                       const { task: queuedTaskIds } = dropQueuedUploads(["task"]);
                       for (const id of [...removed.map(t => t.id), ...queuedTaskIds]) deletingIds.current.add(id);
                       releasePredictions(removed.map(t => t.taskId)); recordClaimants(removed, { deleted: true });
-                      const plan = stagePurge(removed, []);   // queued before the clears below fire
+                      const plan = stagePurge(removed, [], { all: true });   // queued before the clears; every generation goes, so no item is outstanding (review #4)
                       setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
-                      const { filesPending } = await purgeEverywhere(plan);
+                      const { filesPending, filesHeld } = await purgeEverywhere(plan);
                       const outputsGone = await queueCloudLeftovers({ tasks: removed.map(t => t.id) });
                       getStorageStats().then(s => setStorageStats(s));
                       if (!outputsGone) {
@@ -4445,7 +4459,7 @@ export default function ProximaApp() {
                         return;
                       }
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
-                      setAccountToast((bk.id ? "Generations cleared — safety backup saved" : "Generations cleared permanently, everywhere") + filesNote(filesPending));
+                      setAccountToast((bk.id ? "Generations cleared — safety backup saved" : "Generations cleared permanently, everywhere") + filesNote(filesPending, filesHeld));
                       setTimeout(() => setAccountToast(""), 5000);
                     }}>Clear Outputs</button>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
@@ -4502,7 +4516,7 @@ export default function ProximaApp() {
                       // have no retry, so a refused clear must be reported, or the cloud copy returns on the next load.
                       const prefsLeft = unconfirmedClears(cloudClears.slice(2), ["settings", "favorites"]);
                       // Everywhere else: WaveSpeed, all files, backup copies (History was cleared above).
-                      const { filesPending } = await purgeEverywhere(plan);
+                      const { filesPending, filesHeld } = await purgeEverywhere(plan);
                       const resetGone = await queueCloudLeftovers({ tasks: removedTasks.map(t => t.id), history: removedLogs.map(l => l.id) });
                       // Clear local settings
                       setBalance(null);
@@ -4520,7 +4534,7 @@ export default function ProximaApp() {
                         return;
                       }
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
-                      setAccountToast((bk.id ? "Everything cleared — safety backup saved" : "Everything cleared permanently, everywhere") + filesNote(filesPending));
+                      setAccountToast((bk.id ? "Everything cleared — safety backup saved" : "Everything cleared permanently, everywhere") + filesNote(filesPending, filesHeld));
                       setTimeout(() => setAccountToast(""), 5000);
                     }}>Reset Everything</button>
                   </div>

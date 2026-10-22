@@ -97,6 +97,30 @@ test("ownedPaths ignores what is being deleted; an entry left with none of its i
   assert.deepEqual([...ownedPaths(tasks, logs, { taskIds: new Set(["t2"]), logIds: new Set(["M"]) })], ["u/a.png"]);
 });
 
+// ─── Review #4 (2026-10-22): an entry keeps the items whose task this device lacks ───
+{
+  const L = () => [{ id: "b1", sourceImageUrl: S + "uploads/u/s1.png", totalCost: 0.09, tasks: [
+    { id: "t1", status: "completed", cost: 0.04, outputs: [S + "u/o1.png"] },
+    { id: "t2", status: "completed", cost: 0.05, outputs: [S + "u/o2.png"] },
+    { id: "t3", status: "pending", cost: 0.03, outputs: [] }] }];
+  const removed = [{ id: "t1", batchId: "b1", outputs: [S + "u/o1.png"] }, { id: "t2", batchId: "b1", outputs: [S + "u/o2.png"] }];
+  const brief = (r) => ({ remove: r.remove, rewrite: r.rewrite.map(l => [l.id, l.tasks.map(i => i.id), l.totalCost]) });
+
+  test("#4: an item whose task is elsewhere (other device, beyond the 500 loaded) keeps its entry", () => {
+    assert.deepEqual(brief(purgeLogsForDeleted(L(), removed, [{ id: "x", batchId: "b9" }])), { remove: [], rewrite: [["b1", ["t3"], 0]] });
+  });
+  test("#4: a fully deleted entry still goes; Clear Outputs (all) removes every hit entry", () => {
+    assert.deepEqual(purgeLogsForDeleted(L(), [...removed, { id: "t3", batchId: "b1" }], []).remove, ["b1"]);
+    assert.deepEqual(purgeLogsForDeleted(L(), removed, [], { all: true }).remove, ["b1"]);
+  });
+  test("#4: planPurge keeps the source upload while items are outstanding; all:true takes everything", () => {
+    const p = planPurge(L(), [removed[0]], []);
+    assert.deepEqual(p.remove, []);
+    assert.deepEqual(p.paths, ["u/o1.png"]);
+    assert.deepEqual(planPurge(L(), removed, [], { all: true }).paths.sort(), ["u/o1.png", "u/o2.png", "uploads/u/s1.png"]);
+  });
+}
+
 test("publicUrlOf round-trips through storagePathOf", () => {
   const url = publicUrlOf("https://x.supabase.co/", "user_X/arch ive.png");
   assert.equal(url, "https://x.supabase.co/storage/v1/object/public/generations/user_X/arch%20ive.png");

@@ -1,7 +1,8 @@
 // "Delete means delete" (owner, 2026-10-21): deleting generations removes them everywhere the app can reach. This
 // module decides which stored files go (pure; tested by scripts/test-purge.mjs); the durable queue in fileDelete.js
 // deletes them. History entries are decided in batchLog.js purgeLogsForDeleted, WaveSpeed's copy in wsDelete.js, backup
-// copies by the server (triggers queue into backup_scrub_queue, migration 20261021175100).
+// copies by the server (triggers queue into backup_scrub_queue, migration 20261021175100). A file still loaded in a
+// Generate form is held until every form lets go of it (fileDelete.js "form").
 import { purgeLogsForDeleted } from "./batchLog.js";
 //
 // Files live in the public bucket "generations": uploads/<scope>/<id>.<ext> (source images, end frames, audio,
@@ -56,13 +57,13 @@ export const publicUrlOf = (base, path) => (base && path ? base.replace(/\/+$/, 
 
 // The whole plan of a generation delete: History entries removed / rewritten, entries kept, and the files no kept
 // generation or entry uses. `history: false` + `alsoLogs`: the caller cleared History itself (Reset Everything).
-export function planPurge(logs, removed, kept, { history = true, alsoLogs = [] } = {}) {
+export function planPurge(logs, removed, kept, { history = true, alsoLogs = [], all = false } = {}) {
   const alsoIds = new Set(alsoLogs.map(l => l.id));
   const base = (logs || []).filter(l => !alsoIds.has(l.id));
   let remove = [], rewrite = [], keptLogs = base;
   const goneLogs = [...alsoLogs];
   if (history && removed.length) {
-    ({ remove, rewrite } = purgeLogsForDeleted(base, removed, kept));
+    ({ remove, rewrite } = purgeLogsForDeleted(base, removed, kept, { all }));
     const gone = new Set(remove), byId = new Map(rewrite.map(l => [l.id, l]));
     goneLogs.push(...base.filter(l => gone.has(l.id)));
     keptLogs = base.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l);
