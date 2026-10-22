@@ -54,10 +54,15 @@ export function liveFormPaths(pubs, now) {
 export const fileFlushReady = ({ loaded, synced }) => !!loaded && !!synced;
 export const pendingOf = (queue, paths) => (paths || []).filter(p => queue?.[p] && !queue[p].form).length;
 export const heldOf = (queue, paths) => (paths || []).filter(p => queue?.[p]?.form).length;
-export function filesNote(pending, held = 0) {
+// The toast's note on what a delete has not finished yet (review wf_ec400a67-988 #4): files still queued or held for a
+// Generate form, WaveSpeed copies still queued (a running prediction is skipped and retried), a History removal the
+// cloud has not confirmed. Empty when everything is done: only then may a toast say "permanently, everywhere".
+export function purgeNote({ files = 0, held = 0, ws = 0, history = false } = {}) {
   const s = (n) => (n === 1 ? "" : "s");
-  return (pending ? ` — ${pending} file${s(pending)} still being deleted (retried automatically)` : "")
-    + (held ? ` — ${held} file${s(held)} kept while the Generate form uses ${held === 1 ? "it" : "them"}` : "");
+  return (files ? ` — ${files} file${s(files)} still being deleted (retried automatically)` : "")
+    + (held ? ` — ${held} file${s(held)} kept while the Generate form uses ${held === 1 ? "it" : "them"}` : "")
+    + (ws ? ` — ${ws} WaveSpeed cop${ws === 1 ? "y" : "ies"} still being deleted (retried automatically)` : "")
+    + (history ? " — History removal will finish on your next save or reload" : "");
 }
 export async function headStatus(url, fetchImpl = fetch) {
   if (!url) return 0;

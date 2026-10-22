@@ -3,7 +3,7 @@
 // generation uses again leaves unsent, and nothing is acted on before the load and the first cloud sync.
 // Run: node scripts/test-file-delete.mjs
 import assert from "node:assert/strict";
-import { queueFileDeletes, dueFileDeletes, headOutcome, settleFileDelete, fileFlushReady, pendingOf, filesNote, headStatus, FILE_DELETE_CHUNK,
+import { queueFileDeletes, dueFileDeletes, headOutcome, settleFileDelete, fileFlushReady, pendingOf, purgeNote, headStatus, FILE_DELETE_CHUNK,
   classifyPath, liveFormPaths, heldOf } from "../src/lib/fileDelete.js";
 
 let n = 0, failed = 0;
@@ -59,9 +59,9 @@ await test("nothing is acted on before this device's rows are loaded and the fir
 
 await test("honest status: files still queued are counted and named in the toast", () => {
   assert.equal(pendingOf({ a: {} }, ["a", "z"]), 1);
-  assert.equal(filesNote(0), "");
-  assert.match(filesNote(1), /1 file still/);
-  assert.match(filesNote(2), /2 files/);
+  assert.equal(purgeNote({}), "");
+  assert.match(purgeNote({ files: 1 }), /1 file still/);
+  assert.match(purgeNote({ files: 2 }), /2 files/);
 });
 
 await test("headStatus: a HEAD with a cache-buster; a network error or no URL gives 0", async () => {
@@ -105,8 +105,18 @@ await test("#3: held files are counted apart from pending ones and named in the 
   const q = { p: { form: true }, r: {} };
   assert.equal(pendingOf(q, ["p", "r"]), 1);
   assert.equal(heldOf(q, ["p", "r"]), 1);
-  assert.match(filesNote(0, 1), /kept while the Generate form uses it/);
-  assert.match(filesNote(2, 0), /2 files still/);
+  assert.match(purgeNote({ held: 1 }), /kept while the Generate form uses it/);
+  assert.match(purgeNote({ files: 2 }), /2 files still/);
+});
+
+// Review wf_ec400a67-988 #4: a delete reports every part still pending, not only files.
+await test("purgeNote names pending WaveSpeed copies and a pending History removal too; nothing pending -> empty", () => {
+  assert.match(purgeNote({ ws: 1 }), /1 WaveSpeed copy still being deleted/);
+  assert.match(purgeNote({ ws: 3 }), /3 WaveSpeed copies/);
+  assert.match(purgeNote({ history: true }), /History removal will finish/);
+  const all = purgeNote({ files: 1, held: 1, ws: 2, history: true });
+  for (const re of [/1 file still/, /kept while/, /2 WaveSpeed copies/, /History removal/]) assert.match(all, re);
+  assert.equal(purgeNote({ files: 0, held: 0, ws: 0, history: false }), "");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);
