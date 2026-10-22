@@ -6,8 +6,9 @@
 // Activated automatically when VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.
 // Gracefully no-ops otherwise (local-only mode).
 
-import { sessionToken, isSessionError, reportSessionExpired, isSuperseded } from "./session.js";
+import { sessionToken, isSessionError, reportSessionExpired, isSuperseded, withSessionHeader } from "./session.js";
 import { removedPaths } from "./storageRemove.js";
+import { createSyncPing } from "./syncPing.js";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -66,9 +67,12 @@ export async function initSupabase() {
   try {
     const cdnUrl = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/+esm";
     const mod = await import(/* @vite-ignore */ cdnUrl);
+    // Every REST and Storage request carries the session token (session.js withSessionHeader): the row policies admit
+    // only requests whose token the server verifies. fetch is captured here, as supabase-js did by default.
     supabase = mod.createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { persistSession: false },
-      global: { headers: { "x-device-id": getDeviceId() } },
+      global: { headers: { "x-device-id": getDeviceId() },
+        fetch: withSessionHeader(globalThis.fetch.bind(globalThis), { baseUrl: SUPABASE_URL }) },
     });
     return supabase;
   } catch {
@@ -450,27 +454,13 @@ export async function syncHistoryBatch(entries) {
   } catch (err) { warnOnce("syncHistoryBatch", err); throw err; }
 }
 
-// Live updates: calls onChange for any insert/update/delete on this scope's tasks or history.
-// Realtime can't filter DELETE events server-side, so they arrive unfiltered; tasks/history use
-// REPLICA IDENTITY FULL (migration 20261020000002) so the old row carries device_id and other
-// scopes' deletes are dropped here instead of triggering a full reconcile on every client.
+// Live updates: calls onChange when the database pings this account's secret topic after a change to tasks or history
+// (syncPing.js). The topic arrives with every get_my_account answer (checkSession runs before each reconcile), so the
+// channel opens after the first reconcile and follows rotations.
+const syncPing = createSyncPing(() => supabase);
 export function subscribeToCloudChanges(onChange) {
   if (!supabase) return () => {};
-  const scope = getDeviceId();
-  const channel = supabase.channel(`proxima-sync-${scope}`);
-  const onDelete = (payload) => {
-    const owner = payload?.old?.device_id;
-    if (owner && owner !== scope) return;
-    onChange(payload);
-  };
-  for (const table of ["tasks", "history"]) {
-    channel
-      .on("postgres_changes", { event: "INSERT", schema: "public", table, filter: `device_id=eq.${scope}` }, onChange)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table, filter: `device_id=eq.${scope}` }, onChange)
-      .on("postgres_changes", { event: "DELETE", schema: "public", table }, onDelete);
-  }
-  channel.subscribe();
-  return () => { supabase.removeChannel(channel); };
+  return syncPing.subscribe(() => onChange());
 }
 
 // ─── Bulk Pull (for initial sync on login) ───
@@ -655,14 +645,17 @@ export async function unlockWithBackupCode(code, newPassword = null) {
 }
 
 // A token-checked no-op. Throws (and signs this device out) once the server stops accepting the session —
-// e.g. after a rename or password change on another device.
+// e.g. after a rename or password change on another device. Its answer also carries the live-update topic.
 export async function checkSession() {
   const r = await sessionRpc("get_my_account");
+  syncPing.setTopic(r?.sync_topic);
   return !!r?.ok;
 }
 
 export async function getMyAccount() {
-  return sessionRpc("get_my_account");
+  const r = await sessionRpc("get_my_account");
+  syncPing.setTopic(r?.sync_topic);
+  return r;
 }
 
 export async function setMyAccount({ email, emailVerified, lastVerifiedAt }) {
