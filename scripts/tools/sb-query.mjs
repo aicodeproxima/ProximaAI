@@ -21,7 +21,8 @@ if (!sql.trim()) { console.error('usage: node scripts/tools/sb-query.mjs "<sql>"
 // process.exitCode, not process.exit(): exiting while fetch handles close trips a libuv assertion on Windows (exit 127).
 const escape = !write && readOnlyEscape(sql);
 if (escape) {
-  console.error(`refused: "${escape}" would leave read-only mode (re-run with --write if the change is intended)`);
+  console.error(`refused: "${escape}" could leave read-only mode. A read needs no BEGIN/COMMIT or transaction settings; ` +
+    "--write is only for a change you intend to make.");
   process.exitCode = 3;
 } else {
   try { console.log(JSON.stringify(await runSql(sql, { readOnly: !write }))); }

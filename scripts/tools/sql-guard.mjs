@@ -4,16 +4,29 @@
 // a determined author (EXECUTE of a built string gets past it); the database grants are the real boundary.
 
 // Splits SQL into top-level code (comments dropped, string literals and dollar-quoted bodies blanked) and the bodies.
+// As Postgres reads it: block comments nest, and an E'...' escape string takes backslash escapes (review round 3: out of
+// step, the scanner took a later statement for part of a string).
 function scan(sql) {
   let code = "", i = 0;
   const bodies = [];
   while (i < sql.length) {
     const c = sql[i], two = sql.slice(i, i + 2);
     if (two === "--") { const j = sql.indexOf("\n", i); i = j < 0 ? sql.length : j; continue; }
-    if (two === "/*") { const j = sql.indexOf("*/", i + 2); i = j < 0 ? sql.length : j + 2; code += " "; continue; }
+    if (two === "/*") {
+      let depth = 1, j = i + 2;
+      while (j < sql.length && depth > 0) {
+        if (sql.startsWith("/*", j)) { depth++; j += 2; } else if (sql.startsWith("*/", j)) { depth--; j += 2; } else j++;
+      }
+      i = j; code += " "; continue;
+    }
     if (c === "'" || c === '"') {
+      const escapes = c === "'" && /[e]$/i.test(code) && !/[a-z0-9_$]$/i.test(code.slice(0, -1));
       let j = i + 1;
-      while (j < sql.length && !(sql[j] === c && sql[j + 1] !== c)) j += sql[j] === c ? 2 : 1;
+      while (j < sql.length) {
+        if (escapes && sql[j] === "\\") { j += 2; continue; }
+        if (sql[j] === c) { if (sql[j + 1] === c) { j += 2; continue; } break; }
+        j++;
+      }
       i = j + 1; code += ` ${c}${c} `; continue;
     }
     const tag = c === "$" && /^\$([a-z_][a-z0-9_]*)?\$/i.exec(sql.slice(i));
@@ -31,6 +44,8 @@ function scan(sql) {
 // while reading one names it inside a string (current_setting('transaction_read_only')).
 const IN_CODE = /set_config\s*\(|session\s+authorization|session\s+characteristics|\bset\s+(local\s+|session\s+)?(role|transaction)\b|\b(default_)?transaction_read_only\b/;
 const STATEMENT = /^(begin|start|commit|end|rollback|abort|savepoint|release|prepare|set|reset|discard)\b/;
+// Session settings that cannot change the transaction's read-only mode (review round 3: these were refused too).
+const SAFE_SETTING = /^(set\s+(session\s+|local\s+)?|reset\s+)(statement_timeout|lock_timeout|idle_in_transaction_session_timeout|search_path|time\s*zone|work_mem|client_min_messages|application_name|extra_float_digits|datestyle|intervalstyle)\b/;
 
 export function readOnlyEscape(sql) {
   const lower = String(sql || "").toLowerCase();
@@ -41,7 +56,7 @@ export function readOnlyEscape(sql) {
   }
   for (const s of code.split(";")) {
     const m = s.trim().match(STATEMENT);
-    if (m) return m[0];
+    if (m && !SAFE_SETTING.test(s.trim())) return m[0];
   }
   for (const b of bodies) {
     const m = scan(b).code.match(/\b(commit|rollback)\b/);

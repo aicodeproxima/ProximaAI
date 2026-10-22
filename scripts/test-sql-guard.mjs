@@ -49,5 +49,29 @@ test("transaction control and read-only settings are refused, top-level or insid
   ]) assert.ok(readOnlyEscape(q), q);
 });
 
+// Review round 3: escape strings (E'...\'...') and nested block comments put the scanner out of step with Postgres,
+// so a transaction switch after them passed as "inside a string"; and harmless session settings were refused.
+test("escape strings and nested comments are scanned as Postgres does", () => {
+  for (const q of [
+    "select E'\\''; set transaction read write; select 'x'",
+    "select e'a\\'b'; commit; begin read write; select 1",
+    "/* /* */ ' */ set transaction read write; -- '",
+    "/* a /* b */ c */ commit",
+  ]) assert.ok(readOnlyEscape(q), q);
+  for (const q of ["select E'it\\'s'", "select 'E''x'", "/* /* nested */ still a comment */ select 1", "select name from e"]) assert.equal(readOnlyEscape(q), null, q);
+});
+
+test("harmless session settings pass; anything that could change the transaction mode does not", () => {
+  for (const q of [
+    "set statement_timeout = '5s'; select 1",
+    "set local statement_timeout to 1000; select 1",
+    "SET search_path = public, pg_catalog; select 1",
+    "set session timezone = 'UTC'; select now()",
+    "reset statement_timeout",
+  ]) assert.equal(readOnlyEscape(q), null, q);
+  for (const q of ["reset all", "set session characteristics as transaction read write", "reset role", "set work_mem = '64MB'; set transaction read write"])
+    assert.ok(readOnlyEscape(q), q);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;
