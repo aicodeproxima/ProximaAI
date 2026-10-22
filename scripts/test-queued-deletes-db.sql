@@ -158,16 +158,114 @@ begin
     if not (r->>'voided')::boolean or v_n_tasks = 0 then
       out := out || format('FAIL clear-queued voided %s tasks=%s; ', r, v_n_tasks);
     else
-      r := clear_queued_rows(v_tok, 'task', 6000);
+      r := clear_queued_rows(v_tok, 'task', (extract(epoch from now()) * 1000)::bigint + 1000);   -- rows are bounded by created_at (round 9)
       v_n_tasks := (select count(*) from tasks where device_id = u);
       v_left_hist := (select count(*) from history where id = 'qd-CH');
       out := out || case when not (r->>'voided')::boolean and v_n_tasks = 0 and v_left_hist = 0
                           and exists (select 1 from tasks where id = 'qd-cother')
         then 'ok clear-queued; ' else format('FAIL clear-queued %s tasks=%s CH=%s; ', r, v_n_tasks, v_left_hist) end;
     end if;
-    begin perform clear_queued_rows(v_tok, 'settings', 6000); out := out || 'FAIL clear-queued kind; ';
+    begin perform clear_queued_rows(v_tok, 'bogus', 6000); out := out || 'FAIL clear-queued kind; ';
     exception when others then null; end;
   exception when others then out := out || format('FAIL clear-queued %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 12. Review round 9 (migration 20261022300000): a clear covers the rows that existed when it was queued plus every id
+  --     the clearing device named; a row another device created after the queue time stays. Tasks: a History-only id
+  --     it named gets a user tombstone, and only entries holding a cleared id are touched.
+  declare v_q bigint := (extract(epoch from now()) * 1000)::bigint + 1000; v_bn jsonb; v_left text;
+  begin
+    insert into tasks (id, device_id, status, start_time, outputs, created_at) values
+      ('qd-b-old', u, 'completed', 1, '[]', now()),
+      ('qd-b-new', u, 'completed', 1, '[]', now() + interval '1 hour'),
+      ('qd-b-known', u, 'completed', 1, '[]', now() + interval '1 hour');
+    insert into history (id, device_id, timestamp, tasks, total_cost, created_at) values
+      ('qd-BO', u, 1, '[{"id":"qd-b-old","status":"completed","cost":1,"outputs":[]},{"id":"qd-b-ho","status":"completed","cost":1,"outputs":[]}]', 2, now()),
+      ('qd-BN', u, 1, '[{"id":"qd-b-new","status":"completed","cost":1,"outputs":[]}]', 1, now() + interval '1 hour');
+    r := clear_queued_rows(v_tok, 'task', v_q, array['qd-b-known', 'qd-b-ho']);
+    select string_agg(id, ',' order by id) into v_left from tasks where device_id = u;
+    select tasks into v_bn from history where id = 'qd-BN';
+    out := out || case when not (r->>'voided')::boolean and v_left = 'qd-b-new'
+                        and not exists (select 1 from history where id = 'qd-BO')
+                        and v_bn = '[{"id":"qd-b-new","status":"completed","cost":1,"outputs":[]}]'
+                        and exists (select 1 from sync_tombstones where id = 'qd-b-ho' and device_id = u and not coalesce(by_restore, false))
+      then 'ok clear-bounded-tasks; '
+      else format('FAIL clear-bounded-tasks %s left=%s BN=%s BO=%s; ', r, v_left, v_bn, exists (select 1 from history where id = 'qd-BO')) end;
+    insert into history (id, device_id, timestamp, tasks, total_cost, created_at) values
+      ('qd-hb-old', u, 1, '[]', 0, now()), ('qd-hb-known', u, 1, '[]', 0, now() + interval '1 hour');
+    r := clear_queued_rows(v_tok, 'history', v_q, array['qd-hb-known']);
+    select string_agg(id, ',' order by id) into v_left from history where device_id = u;
+    out := out || case when not (r->>'voided')::boolean and v_left = 'qd-BN'
+      then 'ok clear-bounded-history; ' else format('FAIL clear-bounded-history %s left=%s; ', r, v_left) end;
+  exception when others then out := out || format('FAIL clear-bounded %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 13. Review round 9: Reset's settings and favorites clears are restore-checked too (they were plain REST deletes), and
+  --     keep the restore marker and the form holds (form-inputs:*).
+  declare v_q bigint := (extract(epoch from now()) * 1000)::bigint + 1000; v_keys text; v_favs text;
+  begin
+    insert into settings (device_id, key, value) values (u, 'theme', '"x"'), (u, 'form-inputs:qd', '{}')
+      on conflict (device_id, key) do nothing;
+    insert into favorites (id, device_id, prompt, created_at) values
+      ('qd-f-old', u, 'p', now()), ('qd-f-new', u, 'p', now() + interval '1 hour');
+    r := clear_queued_rows(v_tok, 'settings', 4000);   -- queued before the restore marker (5000): voided
+    if not (r->>'voided')::boolean or not exists (select 1 from settings where device_id = u and key = 'theme') then
+      out := out || format('FAIL clear-prefs voided %s; ', r);
+    else
+      perform clear_queued_rows(v_tok, 'settings', v_q);
+      select string_agg(key, ',' order by key) into v_keys from settings where device_id = u;
+      perform clear_queued_rows(v_tok, 'favorites', v_q);
+      select string_agg(id, ',' order by id) into v_favs from favorites where device_id = u;
+      out := out || case when v_keys = 'form-inputs:qd,last_restore_at' and v_favs = 'qd-f-new'
+        then 'ok clear-prefs; ' else format('FAIL clear-prefs keys=%s favs=%s; ', v_keys, v_favs) end;
+    end if;
+  exception when others then out := out || format('FAIL clear-prefs %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 14. Review round 9 (migration 20261022301000): the restore marker belongs to the server. A browser role with a valid
+  --     session can neither delete nor change it (an older bundle's Reset deleted every settings row); the rest still goes.
+  declare v_m text; v_k int;
+  begin
+    insert into settings (device_id, key, value) values (u, 'theme', '"y"') on conflict (device_id, key) do nothing;
+    perform set_config('request.headers', json_build_object('x-proxima-session', v_tok)::text, true);
+    execute 'set local role anon';
+    update settings set value = '1' where device_id = u and key = 'last_restore_at';
+    delete from settings where device_id = u;
+    execute 'reset role';
+    select value #>> '{}' into v_m from settings where device_id = u and key = 'last_restore_at';
+    v_k := (select count(*) from settings where device_id = u and key = 'theme');
+    out := out || case when v_m = '5000' and v_k = 0 then 'ok marker-server-only; '
+      else format('FAIL marker-server-only marker=%s theme=%s; ', v_m, v_k) end;
+  exception when others then execute 'reset role'; out := out || format('FAIL marker-server-only %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 15. Review round 9 (migration 20261022302000): a delete's History rewrite (an entry losing items without an id) goes
+  --     through upsert_queued_history at the delete's queue time: voided by a later restore, otherwise upserted into this
+  --     account only (another account's entry with the same id is left alone).
+  declare v_t jsonb; v_e jsonb;
+  begin
+    insert into history (id, device_id, timestamp, tasks, total_cost) values
+      ('qd-RW', u, 1, '[{"status":"completed","cost":1,"outputs":[]},{"id":"qd-rw-1","status":"completed","cost":2,"outputs":[]}]', 3),
+      ('qd-RWo', 'user:__someone_else', 1, '[]', 0);
+    v_e := jsonb_build_array(
+      jsonb_build_object('id', 'qd-RW', 'device_id', 'user:__someone_else', 'timestamp', 1,
+                         'tasks', '[{"id":"qd-rw-1","status":"completed","cost":2,"outputs":[]}]'::jsonb, 'total_cost', 2),
+      jsonb_build_object('id', 'qd-RWo', 'timestamp', 1, 'tasks', '[{"id":"qd-rw-x","status":"completed","cost":9,"outputs":[]}]'::jsonb, 'total_cost', 9),
+      jsonb_build_object('id', 'qd-RWn', 'timestamp', 1, 'tasks', '[]'::jsonb, 'total_cost', 0));
+    execute 'set local role anon';
+    r := upsert_queued_history(v_tok, v_e, 4000);   -- queued before the restore marker (5000): voided
+    execute 'reset role';
+    select tasks into v_t from history where id = 'qd-RW';
+    if not (r->>'voided')::boolean or jsonb_array_length(v_t) <> 2 or exists (select 1 from history where id = 'qd-RWn') then
+      out := out || format('FAIL rewrite-queued voided %s; ', r);
+    else
+      execute 'set local role anon';
+      r := upsert_queued_history(v_tok, v_e, 9e12::bigint);
+      execute 'reset role';
+      select tasks into v_t from history where id = 'qd-RW';
+      out := out || case when not (r->>'voided')::boolean and v_t = '[{"id":"qd-rw-1","status":"completed","cost":2,"outputs":[]}]'
+                          and exists (select 1 from history where id = 'qd-RW' and device_id = u)
+                          and exists (select 1 from history where id = 'qd-RWo' and device_id = 'user:__someone_else' and tasks = '[]')
+                          and exists (select 1 from history where id = 'qd-RWn' and device_id = u)
+        then 'ok rewrite-queued; ' else format('FAIL rewrite-queued %s RW=%s; ', r, v_t) end;
+    end if;
+  exception when others then execute 'reset role'; out := out || format('FAIL rewrite-queued %s %s; ', sqlstate, sqlerrm); end;
 
   -- 7. Review round 6 (migration 20261022261000): the backup-scrub drain takes each account's restore marker before it
   --    touches the queue or the backups, like restore, rename and replayed deletes (a cron drain and a rename locked
@@ -186,7 +284,7 @@ begin
     select string_agg(p.proname, ',') into v_bad
       from pg_proc p
      where p.pronamespace = 'public'::regnamespace
-       and p.proname in ('restore_my_backup_phase2', 'delete_queued_rows', 'rename_my_account')
+       and p.proname in ('restore_my_backup_phase2', 'delete_queued_rows', 'rename_my_account', 'clear_queued_rows', 'upsert_queued_history')
        and not (position('last_restore_at'' for' in p.prosrc) > 0      -- the lock statement: "... 'last_restore_at' for update|share"
                 and position('last_restore_at'' for' in p.prosrc)
                     < least(coalesce(nullif(position('delete from tasks' in p.prosrc), 0), 999999),
