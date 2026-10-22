@@ -206,11 +206,19 @@ export async function pullTaskIdsInWindow(after, before) {
   } catch (err) { warnOnce("pullTaskIdsInWindow", err); return null; }
 }
 
-export async function deleteTaskRemote(id) {
-  if (!supabase) return;
+// Deletes this scope's rows of `table` (narrowed by `narrow`) and says whether the server confirmed it: { ok, error }.
+// A local-only install has nothing to delete; a configured cloud that has not started has deleted nothing.
+async function deleteScoped(site, table, narrow = (q) => q) {
+  if (!supabase) return isSupabaseConfigured() ? { ok: false, error: "Cloud sync is not initialized" } : { ok: true, localOnly: true };
   try {
-    await supabase.from("tasks").delete().eq("id", id).eq("device_id", getDeviceId());
-  } catch (err) { warnOnce("deleteTaskRemote", err); }
+    const { error } = await narrow(supabase.from(table).delete()).eq("device_id", getDeviceId());
+    if (error) { warnOnce(site, error); return { ok: false, error: error.message }; }
+    return { ok: true };
+  } catch (err) { warnOnce(site, err); return { ok: false, error: err?.message }; }
+}
+
+export async function deleteTaskRemote(id) {
+  return deleteScoped("deleteTaskRemote", "tasks", (q) => q.eq("id", id));
 }
 
 // Bulk-delete specific task ids from the cloud, scoped to this device/user.
@@ -231,10 +239,7 @@ export async function deleteTasksRemote(ids) {
 }
 
 export async function clearTasksRemote() {
-  if (!supabase) return;
-  try {
-    await supabase.from("tasks").delete().eq("device_id", getDeviceId());
-  } catch (err) { warnOnce("clearTasksRemote", err); }
+  return deleteScoped("clearTasksRemote", "tasks");
 }
 
 // ─── History Sync ───
@@ -317,24 +322,15 @@ export async function deleteHistoryRemote(ids) {
 }
 
 export async function clearHistoryRemote() {
-  if (!supabase) return;
-  try {
-    await supabase.from("history").delete().eq("device_id", getDeviceId());
-  } catch (err) { warnOnce("clearHistoryRemote", err); }
+  return deleteScoped("clearHistoryRemote", "history");
 }
 
 export async function clearSettingsRemote() {
-  if (!supabase) return;
-  try {
-    await supabase.from("settings").delete().eq("device_id", getDeviceId());
-  } catch (err) { warnOnce("clearSettingsRemote", err); }
+  return deleteScoped("clearSettingsRemote", "settings");
 }
 
 export async function clearFavoritesRemote() {
-  if (!supabase) return;
-  try {
-    await supabase.from("favorites").delete().eq("device_id", getDeviceId());
-  } catch (err) { warnOnce("clearFavoritesRemote", err); }
+  return deleteScoped("clearFavoritesRemote", "favorites");
 }
 
 // ─── Settings Sync ───
