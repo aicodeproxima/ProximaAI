@@ -80,6 +80,15 @@ export function applyCloudUpdate(task, u) {
   return takes ? { ...task, outputs: u.outputs, ...u.finish } : task;
 }
 
+// Of the tasks this pass removes, those whose History items go with them: a user's delete. A task a restore removed
+// (tombstone by_restore, `restoreRemoved`) leaves this device, but the restore brought its History entry back with its
+// item, and stripping it would erase the generation from History and, with backups OFF, from every backup (review
+// round 5). `restoreRemoved` null (unknown): every removal counts, as before.
+export function historyRemovals(removedTasks, restoreRemoved) {
+  if (!(restoreRemoved instanceof Set)) return removedTasks || [];
+  return (removedTasks || []).filter(t => !restoreRemoved.has(t?.id));
+}
+
 // On a restore this tab has not handled (storage.js restoreGuard `fresh`): ids still marked as being deleted here whose
 // rows the cloud holds again. A delete confirmed earlier this session left its id marked for good, so the restored row
 // was never re-added and its WaveSpeed copy not held (review round 4). An id whose own delete intent is still pending

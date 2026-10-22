@@ -1,6 +1,6 @@
 // Tests for src/lib/syncReconcile.js — the cross-device sync decisions. Run: node scripts/test-sync-reconcile.mjs
 import assert from "node:assert/strict";
-import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
+import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, historyRemovals, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
 
 const NOW = 1_800_000_000_000;
 const OLD = NOW - 10 * 60_000;
@@ -179,6 +179,13 @@ test("releaseRestored: deleting ids the cloud holds again, except pending intent
   const deleting = new Set(["back", "pending", "gone"]);
   assert.deepEqual(releaseRestored(deleting, ["pending"], new Set(["back", "pending", "other"])), ["back"]);
   assert.deepEqual(releaseRestored(deleting, [], null), []);
+});
+
+// Review round 5: a task a restore removed (by_restore tombstone) leaves this device, but its History items stay: the
+// restore brought the entry back with them, and stripping them would erase the generation from History and backups.
+test("historyRemovals: only tasks a user deleted take their History items with them", () => {
+  assert.deepEqual(historyRemovals([{ id: "u" }, { id: "r" }, { id: "x" }], new Set(["r"])).map(t => t.id), ["u", "x"]);
+  assert.deepEqual(historyRemovals([{ id: "u" }], null).map(t => t.id), ["u"], "restore removals unknown: as before");
 });
 
 console.log(`\n${n} passed`);

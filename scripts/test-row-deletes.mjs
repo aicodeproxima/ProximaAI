@@ -132,6 +132,20 @@ await test("backfillTaskInputs: one narrow update per row, scoped to this accoun
   assert.deepEqual(await sb.backfillTaskInputs([]), { ok: true });
 });
 
+// Review round 5: a restore's removals (tombstones by_restore) are not deletes: the reconcile must know them apart, so
+// it never strips their History items.
+await test("pullCloudIds: task tombstones a restore wrote are reported apart (taskRestoreRemoved)", async () => {
+  const c = fakeClient((q) => {
+    if (q.table !== "sync_tombstones") return { data: [{ id: "row" }], error: null };
+    const kind = q.ops.find(o => o[0] === "eq" && o[1] === "kind")?.[2];
+    return { data: kind === "task" ? [{ id: "u", by_restore: false }, { id: "r", by_restore: true }] : [{ id: "h", by_restore: null }], error: null };
+  });
+  sb.__setClientForTests(c);
+  const r = await sb.pullCloudIds();
+  assert.deepEqual([[...r.taskTombstones].sort(), [...r.taskRestoreRemoved], [...r.historyTombstones]], [["r", "u"], ["r"], ["h"]]);
+  assert.deepEqual([...r.tasks], ["row"]);
+});
+
 // Review round 4: the input-URL backfill reads the cloud rows of the tasks that need it by id (any age), not only the
 // newest 500 the sync pulls.
 await test("pullTaskInputs: id + the four input URLs for these ids, chunks of 100, this account; failure -> null", async () => {

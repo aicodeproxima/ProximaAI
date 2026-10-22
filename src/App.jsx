@@ -18,7 +18,7 @@ import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headSt
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
-import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored } from "./lib/syncReconcile.js";
+import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, historyRemovals } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
@@ -2007,8 +2007,11 @@ export default function ProximaApp() {
           // one stops polling here. Their prediction ids are released (no lost submit may adopt them).
           const removedHere = tasksRef.current.filter(t => rmTasks.has(t.id));
           releasePredictions(removedHere.map(t => t.taskId));
-          recordClaimants(removedHere, { deleted: true });   // a claimant cancelled here and deleted elsewhere is deleted too (review #10)
-          dropLogItemsFor(removedHere);
+          // Only a user's delete takes the History items (and a claimant's prediction) with it; a task a restore removed
+          // keeps both (syncReconcile.js historyRemovals, review round 5).
+          const userRemoved = historyRemovals(removedHere, ids?.taskRestoreRemoved ?? null);
+          recordClaimants(userRemoved, { deleted: true });   // a claimant cancelled here and deleted elsewhere is deleted too (review #10)
+          dropLogItemsFor(userRemoved);
           for (const id of rmTasks) {
             savedTaskIds.current.delete(id); removeFailedSync("task", id);
             clearTimeout(pollRefs.current[id]); delete pollRefs.current[id];

@@ -455,16 +455,17 @@ export async function pullFavorites() {
 // 1000-row cap (keyset, not offsets, so a concurrent delete can't shift rows out of an unread page).
 // A failed read returns null — never an empty set — so a network blip can't look like "everything
 // was deleted" or "nothing was ever uploaded".
-async function pullAllIds(table, kind) {
+// `byRestore`: also collect the ids of tombstones a restore wrote (sync_tombstones.by_restore), which are not deletes.
+async function pullAllIds(table, kind, byRestore = null) {
   const ids = new Set();
   let last = null;
   for (;;) {
-    let q = supabase.from(table).select("id").eq("device_id", getDeviceId()).order("id").limit(1000);
+    let q = supabase.from(table).select(byRestore ? "id,by_restore" : "id").eq("device_id", getDeviceId()).order("id").limit(1000);
     if (kind) q = q.eq("kind", kind);
     if (last !== null) q = q.gt("id", last);
     const { data, error } = await q;
     if (error || !Array.isArray(data)) return null;
-    for (const row of data) ids.add(row.id);
+    for (const row of data) { ids.add(row.id); if (byRestore && row.by_restore === true) byRestore.add(row.id); }
     if (data.length < 1000) return ids;
     last = data[data.length - 1].id;
   }
@@ -477,10 +478,13 @@ export async function pullCloudIds() {
   if (!supabase) return null;
   try {
     const [tasks, history] = await Promise.all([pullAllIds("tasks"), pullAllIds("history")]);
+    // Tasks a restore removed are reported apart (taskRestoreRemoved): they leave this device, but their History items
+    // stay (review round 5).
+    const taskRestoreRemoved = new Set();
     const [taskTombstones, historyTombstones] = await Promise.all([
-      pullAllIds("sync_tombstones", "task"), pullAllIds("sync_tombstones", "history"),
+      pullAllIds("sync_tombstones", "task", taskRestoreRemoved), pullAllIds("sync_tombstones", "history"),
     ]);
-    return { tasks, history, taskTombstones, historyTombstones };
+    return { tasks, history, taskTombstones, historyTombstones, taskRestoreRemoved: taskTombstones ? taskRestoreRemoved : null };
   } catch (err) { warnOnce("pullCloudIds", err); return null; }
 }
 
