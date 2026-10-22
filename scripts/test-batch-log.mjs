@@ -1,6 +1,6 @@
 // Tests for src/lib/batchLog.js — the History entry of a generation batch. Run: node scripts/test-batch-log.mjs
 import assert from "node:assert/strict";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud, restoredVersions } from "../src/lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud, restoredVersions, clientHistoryWork } from "../src/lib/batchLog.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -124,6 +124,20 @@ test("restoredVersions: the cloud copy replaces a differing local one, except pe
   const out = restoredVersions([localE, same, { id: "L", tasks: [], totalCost: 0 }], [cloudE, same, { id: "C", tasks: [], totalCost: 0 }]);
   assert.deepEqual(out, [{ id: "E", tasks: items, totalCost: 3, sourceAudioUrl: "a" }]);
   assert.deepEqual(restoredVersions([localE], [cloudE], new Set(["E"])), [], "an upload queued after the restore keeps the local copy");
+});
+
+// Review round 8: the server strips a deleted generation's items (by id) in the delete's own transaction, so the client
+// sends a History change only where an item without an id was dropped (older entries the server cannot match).
+test("clientHistoryWork: only entries whose dropped or removed items include one without an id", () => {
+  const originals = [
+    { id: "A", tasks: [{ id: "x" }, { id: "y" }] },
+    { id: "B", tasks: [{ outputs: ["o"] }, { id: "y" }] },
+    { id: "C", tasks: [{ id: "x" }] },
+    { id: "D", tasks: [{ outputs: ["p"] }] },
+  ];
+  const plan = { rewrite: [{ id: "A", tasks: [{ id: "y" }] }, { id: "B", tasks: [{ id: "y" }] }], remove: ["C", "D"] };
+  const w = clientHistoryWork(originals, plan);
+  assert.deepEqual([w.rewrite.map(l => l.id), w.remove], [["B"], ["D"]]);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

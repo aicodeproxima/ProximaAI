@@ -19,7 +19,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, historyRemovals, tombstonedItems } from "./lib/syncReconcile.js";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations } from "./lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations, clientHistoryWork } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -2510,23 +2510,32 @@ export default function ProximaApp() {
   // `history: false` + `alsoLogs`: the caller clears History itself (Reset Everything) and passes the entries it removed.
   // `logs`: plan over these entries instead of this device's (Clear Outputs passes local + cloud, review round 2); only
   // the local ones change here, the cloud-only ones are just deleted.
-  const stagePurge = useCallback((removed, kept, { history = true, alsoLogs = [], all = false, logs } = {}) => {
-    const plan = planPurge(logs || logsRef.current, removed, kept, { history, alsoLogs, all });
+  // `serverHistory` (a task delete through delete_queued_rows): the server strips the deleted items that carry an id in the
+  // delete's own transaction, so only entries holding items without an id are sent from here (review round 8). This
+  // device's own History is updated in full either way. The returned rewrite/remove are what is sent; localRemove is
+  // every entry this device removed.
+  const stagePurge = useCallback((removed, kept, { history = true, alsoLogs = [], all = false, logs, serverHistory = false } = {}) => {
+    const base = logs || logsRef.current;
+    const plan = planPurge(base, removed, kept, { history, alsoLogs, all });
     const now = Date.now();
     writeWsDeletes(queueDeletes(readWsDeletes(), removed, now));
     writeFileDeletes(queueFileDeletes(readFileDeletes(), plan.paths, now));
+    let send = { rewrite: plan.rewrite, remove: plan.remove };
     if (history && (plan.remove.length || plan.rewrite.length)) {
       const gone = new Set(plan.remove), byId = new Map(plan.rewrite.map(l => [l.id, l]));
       logsRef.current = logsRef.current.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l);
       setLogs(prev => prev.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l));
-      for (const l of plan.rewrite) { savedLogIds.current.add(l.id); addHistoryEntry(l); addFailedSync({ kind: "history", id: l.id, data: l }); }
+      if (serverHistory) send = clientHistoryWork(base, plan);
+      for (const l of plan.rewrite) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
+      for (const l of send.rewrite) addFailedSync({ kind: "history", id: l.id, data: l });
       for (const id of plan.remove) {
         deletingLogIds.current.add(id); savedLogIds.current.delete(id); removeFailedSync("history", id);
       }
-      queueDeleteIntents("history-delete", plan.remove);   // one queue time for the action (review round 5)
+      queueDeleteIntents("history-delete", send.remove);   // one queue time for the action (review round 5)
     }
     setFailedSyncCount(getFailedSyncs().length);
-    return { ...plan, history, predictionIds: removed.map(t => t.taskId).filter(Boolean) };
+    return { ...plan, rewrite: send.rewrite, remove: send.remove, localRemove: plan.remove, history,
+      predictionIds: removed.map(t => t.taskId).filter(Boolean) };
   }, []);
   const purgeEverywhere = useCallback(async (plan) => {
     if (!plan) return { note: "" };
@@ -3243,7 +3252,8 @@ export default function ProximaApp() {
     setTasks(prev => prev.filter(t => !idSet.has(t.id)));
     // 4b. Everything else this delete reaches is queued now, before any network call (stagePurge): WaveSpeed ids,
     //     History rewrites and removals, files. A tab killed during the awaits below replays all of it.
-    const plan = stagePurge(latest, tasksRef.current.filter(t => !idSet.has(t.id)));
+    //     The server strips their History items in the delete's own transaction (serverHistory, review round 8).
+    const plan = stagePurge(latest, tasksRef.current.filter(t => !idSet.has(t.id)), { serverHistory: true });
     // 5. Local IndexedDB delete (single transaction, awaited).
     await deleteTasks(ids);
     // 6. Cloud delete (server-checked, stamped with the action's queue time). On success, clear the replay intents.
@@ -3260,12 +3270,14 @@ export default function ProximaApp() {
       for (const id of voided) deletingIds.current.delete(id);
       for (const l of plan.rewrite || []) removeFailedSync("history", l.id);
       settleDeleteIntents("history-delete", plan.remove || []);
-      for (const id of plan.remove || []) deletingLogIds.current.delete(id);
+      for (const id of plan.localRemove || []) deletingLogIds.current.delete(id);
+      resolveClaimants(voided);   // no longer deleted claimants: a restored lost submit keeps its result (review round 8)
     }
     // 7. Everywhere else, now that the row delete answered: WaveSpeed, History, files (purgeEverywhere). Backup copies
     //    are scrubbed by the server (migration 20261021175100). Not after a voided delete: the cloud checks hold the
     //    WaveSpeed copies and files of what the restore kept, and its History is left to the restore.
-    const { note } = voided.length ? { note: "" } : await purgeEverywhere(plan);
+    //    Nor after a failed one (review round 8): its queues (WaveSpeed, files, older History) replay after its row delete.
+    const { note } = r.ok ? await purgeEverywhere(plan) : { note: "" };
     // 8. Refresh counters + status (honest: only say "done" when the cloud delete confirmed).
     setFailedSyncCount(getFailedSyncs().length);
     getStorageStats().then(s => setStorageStats(s));
@@ -3276,7 +3288,7 @@ export default function ProximaApp() {
       setAccountToast(bk.id ? `Deleted ${noun} — safety backup saved${note}` : note ? `Deleted ${noun}${note}` : `Deleted ${noun} permanently, everywhere`);
     } else if (voided.length) {
       setSaveStatus("idle");
-      setAccountToast(`A restore on another device kept ${voided.length === n ? (n === 1 ? "it" : "them") : `${voided.length} of them`} — they come back on the next sync`);
+      setAccountToast(`A restore on another device replaced your data while this delete waited — ${voided.length === n ? (n === 1 ? "it stays" : "they stay") : `${voided.length} of them stay`} if that backup held ${voided.length === 1 ? "it" : "them"}`);
     } else {
       setSaveStatus("error");
       setAccountToast(`Removed ${noun} locally — the cloud delete will finish on your next save or reload`);

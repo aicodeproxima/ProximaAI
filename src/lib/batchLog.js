@@ -82,6 +82,22 @@ export function purgeLogsForDeleted(logs, removedTasks, keptTasks, { removeEntri
   return { remove, rewrite };
 }
 
+// The part of a delete's History plan the client must still send (review round 8): the server strips the deleted items
+// that carry an id, in the delete's own transaction (delete_queued_rows), and drops entries that leaves empty. Only an
+// entry where an item WITHOUT an id is dropped (older entries, matched by batch or output) needs the client: a rewrite
+// whose dropped items include one, an entry removed while holding one. `originals`: the entries before the plan.
+export function clientHistoryWork(originals, plan) {
+  const byId = new Map((originals || []).filter(l => l?.id).map(l => [l.id, l]));
+  const idless = (items) => (items || []).some(i => !i?.id);
+  const rewrite = (plan?.rewrite || []).filter(l => {
+    const before = byId.get(l.id)?.tasks || [];
+    const kept = new Set(l.tasks || []);
+    return idless(before.filter(i => !kept.has(i) && !(l.tasks || []).some(k => k?.id && k.id === i?.id)));
+  });
+  const remove = (plan?.remove || []).filter(id => idless(byId.get(id)?.tasks));
+  return { rewrite, remove };
+}
+
 // Generations History holds without a task among `taskIds` (History-only: a restore keeps 500 tasks rows but up to 1000
 // entries, or a task upload never landed), as generations a purge removes: id, entry, outputs, status. Clear Outputs
 // removes them too, files included (review round 7).
