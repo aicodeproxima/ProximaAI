@@ -159,17 +159,18 @@ export function planOrphans(orphans, items, owned, now, claimants = [], { answer
   return { adopt, fail, claimed, resolved, claims };
 }
 
-// Claimants kept across reloads, as {taskId: {modelId, startTime, at}}; an hour, like released ids.
-// `deleted`: the claimant was deleted (bulk delete / Clear Outputs / Reset Everything / another device's delete), not
-// just cancelled: its prediction is then
-// deleted on WaveSpeed as well once it turns up.
+// Claimants kept across reloads, as {taskId: {modelId, startTime, at}}; an hour, like released ids. `deleted`: the
+// claimant was deleted (bulk delete / Clear Outputs / Reset Everything / another device's delete), not just cancelled:
+// its prediction is then deleted on WaveSpeed as well once it turns up, so it is kept RESUME_WINDOW_MS (48 h, inside
+// WaveSpeed's purge) in case the app stays closed past the hour (review wf_ec400a67-988 #9).
+const claimantTtl = (c) => (c?.deleted ? RESUME_WINDOW_MS : RELEASED_TTL_MS);
 export function rememberClaimants(map, tasks, now, { deleted = false } = {}) {
   const out = {};
-  for (const [id, c] of Object.entries(map || {})) if (now - c.at <= RELEASED_TTL_MS) out[id] = c;
+  for (const [id, c] of Object.entries(map || {})) if (now - c.at <= claimantTtl(c)) out[id] = c;
   for (const t of tasks) if (t?.id) out[t.id] = { modelId: t.modelId, startTime: t.startTime, at: now, deleted: !!deleted };
   return out;
 }
-export const liveClaimants = (map, now) => Object.entries(map || {}).filter(([, c]) => now - c.at <= RELEASED_TTL_MS)
+export const liveClaimants = (map, now) => Object.entries(map || {}).filter(([, c]) => now - c.at <= claimantTtl(c))
   .map(([id, c]) => ({ id, modelId: c.modelId, startTime: c.startTime, deleted: !!c.deleted }));
 export function dropClaimants(map, ids) {
   const out = { ...(map || {}) };
@@ -189,6 +190,9 @@ export function noteClaimants(map, tasks, now, { deleted = false } = {}) {
     if (!t?.id || t.taskId) continue;
     if (t.status === "pending") waiting.push(t);
     else if (deleted && live[t.id]) live[t.id] = { ...live[t.id], deleted: true, at: now };
+    // A cancel whose claimant expired (the app was closed past the hour): deleting it still deletes its prediction
+    // (review wf_ec400a67-988 #9). Only a Cancel: a refused submit never reached WaveSpeed.
+    else if (deleted && t.error === "Cancelled") live[t.id] = { modelId: t.modelId, startTime: t.startTime, at: now, deleted: true };
   }
   const out = rememberClaimants(live, waiting, now, { deleted });
   for (const t of waiting) if (live[t.id]?.deleted) out[t.id].deleted = true;

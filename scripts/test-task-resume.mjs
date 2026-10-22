@@ -527,6 +527,21 @@ test("only a waiting task or an earlier claimant is recorded; deleted never flip
   assert.equal(d.D.deleted, true);
 });
 
+// Review wf_ec400a67-988 #9: a cancel lost to a freeze, deleted more than an hour later, still gets its prediction
+// deleted: the delete records a deleted claimant without a live entry, and deleted claimants live 48 h.
+test("a task cancelled mid-submit and deleted hours later becomes a deleted claimant that lives 48 h", () => {
+  const T = NOW;
+  const c = { id: "c", status: "failed", error: "Cancelled", modelId: "m", startTime: T };
+  const m = noteClaimants({}, [c], T + 2 * HOUR, { deleted: true });
+  assert.equal(m.c?.deleted, true);
+  assert.deepEqual(liveClaimants(m, T + 2 * HOUR + 30 * 60_000).map(x => [x.id, x.deleted]), [["c", true]]);
+  assert.equal(liveClaimants(m, T + 2 * HOUR + 47 * HOUR).length, 1, "still there inside 48 h");
+  assert.equal(liveClaimants(m, T + 2 * HOUR + 49 * HOUR).length, 0, "gone after 48 h");
+  assert.deepEqual(noteClaimants({}, [{ ...c, error: "Insufficient credits" }], T, { deleted: true }), {}, "a refused submit never reached WaveSpeed");
+  const k = noteClaimants({}, [{ id: "k", status: "pending", modelId: "m", startTime: T }], T);
+  assert.equal(liveClaimants(k, T + 2 * HOUR).length, 0, "a cancelled-only claimant still lives an hour");
+});
+
 test("claim outcomes: link a cancelled claimant's prediction, delete a deleted one's, never delete on a guess; stale lookups decide nothing", () => {
   const claims = [{ claimantId: "K", predictionId: "pK", deleted: false }, { claimantId: "H", predictionId: "pH", deleted: false },
     { claimantId: "G", predictionId: "pG", deleted: false }, { claimantId: "D", predictionId: "pD", deleted: true }];
