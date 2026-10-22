@@ -160,7 +160,8 @@ export function planOrphans(orphans, items, owned, now, claimants = [], { answer
 }
 
 // Claimants kept across reloads, as {taskId: {modelId, startTime, at}}; an hour, like released ids.
-// `deleted`: the claimant was deleted (Clear Outputs / Reset Everything), not just cancelled: its prediction is then
+// `deleted`: the claimant was deleted (bulk delete / Clear Outputs / Reset Everything / another device's delete), not
+// just cancelled: its prediction is then
 // deleted on WaveSpeed as well once it turns up.
 export function rememberClaimants(map, tasks, now, { deleted = false } = {}) {
   const out = {};
@@ -175,6 +176,43 @@ export function dropClaimants(map, ids) {
   for (const id of ids) delete out[id];
   return out;
 }
+// What Cancel, bulk delete, Clear Outputs, Reset Everything and another device's delete record (storage.js
+// recordClaimants). A task still waiting for its submit's answer (pending, no prediction id) becomes a claimant. With
+// `deleted`, a claimant a Cancel recorded earlier (the task now shows failed, still without an id: its answer was lost
+// to a freeze or reload) is flipped to deleted, with a fresh hour, so its prediction is deleted on WaveSpeed once the
+// lookup finds it (review #10). A task with an id is never one (its prediction goes by id). A failed task never
+// recorded never reached WaveSpeed. Deleted never flips back.
+export function noteClaimants(map, tasks, now, { deleted = false } = {}) {
+  const live = rememberClaimants(map, [], now);
+  const waiting = [];
+  for (const t of tasks || []) {
+    if (!t?.id || t.taskId) continue;
+    if (t.status === "pending") waiting.push(t);
+    else if (deleted && live[t.id]) live[t.id] = { ...live[t.id], deleted: true, at: now };
+  }
+  const out = rememberClaimants(live, waiting, now, { deleted });
+  for (const t of waiting) if (live[t.id]?.deleted) out[t.id].deleted = true;
+  return out;
+}
+// The lost-submit lookup runs for orphans and for claimants alone: a cancelled one learns its prediction id (linked to
+// its task), a deleted one has it deleted.
+export const claimantLookupNeeded = (orphans, claimants) => orphans.length > 0 || claimants.length > 0;
+// What the lookup does with its claims. Deleted: the prediction is deleted on WaveSpeed. Cancelled, with its task here
+// still without an id: the id is linked to the task, so any later delete (any device) reaches it. Cancelled with the
+// task not here: only released, never deleted on a guess.
+export function planClaimOutcomes(claims, tasks) {
+  const byId = new Map((tasks || []).map(t => [t.id, t]));
+  const attach = [], del = [];
+  for (const c of claims || []) {
+    if (c.deleted) { del.push(c.predictionId); continue; }
+    const t = byId.get(c.claimantId);
+    if (t && !t.taskId) attach.push({ id: t.id, predictionId: c.predictionId });
+  }
+  return { attach, del };
+}
+// A submit that started while the lookup awaited may own a prediction the listing showed while its task has no id
+// yet: such a pass decides nothing.
+export const lookupStale = (seqAtStart, seqNow, submitting) => seqNow !== seqAtStart || submitting > 0;
 
 // "completed" | "failed" | "gone" (purged, never coming back) | "running" (poll again).
 export function pollOutcome(data) {

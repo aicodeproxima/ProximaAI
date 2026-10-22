@@ -1,7 +1,7 @@
 // Tests for src/lib/wsDelete.js — deleting a generation in the app also deletes it on WaveSpeed.
 // Run: node scripts/test-ws-delete.mjs
 import assert from "node:assert/strict";
-import { queueDeletes, dueDeletes, settleDeletes, failDeletes, WS_DELETE_CHUNK, RUNNING_RETRY_MS, MAX_RUNNING_ATTEMPTS } from "../src/lib/wsDelete.js";
+import { queueDeletes, dueDeletes, settleDeletes, failDeletes, WS_DELETE_CHUNK, RUNNING_RETRY_MS, MAX_RUNNING_ATTEMPTS, dropHeldIds } from "../src/lib/wsDelete.js";
 import { forwardParams } from "../src/lib/wsWebhook.js";
 
 const NOW = 1_800_000_000_000;
@@ -61,6 +61,16 @@ test("a failed request: transient errors back off and keep, a rejected key waits
 test("the proxy forwards the delete call as is (not a model submit: no result webhook added)", () => {
   const qs = forwardParams(new URLSearchParams(), { method: "POST", path: "api/v3/predictions/delete", body: JSON.stringify({ ids: ["a"] }), webhookOn: true });
   assert.equal(qs.toString(), "");
+});
+
+// Review #10 (2026-10-22): a deleted claimant's time-paired prediction can never be one a live task holds.
+test("an id a live task holds is never sent (dropHeldIds)", () => {
+  const q = { a: { at: NOW, attempts: 0, next: NOW, running: true }, b: { at: NOW, attempts: 0, next: NOW, running: false } };
+  const copy = structuredClone(q);
+  assert.deepEqual(Object.keys(dropHeldIds(q, ["a", "z"])), ["b"]);
+  assert.deepEqual(q, copy, "input not mutated");
+  assert.deepEqual(dropHeldIds(q, []), q);
+  assert.deepEqual(dropHeldIds(null, ["a"]), {});
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

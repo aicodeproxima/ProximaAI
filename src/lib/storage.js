@@ -2,7 +2,7 @@
 // Optimized for: tasks with outputs, generation history, settings, favorites, presets
 // Falls back to localStorage if IndexedDB unavailable.
 
-import { planResume, rememberReleased, liveReleased, rememberClaimants, liveClaimants, dropClaimants } from "./taskResume.js";
+import { planResume, rememberReleased, liveReleased, noteClaimants, liveClaimants, dropClaimants } from "./taskResume.js";
 
 const DB_NAME = "proximaai";
 const DB_VERSION = 3;
@@ -478,10 +478,10 @@ export function forgetFormPaths() { try { localStorage.removeItem(FORM_KEY + TAB
 const CLAIMANTS_KEY = "proximaai-orphan-claimants";
 const readClaimants = () => { try { return JSON.parse(localStorage.getItem(CLAIMANTS_KEY) || "{}") || {}; } catch { return {}; } };
 const writeClaimants = (m) => { try { localStorage.setItem(CLAIMANTS_KEY, JSON.stringify(m)); } catch {} };
-// `deleted: true` for Clear Outputs / Reset Everything: the claimant's prediction is then deleted on WaveSpeed too.
+// Cancel records a waiting task; deletes pass `deleted: true`, which also flips a cancelled claimant to deleted
+// (taskResume.js noteClaimants: the rules live in the pure function).
 export function recordClaimants(tasks, opts) {
-  const list = (tasks || []).filter(t => t?.status === "pending" && !t.taskId);
-  if (list.length) writeClaimants(rememberClaimants(readClaimants(), list, Date.now(), opts));
+  writeClaimants(noteClaimants(readClaimants(), tasks || [], Date.now(), opts));
 }
 export const storedClaimants = () => liveClaimants(readClaimants(), Date.now());
 export function resolveClaimants(ids) { if (ids?.length) writeClaimants(dropClaimants(readClaimants(), ids)); }

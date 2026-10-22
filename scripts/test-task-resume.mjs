@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, rememberReleased, liveReleased, rememberClaimants, liveClaimants, dropClaimants, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { noteClaimants, claimantLookupNeeded, planClaimOutcomes, lookupStale, planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, rememberReleased, liveReleased, rememberClaimants, liveClaimants, dropClaimants, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -497,6 +497,47 @@ test("a failed submit may have reached WaveSpeed on a network drop, timeout or 5
 test("a prediction without a result URL is polled by its id", () => {
   const { adopt } = planOrphans([orphan("o")], [item("pred-2", { urls: undefined })], new Set(), NOW);
   assert.equal(adopt[0].pollUrl, "/api/v3/predictions/pred-2/result");
+});
+
+// ─── Review #10 (2026-10-22): a task cancelled during its submit and then deleted has its prediction deleted ───
+test("bulk delete flips a cancelled claimant to deleted (with a fresh hour), and its prediction is then deleted", () => {
+  const k = { id: "K", status: "pending", modelId: "bytedance/seedream-v4", startTime: NOW - 70_000 };
+  let m = noteClaimants({}, [k], NOW - 69_000);
+  assert.equal(liveClaimants(m, NOW)[0].deleted, false);
+  m = noteClaimants(m, [{ ...k, status: "failed", error: "Cancelled" }], NOW, { deleted: true });
+  const [c] = liveClaimants(m, NOW);
+  assert.deepEqual({ id: c.id, deleted: c.deleted, startTime: c.startTime, modelId: c.modelId },
+    { id: "K", deleted: true, startTime: NOW - 70_000, modelId: "bytedance/seedream-v4" });
+  assert.equal(m.K.at, NOW, "a flip restarts the claimant hour");
+  const r = planOrphans([], [item("Pk", { created_at: new Date(NOW - 69_000).toISOString() })], new Set(), NOW, liveClaimants(m, NOW));
+  assert.deepEqual(r.claims, [{ claimantId: "K", predictionId: "Pk", deleted: true }]);
+  assert.deepEqual(r.resolved, ["K"]);
+});
+
+test("only a waiting task or an earlier claimant is recorded; deleted never flips back; expired entries stay gone", () => {
+  const pend = { id: "P", status: "pending", modelId: "m", startTime: NOW };
+  const refused = { id: "R", status: "failed", modelId: "m", startTime: NOW };
+  const landed = { id: "L", status: "processing", taskId: "pL", modelId: "m", startTime: NOW };
+  const m = noteClaimants({ L: { modelId: "m", startTime: NOW, at: NOW, deleted: false } }, [pend, refused, landed], NOW, { deleted: true });
+  assert.equal(m.P.deleted, true); assert.equal(m.R, undefined); assert.equal(m.L.deleted, false);
+  assert.deepEqual(noteClaimants({}, [refused], NOW), {});
+  assert.deepEqual(noteClaimants({ X: { modelId: "m", startTime: NOW - 2 * HOUR, at: NOW - 2 * HOUR, deleted: false } }, [{ id: "X", status: "failed" }], NOW, { deleted: true }), {});
+  let d = noteClaimants({}, [{ id: "D", status: "pending", modelId: "m", startTime: NOW }], NOW, { deleted: true });
+  d = noteClaimants(d, [{ id: "D", status: "pending", modelId: "m", startTime: NOW }], NOW + 1000);
+  assert.equal(d.D.deleted, true);
+});
+
+test("claim outcomes: link a cancelled claimant's prediction, delete a deleted one's, never delete on a guess; stale lookups decide nothing", () => {
+  const claims = [{ claimantId: "K", predictionId: "pK", deleted: false }, { claimantId: "H", predictionId: "pH", deleted: false },
+    { claimantId: "G", predictionId: "pG", deleted: false }, { claimantId: "D", predictionId: "pD", deleted: true }];
+  const tasks = [{ id: "K", status: "failed", error: "Cancelled" }, { id: "H", status: "failed", taskId: "x" }];
+  assert.deepEqual(planClaimOutcomes(claims, tasks), { attach: [{ id: "K", predictionId: "pK" }], del: ["pD"] });
+  assert.equal(claimantLookupNeeded([], [{ id: "C", deleted: false }]), true);
+  assert.equal(claimantLookupNeeded([orphan("O")], []), true);
+  assert.equal(claimantLookupNeeded([], []), false);
+  assert.equal(lookupStale(5, 5, 0), false); assert.equal(lookupStale(5, 6, 0), true); assert.equal(lookupStale(5, 5, 1), true);
+  const r = planOrphans([], [], new Set(), NOW, [{ id: "C", modelId: "bytedance/seedream-v4", startTime: NOW - 5 * 60_000, deleted: true }]);
+  assert.deepEqual(r.resolved, ["C"]); assert.deepEqual(r.claims, []);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

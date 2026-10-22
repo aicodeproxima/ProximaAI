@@ -5,7 +5,7 @@ import { requestCost } from "./lib/pricing.js";
 import { draftTask, unitQuote, taskUserSettings } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
 import { submitTask, pollResult, listPredictions, deletePredictions, checkBalance, uploadMedia, API_BASE } from "./lib/api.js";
-import { queueDeletes, dueDeletes, settleDeletes, failDeletes } from "./lib/wsDelete.js";
+import { queueDeletes, dueDeletes, settleDeletes, failDeletes, dropHeldIds } from "./lib/wsDelete.js";
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
@@ -20,7 +20,7 @@ import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted } from "./lib/batchLog.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -1923,6 +1923,7 @@ export default function ProximaApp() {
           // one stops polling here. Their prediction ids are released (no lost submit may adopt them).
           const removedHere = tasksRef.current.filter(t => rmTasks.has(t.id));
           releasePredictions(removedHere.map(t => t.taskId));
+          recordClaimants(removedHere, { deleted: true });   // a claimant cancelled here and deleted elsewhere is deleted too (review #10)
           dropLogItemsFor(removedHere);
           for (const id of rmTasks) {
             savedTaskIds.current.delete(id); removeFailedSync("task", id);
@@ -2203,7 +2204,7 @@ export default function ProximaApp() {
     resolveClaimants([id]); // its outcome is known now: as a claimant it would take a sibling's prediction instead
     if (!predictionId) return;
     releasePredictions([predictionId]);
-    const cur = tasksRef.current.find(t => t.id === id);
+    const cur = deletingIds.current.has(id) ? undefined : tasksRef.current.find(t => t.id === id);   // being deleted = gone (tasksRef is refreshed only on render)
     // Deleted (or cleared) while its submit was on the wire: delete the prediction on WaveSpeed too. A task that was only
     // cancelled is still here and keeps its result there (cancel is not delete). Review wf_9d0e3664-ab7 #3.
     if (!cur) { deleteOnWaveSpeed([{ taskId: predictionId, status: "processing" }]); return; }
@@ -2213,16 +2214,19 @@ export default function ProximaApp() {
   }
 
   const submittingIds = useRef(new Set());
+  const submitSeq = useRef(0);   // counts submits started: recoverOrphans decides nothing if one started during its awaits
   const orphanLookupRunning = useRef(false);
   const recoverOrphans = useCallback(async () => {
     // A submit still in flight could own the very prediction an orphan would match: wait until none is.
     if (orphanLookupRunning.current || submittingIds.current.size) return;
     const orphans = tasksRef.current.filter(t => isOrphan(t, submittingIds.current, Date.now()));
-    if (!orphans.length) return;
+    // Tasks cancelled or deleted before their submit gave an id pair with their own prediction too (never adopted). A
+    // claimant alone needs the lookup as well (review #10), once this device's tasks are loaded (its task must be found).
+    const claimants = storedClaimants();
+    if (!claimantLookupNeeded(orphans, claimants) || (claimants.length && !initialLoadDone.current)) return;
+    const seq = submitSeq.current;
     orphanLookupRunning.current = true;
     try {
-      // Tasks cancelled before their submit gave an id pair with their own prediction too (never adopted).
-      const claimants = storedClaimants();
       const windows = orphanWindows([...orphans, ...claimants]);
       // Each window is fetched on its own. Network trouble, a rate limit, a 5xx, a stopped session or a rejected key: ask
       // again on the next pass. A refusal of the lookup itself leaves the grace alone to decide for that window, as
@@ -2248,13 +2252,21 @@ export default function ProximaApp() {
         if (!ids) return;
         cloudOwned.push(...ids);
       }
+      // A submit that started during the awaits above may own a prediction listed here: decide nothing this pass.
+      if (lookupStale(seq, submitSeq.current, submittingIds.current.size)) return;
       const owned = new Set([...tasksRef.current.map(t => t.taskId).filter(Boolean), ...releasedPredictions(), ...cloudOwned]);
       const { adopt, fail, claimed, resolved, claims } = planOrphans(orphans, items, owned, Date.now(), claimants, { answeredFor });
       releasePredictions(claimed);
       resolveClaimants(resolved);
-      // A claimant from Clear Outputs / Reset Everything was deleted: its prediction goes on WaveSpeed too.
-      const deletedClaims = claims.filter(c => c.deleted).map(c => ({ taskId: c.predictionId, status: "processing" }));
-      if (deletedClaims.length) deleteOnWaveSpeed(deletedClaims);
+      // Deleted claimants: their prediction goes on WaveSpeed too. Cancelled ones: the id is linked to the task, so a
+      // later delete on any device reaches it (planClaimOutcomes).
+      const { attach, del } = planClaimOutcomes(claims, tasksRef.current);
+      if (del.length) deleteOnWaveSpeed(del.map(id => ({ taskId: id, status: "processing" })));
+      if (attach.length) {
+        const link = new Map(attach.map(a => [a.id, a.predictionId]));
+        for (const id of link.keys()) savedTaskIds.current.delete(id);   // the persist effect saves, queues and syncs it again
+        setTasks(prev => prev.map(t => link.has(t.id) && !t.taskId ? { ...t, taskId: link.get(t.id) } : t));
+      }
       const decided = new Map([...adopt, ...fail].map(t => [t.id, t]));
       if (!decided.size) return;
       // Only a task still waiting takes the outcome (not one cancelled while the lookup ran).
@@ -2285,6 +2297,8 @@ export default function ProximaApp() {
     if (wsDeleteRunning.current) return;
     wsDeleteRunning.current = true;
     try {
+      // Never send an id a live task holds (wsDelete.js dropHeldIds).
+      writeWsDeletes(dropHeldIds(readWsDeletes(), tasksRef.current.filter(t => !deletingIds.current.has(t.id)).map(t => t.taskId).filter(Boolean)));
       for (const ids of dueDeletes(readWsDeletes(), Date.now())) {
         try {
           const deleted = await deletePredictions(ids);
@@ -2765,7 +2779,7 @@ export default function ProximaApp() {
             : { prompt: task.prompt, resolution: task.resolution };
 
           sent = true;
-          submittingIds.current.add(task.id);
+          submittingIds.current.add(task.id); submitSeq.current++;
           const submitRes = await submitTask(task.modelId, payload).finally(() => submittingIds.current.delete(task.id));
           const taskId = submitRes?.data?.id;
           const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
@@ -2879,7 +2893,7 @@ export default function ProximaApp() {
           : { prompt: newTask.prompt };
 
         sent = true;
-        submittingIds.current.add(newTask.id);
+        submittingIds.current.add(newTask.id); submitSeq.current++;
         const submitRes = await submitTask(newTask.modelId, payload).finally(() => submittingIds.current.delete(newTask.id));
         const taskId = submitRes?.data?.id;
         const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
@@ -3066,13 +3080,17 @@ export default function ProximaApp() {
     for (const id of ids) { savedTaskIds.current.delete(id); removeFailedSync("task", id); }
     // 3. Enqueue cloud-delete intents BEFORE firing, so a tab-close/network drop replays them.
     for (const id of ids) addFailedSync({ kind: "task-delete", id, data: id });
-    // 4. Optimistic local removal from React state. Their prediction ids are released, so a lost submit of the same
-    //    model never adopts a deleted task's result.
-    releasePredictions(targets.map(t => t.taskId));
+    // 4. Optimistic local removal. Fresh copies: a submit that answered during the backup gave its task a prediction id
+    //    the snapshot lacks. Their ids are released, so a lost submit of the same model never adopts a deleted result. A
+    //    task whose submit never answered (Cancelled and then lost to a freeze or reload) becomes a deleted claimant, so
+    //    its prediction is deleted on WaveSpeed once found (review #10).
+    const latest = targets.map(t => tasksRef.current.find(x => x.id === t.id) || t);
+    releasePredictions(latest.map(t => t.taskId));
+    recordClaimants(latest, { deleted: true });
     setTasks(prev => prev.filter(t => !idSet.has(t.id)));
     // 4b. Everything else this delete reaches is queued now, before any network call (stagePurge): WaveSpeed ids,
     //     History rewrites and removals, files. A tab killed during the awaits below replays all of it.
-    const plan = stagePurge(targets, tasksRef.current.filter(t => !idSet.has(t.id)));
+    const plan = stagePurge(latest, tasksRef.current.filter(t => !idSet.has(t.id)));
     // 5. Local IndexedDB delete (single transaction, awaited).
     await deleteTasks(ids);
     // 6. Cloud delete (batched, device-scoped). On success, clear the replay intents.

@@ -71,3 +71,11 @@ export function failDeletes(queue, sentIds, error, now) {
   }
   return out;
 }
+
+// Ids a live task holds are never sent: that task is not deleted (a restore brought it back, or a lookup paired a
+// deleted claimant with a prediction a new generation owns). They leave the queue unsent.
+export function dropHeldIds(queue, heldIds) {
+  const out = { ...(queue || {}) };
+  for (const id of heldIds || []) delete out[id];
+  return out;
+}
