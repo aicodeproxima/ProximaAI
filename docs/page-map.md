@@ -106,9 +106,11 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   per statement via `proxima_auth.session_scope()`. Signed out, the client answers table/Storage calls itself with 401
   "session token missing". A raw `fetch` to those paths WITHOUT the header is refused — use the app's client, or the
   service role for owner-run maintenance (scripts/tools/supabase-admin.mjs).
-- Outsider view (publishable key only), measured right after the apply: any table read/write/delete → 403
+- Outsider view (publishable key only), measured right after the apply: any table read/write → 403
   `session token missing`; forged token → 403 `invalid signature`; expired/revoked → 403 with that message; Storage
   list → `200 []`; Storage upload/overwrite/remove → HTTP 500 `database error, code: 28000`; public image URL → 200.
+  A plain table DELETE, with or without a valid session (since 20261022350000, measured 22:13 UTC), → HTTP 401 `42501
+  permission denied for table <t>`: browser roles hold no DELETE; the app deletes only through the restore-checked RPCs.
 - Edge logs show which build a device runs: `x_client_info` ends in `proxima-rls/1 sess/1` (signed in) or `sess/0`
   (RPCs before sign-in). CORS preflights (`OPTIONS`) never carry it — exclude them. Per-device gate query:
   `node scripts/tools/sb-logs.mjs <start> <end> "select multiIf(log_attributes['request.headers.user_agent'] like
@@ -123,7 +125,8 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
 - SQL / logs without connector prompts: `scripts/tools/sb-query.mjs`, `scripts/tools/sb-logs.mjs` (Management API).
   Database tests (each rolls back; run alone against live): scripts/test-rls-{tables,storage,triggers,plan,rpcs,
   rename,phase0}.sql, rollback proof scripts/test-rls-rollback-before.sql + phase-2 file + rollback file +
-  scripts/test-rls-rollback.sql in one call. Rollback files: supabase/rollback/ (never in migrations/).
+  scripts/test-rls-rollback.sql in one call (a grants-only change ends with scripts/test-rls-grants-unchanged.sql
+  instead). Rollback files: supabase/rollback/ (never in migrations/).
   Test with pending migrations: `node scripts/tools/sql-tx.mjs [migration.sql ...] --test <test.sql>` (begin + files +
   a guard that always aborts; prints one line per case, exit 0 only with zero FAIL). Apply + record a migration in
   schema_migrations: `node scripts/tools/apply-migration.mjs <file.sql> --dry-run` first (writes nothing, says whether

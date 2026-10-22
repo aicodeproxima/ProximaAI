@@ -20,6 +20,10 @@ Single admin; identity = HMAC session token (public._verify_session_token), not 
   update/delete match 0 rows silently); WITH CHECK device_id = session scope; sync_tombstones read-only for browsers;
   TRUNCATE/REFERENCES/TRIGGER/MAINTAIN revoked; storage reads lenient (no header → empty list), writes strict;
   tasks/history removed from the Realtime publication. Rollbacks: supabase/rollback/ (exact inverse, tested).
+- DELETE revoke — supabase/migrations/20261022350000_revoke_browser_delete.sql (777f7f1): anon/authenticated hold no
+  DELETE on tasks/history/settings/favorites/presets. Every app delete goes through the restore-checked SECURITY DEFINER
+  RPCs (delete_queued_rows / clear_queued_rows / reset_queued_rows, scoped to the session's device_id); a plain REST
+  delete fails with 42501 (HTTP 401) before any policy runs. The strict DELETE policies stay as a second guard.
 - Related: 08e2bb2 (deleteArchivedPath true only when Storage confirms), 1bd2e68 (clear*Remote → {ok, error}).
 
 ## Accepted — do not re-report
@@ -27,8 +31,8 @@ Single admin; identity = HMAC session token (public._verify_session_token), not 
   NULL before the RLS check) while other ids raise 28000. Ids are crypto.randomUUID(); a caller must already know one.
 - An expired-token holder keeps receiving content-free pings until the topic rotates (rename, password change, unlock,
   key rotation). Pings carry nothing.
-- Bucket-wide storage access and other-scope rows readable/deletable by the single admin session (rename leaves files in
-  the old folder; the delete flow must reach them).
+- Bucket-wide storage access and other-scope rows readable by the single admin session (rename leaves files in the old
+  folder; the delete flow must reach them). Rows are deleted only by the scoped RPCs, never by a browser role directly.
 - Rolling back phase 0 while the phase-1 client is live stops instant updates; the 20 s / focus reconcile remains.
 - The policies trust session_signing_key: a holder of that key can mint valid sessions (rotation is the remedy).
 - Owner-run maintenance with the service role (scripts/tools/supabase-admin.mjs) bypasses the policies by design.
@@ -38,8 +42,10 @@ JS: scripts/test-session-header.mjs, test-sync-ping.mjs, test-storage-remove.mjs
 SQL, each rolls back (run alone against live; to test an unapplied migration, prepend its text in the same call):
 scripts/test-rls-{phase0,tables,storage,triggers,plan,rpcs,rename}.sql; rollback proof =
 test-rls-rollback-before.sql + phase-2 migration + its rollback + test-rls-rollback.sql in ONE call;
-test-rls-phase0-rollback.sql likewise. The other features' SQL tests (test-ws-webhook-db, test-ws-webhook-deleted-db,
-test-backup-scrub-db, test-backup-switch-off-db, test-history-strip-db) must stay green too.
+test-rls-phase0-rollback.sql likewise; the DELETE revoke's = test-rls-rollback-before.sql + 20261022350000 + its
+rollback + test-rls-grants-unchanged.sql. The other features' SQL tests (scripts/test-*-db.sql: ws-webhook,
+ws-webhook-deleted, backup-scrub, backup-switch-off, history-strip, history-emptied, queued-deletes, paths-in-use,
+public-execute, restore-scrub, scrub-live) must stay green too.
 
 ## Rules for reviewers
 Query the live database with `node scripts/tools/sb-query.mjs "<select>"` or `--write -f <file.sql>` (Management API,
