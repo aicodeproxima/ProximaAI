@@ -82,7 +82,7 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
 - Theme changes must visibly shift both accent AND backdrop
 
 ## Mobile-first details
-- All 5 type-tabs must fit one row without horizontal scroll at 430px width
+- All 7 type-tabs must fit one row without horizontal scroll at 384px width (measured 2026-10-20, docs/page-map.md)
 - Sticky bottom action panel for cockpit (position: fixed, safe-area-inset-bottom)
 - Tap targets ≥ 44×44
 - Disable overflow-x on html/body/#root to lock the page from any panning
@@ -123,9 +123,31 @@ When tests show failures: troubleshoot the failure logs immediately, push
 fixes, re-test in the browser to confirm. Don't move on until the prod UI
 shows the success state.
 
+## Test recipes, perf notes, protected code (verified 2026-10-22; first captured 2026-06)
+- **Bundle secret audit:** after `npm run build`, `grep -lE "(service_role|SUPABASE_SERVICE_ROLE_KEY|sb_secret_|postgres://)" dist/`
+  must print nothing.
+- **In-flight survival:** start 3 long video generations, reload at ~1 min; all 3 resume and finish (resume window
+  48 h, `RESUME_WINDOW_MS` in `src/lib/taskResume.js`). Run after any deploy touching resumption or storage.
+- **Failed-sync replay:** offline → 3 writes → online; all 3 land in the right scope and `proximaai-failed-syncs` empties.
+- **Perf budget (6-model batch):** FPS ≥30 desktop / ≥20 at 384 px; <20 long tasks per 60 s; CLS ≤0.1.
+- **Polling hot path:** batches re-render task cards every 3–15 s; keep `React.memo(CockpitTaskCard)` (`2fd2e40`) and
+  stable handler refs. Next win = list virtualization.
+- **Never re-add `content-visibility: auto` on `.task-card`:** it dropped typing FPS 13.9 → 1.8 on ~510 blurred cards
+  (reverted `223d93b`).
+- **supabase-js loads from the jsDelivr CDN at runtime** (`src/lib/supabase.js`): a CDN outage stops all cloud sync.
+- **`BackgroundLayer` `paused` prop** halts animations during in-flight batches; card `backdrop-filter` blur is the next
+  mobile-GPU lever if jank returns.
+- **Protected reference code** (the enterprise storage blueprint cites it; extend or rebind, never rewrite; find by
+  symbol): failed-sync queue (`FAILED_KEY`, `src/lib/storage.js`), bootstrap-race fix (`8da8f95`), flush hooks
+  (visibilitychange/beforeunload/pagehide), task resumption (`src/lib/taskResume.js`), back-button trap,
+  `validatePayload()` (`src/lib/payloadBuilder.js`), save-status state machine, IndexedDB schema + prune.
+- **Decisions (owner, 2026-06):** staging = Supabase Branching, not extra projects; perf-trace test rows carry the
+  prompt prefix `[PERF_TRACE_<YYYY_MM_DD>]` and are hard-deleted by that prefix.
+
 ## Key commits for reference
 - `8da8f95` Defensive fixes for debounced-sync races
 - `baf45c3` Back-button trap + resumable polling
 - `5c32917` Hardened DALL-E + SW cache bump
 - `1cf5fdf` Cloud-first save/sync/backup system
 - `62b9d79` Data-driven progress bars from real Supabase timings
+- `2fd2e40` Extract + memo CockpitTaskCard · `223d93b` Revert content-visibility (typing FPS regression)
