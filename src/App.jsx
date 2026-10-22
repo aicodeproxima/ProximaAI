@@ -12,7 +12,7 @@ import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
-import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, pullTaskInputs, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
 import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue, sameFormSet } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -1895,6 +1895,7 @@ export default function ProximaApp() {
   // True while a restore this tab has not handled waits for History to answer (reconcile): nothing rewrites an entry
   // from a pre-restore copy meanwhile (review round 4).
   const restorePendingRef = useRef(false);
+  const inputBackfillDone = useRef(false);   // the once-per-load input-URL backfill (reconcile)
   // True only once the cloud really answered this session (not by the 2-minute fallback below): the file queue
   // (fileDelete.js) acts only then, when this device knows which queued paths a kept generation still uses.
   const cloudSyncedRef = useRef(false);
@@ -1946,10 +1947,20 @@ export default function ProximaApp() {
       }
       const taskPlan = planTaskSync({ local: tasksRef.current, cloud: remote.tasks || [], cloudIds: ids?.tasks ?? null,
         tombstones: ids?.taskTombstones ?? null, pending: pendingTasks, deleting: deletingIds.current, since });
-      // Older cloud rows get the input URLs this device holds (inputBackfill, review round 3); derived again every pass
-      // until written, so nothing is queued.
-      const backfill = inputBackfill(tasksRef.current.filter(t => !deletingIds.current.has(t.id)), remote.tasks || []);
-      if (backfill.length) backfillTaskInputs(backfill).catch(() => {});
+      // Older cloud rows get the input URLs this device holds (inputBackfill, review rounds 3 and 4): their cloud copies
+      // are read by id, whatever their age (the sync pulls only the newest 500), once per page load; a failed read or
+      // write leaves it for the next pass. Nothing is queued.
+      if (!inputBackfillDone.current) {
+        inputBackfillDone.current = true;
+        const candidates = tasksRef.current.filter(t => !deletingIds.current.has(t.id)
+          && (t.endFrameUrl || t.sourceAudioUrl || t.sourceVideoUrl || t.refVideoUrl));
+        (async () => {
+          const cloud = candidates.length ? await pullTaskInputs(candidates.map(t => t.id)) : [];
+          const rows = cloud ? inputBackfill(candidates, cloud) : null;
+          const r = rows === null ? { ok: false } : rows.length ? await backfillTaskInputs(rows) : { ok: true };
+          if (!r.ok) inputBackfillDone.current = false;
+        })().catch(() => { inputBackfillDone.current = false; });
+      }
       const logPlan = planLogSync({ local: logsRef.current, cloud: remote.history || [], cloudIds: ids?.history ?? null,
         tombstones: ids?.historyTombstones ?? null, pending: pendingLogs, deleting: deletingLogIds.current, since });
       const rmTasks = new Set(taskPlan.remove), rmLogs = new Set(logPlan.remove);

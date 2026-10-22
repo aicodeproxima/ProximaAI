@@ -711,6 +711,24 @@ export async function predictionsInUseRemote(ids) {
   } catch (err) { warnOnce("predictionsInUseRemote", err); return null; }
 }
 
+// The four input URLs of these tasks' cloud rows, whatever their age (inputBackfill, review round 4: the sync pulls only
+// the newest 500, and the rows that need the backfill are the oldest). Chunks of 100. null when the read failed.
+export async function pullTaskInputs(ids) {
+  const list = (ids || []).filter(Boolean);
+  const out = [];
+  try {
+    if (!list.length || !requireClient()) return out;
+    for (let i = 0; i < list.length; i += 100) {
+      const { data, error } = await supabase.from("tasks").select("id,end_frame_url,source_audio_url,source_video_url,ref_video_url")
+        .eq("device_id", getDeviceId()).in("id", list.slice(i, i + 100));
+      if (error || !Array.isArray(data)) return null;
+      for (const r of data) out.push({ id: r.id, endFrameUrl: r.end_frame_url ?? null, sourceAudioUrl: r.source_audio_url ?? null,
+        sourceVideoUrl: r.source_video_url ?? null, refVideoUrl: r.ref_video_url ?? null });
+    }
+    return out;
+  } catch (err) { warnOnce("pullTaskInputs", err); return null; }
+}
+
 // The input URLs older rows lack (syncReconcile.js inputBackfill, review round 3): one narrow update per row, only those
 // columns, only in this account's scope. { ok: false } when any was refused; the next pass derives them again.
 export async function backfillTaskInputs(rows) {

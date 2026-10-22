@@ -132,6 +132,20 @@ await test("backfillTaskInputs: one narrow update per row, scoped to this accoun
   assert.deepEqual(await sb.backfillTaskInputs([]), { ok: true });
 });
 
+// Review round 4: the input-URL backfill reads the cloud rows of the tasks that need it by id (any age), not only the
+// newest 500 the sync pulls.
+await test("pullTaskInputs: id + the four input URLs for these ids, chunks of 100, this account; failure -> null", async () => {
+  const c = fakeClient((q) => ({ data: (inList(q) || []).slice(0, 1).map(id => ({ id, end_frame_url: "e", source_audio_url: null, source_video_url: null, ref_video_url: "r" })), error: null }));
+  sb.__setClientForTests(c);
+  const r = await sb.pullTaskInputs(ids(130));
+  assert.deepEqual(r, [{ id: "t0", endFrameUrl: "e", sourceAudioUrl: null, sourceVideoUrl: null, refVideoUrl: "r" },
+    { id: "t100", endFrameUrl: "e", sourceAudioUrl: null, sourceVideoUrl: null, refVideoUrl: "r" }]);
+  assert.deepEqual(c.calls.map(q => inList(q).length), [100, 30]);
+  assert.ok(c.calls.every(q => q.ops.some(o => o[0] === "eq" && o[1] === "device_id" && o[2] === "user:owner")));
+  sb.__setClientForTests(fakeClient(() => ({ data: null, error: { message: "403" } })));
+  assert.equal(await sb.pullTaskInputs(["a"]), null);
+});
+
 // Review round 4: before a WaveSpeed prediction is deleted, the cloud says which ids a row of this account still holds
 // (another device's, or one a restore brought back): those wait. null when it could not answer (nothing is sent).
 await test("predictionsInUseRemote: task_ids rows of this account hold, in chunks of 100; failure -> null", async () => {
