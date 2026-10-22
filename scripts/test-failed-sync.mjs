@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -193,6 +193,23 @@ test("pickTabId: a reopened tab takes over its key; a duplicate of a live tab ge
   assert.equal(pickTabId("old", NOW - 30_000, false, NOW, "new"), "new", "duplicate of a live tab");
   assert.equal(pickTabId("old", NOW - 30_000, true, NOW, "new"), "old", "a discarded tab restored by Chrome");
 });
+
+// Review round 4: a tab killed and reopened within 2 minutes looked like a duplicate and kept its old hold for 7 days.
+// A page that set the stored id aside asks the browser's other tabs; a live owner answers, a dead page cannot.
+const presenceOk = await (async () => {
+  try {
+    const open = () => new BroadcastChannel("proximaai-tabs-test");
+    const released = [];
+    const a = tabPresence({ id: "A", open, release: (p) => released.push(p) });
+    const b = tabPresence({ id: "B", prevId: "A", open, waitMs: 150, release: (p) => released.push(p) });
+    const c = tabPresence({ id: "C", prevId: "dead", open, waitMs: 150, release: (p) => released.push(p) });
+    await new Promise(r => setTimeout(r, 400));
+    for (const ch of [a, b, c]) ch?.close();
+    assert.deepEqual(released, ["dead"], "the live original keeps its key; the dead page's key is released");
+    return true;
+  } catch (e) { console.log("FAIL - tabPresence\n   ", e.message.split("\n")[0]); return false; }
+})();
+if (presenceOk) { n++; console.log("ok - tabPresence: a live original answers; a dead page's key is released"); } else failed++;
 
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

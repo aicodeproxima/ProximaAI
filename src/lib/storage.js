@@ -461,6 +461,7 @@ export function pickTabId(stored, keyAt, wasDiscarded, now, fresh) {
   if (wasDiscarded) return stored;
   return Number.isFinite(keyAt) && now - keyAt < TAB_TAKEOVER_MS ? fresh : stored;
 }
+let PREV_TAB_ID = null;   // the stored id this page set aside because its key looked alive (tabPresence decides)
 const TAB_ID = (() => {
   const fresh = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   try {
@@ -468,10 +469,34 @@ const TAB_ID = (() => {
     let keyAt = NaN;
     try { keyAt = JSON.parse(localStorage.getItem(FORM_KEY + stored))?.at; } catch {}
     const id = pickTabId(stored, keyAt, globalThis.document?.wasDiscarded === true, Date.now(), fresh);
+    if (stored && id !== stored) PREV_TAB_ID = stored;
     sessionStorage.setItem(TAB_KEY, id);
     return id;
   } catch { return fresh; }
 })();
+// A key that only looked alive (review round 4): a tab Chrome killed and reopened within TAB_TAKEOVER_MS reads like a
+// duplicate. So the page asks this browser's other tabs whether that id is live; its owner answers at once. No answer
+// within waitMs: the key belonged to a dead page and is released, instead of holding its uploads for 7 days. Every page
+// answers for its own id. (A duplicate made of a frozen tab loses that tab's hold until it thaws and republishes.)
+const TAB_PING_MS = 1500;
+export function tabPresence({ id, prevId = null, open = () => new BroadcastChannel("proximaai-tabs"), waitMs = TAB_PING_MS, release }) {
+  let ch;
+  try { ch = open(); } catch { return null; }
+  let pending = prevId;
+  ch.onmessage = (e) => {
+    const m = e?.data || {};
+    if (m.ask && m.ask === id) ch.postMessage({ have: id });
+    if (pending && m.have === pending) pending = null;
+  };
+  if (pending) {
+    ch.postMessage({ ask: pending });
+    setTimeout(() => { if (pending) { const p = pending; pending = null; release?.(p); } }, waitMs);
+  }
+  return ch;
+}
+if (typeof window !== "undefined" && typeof BroadcastChannel !== "undefined") {
+  tabPresence({ id: TAB_ID, prevId: PREV_TAB_ID, release: (p) => { try { localStorage.removeItem(FORM_KEY + p); } catch {} } });
+}
 // Another tab's key is pruned only once its hold has lapsed: a frozen tab's form still holds its uploads (review round 2).
 const STALE_FORM_KEY_MS = FORM_HOLD_ALIVE_MS;
 export function publishFormPaths(paths, now = Date.now()) {
