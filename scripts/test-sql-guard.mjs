@@ -78,8 +78,10 @@ test("harmless session settings pass; anything that could change the transaction
 test("a $ inside an identifier opens no dollar-quote; real dollar-quotes still do", () => {
   for (const q of ["select 1 as a$x$; end; begin read write; select 2", "select 1 as a$x$; abort; start transaction read write; select 2"])
     assert.ok(readOnlyEscape(q), q);
-  for (const q of ["select 1 as a$x$", "select $tag$ end; commit $tag$ as s", "do $b$ begin perform 1; end $b$", "select $1"])
+  for (const q of ["select 1 as a$x$", "select $tag$ end; begin $tag$ as s", "do $b$ begin perform 1; end $b$", "select $1"])
     assert.equal(readOnlyEscape(q), null, q);
+  // A dollar-quoted string and a DO body look alike, so COMMIT inside either stays refused (fails closed).
+  assert.ok(readOnlyEscape("select $tag$ commit $tag$ as s"));
 });
 
 console.log(`\n${n} passed, ${failed} failed`);
