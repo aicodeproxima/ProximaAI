@@ -227,19 +227,27 @@ export async function deleteTaskRemote(id) {
 
 // Bulk-delete specific task ids from the cloud, scoped to this device/user.
 // Returns { ok } so callers can keep the failed-sync replay queue honest.
-export async function deleteTasksRemote(ids) {
+// Deletes this scope's rows by id in chunks: a replayed large clear can hold hundreds of ids, and one request naming them
+// all builds an overlong URL. ok only when every chunk was confirmed (review wf_ec400a67-988 #2).
+const ROW_DELETE_CHUNK = 100;
+async function deleteByIds(site, table, ids) {
   if (!supabase) return { ok: false };
   const list = (ids || []).filter(Boolean);
-  if (list.length === 0) return { ok: true };
   try {
-    const { error } = await supabase
-      .from("tasks")
-      .delete()
-      .in("id", list)
-      .eq("device_id", getDeviceId());
-    if (error) { warnOnce("deleteTasksRemote", error); return { ok: false, error: error.message }; }
+    for (let i = 0; i < list.length; i += ROW_DELETE_CHUNK) {
+      const { error } = await supabase
+        .from(table)
+        .delete()
+        .in("id", list.slice(i, i + ROW_DELETE_CHUNK))
+        .eq("device_id", getDeviceId());
+      if (error) { warnOnce(site, error); return { ok: false, error: error.message }; }
+    }
     return { ok: true };
-  } catch (err) { warnOnce("deleteTasksRemote", err); return { ok: false, error: err?.message }; }
+  } catch (err) { warnOnce(site, err); return { ok: false, error: err?.message }; }
+}
+
+export async function deleteTasksRemote(ids) {
+  return deleteByIds("deleteTasksRemote", "tasks", ids);
 }
 
 export async function clearTasksRemote() {
@@ -311,18 +319,7 @@ export async function pullHistory(limit = 500) {
 
 // Bulk-delete specific history (log) ids from the cloud, scoped to this device/user.
 export async function deleteHistoryRemote(ids) {
-  if (!supabase) return { ok: false };
-  const list = (ids || []).filter(Boolean);
-  if (list.length === 0) return { ok: true };
-  try {
-    const { error } = await supabase
-      .from("history")
-      .delete()
-      .in("id", list)
-      .eq("device_id", getDeviceId());
-    if (error) { warnOnce("deleteHistoryRemote", error); return { ok: false, error: error.message }; }
-    return { ok: true };
-  } catch (err) { warnOnce("deleteHistoryRemote", err); return { ok: false, error: err?.message }; }
+  return deleteByIds("deleteHistoryRemote", "history", ids);
 }
 
 export async function clearHistoryRemote() {

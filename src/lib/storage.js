@@ -501,8 +501,12 @@ export function addFailedSync(entry) {
     const withMeta = { ...entry, ts: Date.now(), attempts: (entry.attempts || 0) + 1 };
     if (existingIdx >= 0) list[existingIdx] = withMeta;
     else list.push(withMeta);
-    // Cap at 200 entries to prevent unbounded growth
-    while (list.length > 200) list.shift();
+    // Cap at 200 entries to prevent unbounded growth. Delete intents are never dropped: a dropped one brings a deleted
+    // row back on the next reload (review wf_ec400a67-988 #2). The oldest uploads go first, never the newest entry, and
+    // deletes alone may exceed the cap.
+    for (let i = 0; list.length > 200 && i < list.length - 1; ) {
+      if (/-delete$/.test(list[i].kind)) i++; else list.splice(i, 1);
+    }
     localStorage.setItem(FAILED_KEY, JSON.stringify(list));
   } catch {}
 }

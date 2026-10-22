@@ -47,6 +47,20 @@ test("Clear drops every queued upload of the cleared kinds and says which ids th
   assert.deepEqual(getFailedSyncs().map(e => e.kind), ["task-delete", "setting"]);
 });
 
+// Review wf_ec400a67-988 #2 (2026-10-22): the 200-entry cap evicted the oldest entries whatever they were, so a large
+// clear's delete intents pushed each other (and History removals) out and those generations came back on reload.
+test("delete intents are never evicted by the cap; only uploads are", () => {
+  for (let i = 0; i < 10; i++) addFailedSync({ kind: "task", id: "up" + i, data: { id: "up" + i } });
+  for (let i = 0; i < 250; i++) addFailedSync({ kind: "task-delete", id: "d" + i, data: "d" + i });
+  addFailedSync({ kind: "history-delete", id: "h0", data: "h0" });
+  const q = getFailedSyncs();
+  assert.equal(q.filter(e => e.kind === "task-delete").length, 250, "every task-delete kept");
+  assert.ok(q.some(e => e.kind === "history-delete" && e.id === "h0"));
+  assert.equal(q.filter(e => e.kind === "task").length, 0, "uploads are what the cap trims");
+  addFailedSync({ kind: "task", id: "late", data: { id: "late" } });
+  assert.ok(getFailedSyncs().some(e => e.id === "late"), "the newest upload is never the one dropped");
+});
+
 // RLS design panel wf_89f53ef9-80f (2026-10-22): favorites retries are keyed by the account scope and replayed only for
 // the current one, so after a rename an entry queued under the old name was never sent nor removed (status "error" for
 // good, and that favorites change lost).
