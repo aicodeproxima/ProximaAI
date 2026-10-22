@@ -86,5 +86,27 @@ begin
                   (select string_agg(k, ',') from jsonb_object_keys(coalesce(v_snapset, '{}')) k)) end;
   exception when others then out := out || format('FAIL form-holds-survive-restore %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 5. Review round 5 (migration 20261022240000): a generation deleted earlier (user tombstone) that a restore brings back
+  --    in History only (no tasks row: the backup keeps 500 tasks, 1000 entries) is the restore's decision now. Its
+  --    tombstone becomes by_restore, so a later all-tombstones scrub (switching backups OFF) keeps it in the backups.
+  declare v_b5 uuid; v_kept boolean; v_flag boolean;
+  begin
+    update app_secrets set value = '{"enabled": false}' where key = 'auto_backups';
+    insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot)
+      values (u, 'manual', 0, 1, '[]',   -- no tasks row for rs-X: it comes back History-only
+              '[{"id":"rs-HX","device_id":"user:__rs_test","timestamp":1,"tasks":[{"id":"rs-X","status":"completed","cost":1,"outputs":[]}],"total_cost":1}]')
+      returning id into v_b5;
+    insert into sync_tombstones (id, kind, device_id, deleted_at, by_restore) values ('rs-X', 'task', u, now() - interval '1 day', false)
+      on conflict (id) do update set by_restore = false, deleted_at = excluded.deleted_at;   -- the owner deleted it before
+    r := restore_my_backup_phase2(v_tok, v_b5);
+    select by_restore into v_flag from sync_tombstones where id = 'rs-X';
+    insert into backup_scrub_queue (username, all_tombstones) values (u, true);
+    perform _drain_backup_scrubs(u);
+    select exists (select 1 from data_backups b, jsonb_array_elements(b.history_snapshot) h, jsonb_array_elements(h->'tasks') i
+                    where b.id = v_b5 and i->>'id' = 'rs-X') into v_kept;
+    out := out || case when r->>'ok' = 'true' and v_flag and v_kept then 'ok restored-history-only-kept; '
+                       else format('FAIL restored-history-only-kept ok=%s by_restore=%s kept=%s; ', r->>'ok', v_flag, v_kept) end;
+  exception when others then out := out || format('FAIL restored-history-only-kept %s %s; ', sqlstate, sqlerrm); end;
+
   raise exception 'RESULT: %', out;
 end $t$;
