@@ -650,6 +650,16 @@ export function restoreGuard(settings) {
   return { known, fresh, restoreAt, voided, pending };
 }
 
+// Task ids whose own delete intent, queued at or after the last restore (`restoreAt`, server ms), is still pending: their
+// rows are going, so they do not hold back their own WaveSpeed copy (App.jsx flushWsDeletes). An older intent is voided
+// by that restore, which kept the row (review round 6). `restoreAt` null (unreadable): none.
+export function deletesGoingSince(restoreAt) {
+  const out = new Set();
+  if (restoreAt == null || !Number.isFinite(Number(restoreAt))) return out;
+  for (const f of getFailedSyncs()) if (f.kind === "task-delete" && f.id && (f.ts || 0) >= Number(restoreAt)) out.add(f.id);
+  return out;
+}
+
 // The queued delete intents of one kind grouped by queue time, oldest first: the server-checked replay
 // (delete_queued_rows) sends one call per group, and a whole action shares one time (queueDeleteIntents).
 export function intentGroups(kind) {

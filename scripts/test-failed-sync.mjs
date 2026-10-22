@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -192,6 +192,17 @@ test("intentGroups: one group per queue time; queueDeleteIntents stamps one time
   const groups = intentGroups("task-delete");
   assert.deepEqual(groups.map(([, ids]) => ids), [["old1"], ["old2"], ["n1", "n2", "n3"]]);
   assert.deepEqual(intentGroups("history-delete"), [[5, ["h"]]]);
+});
+
+// Review round 6: the WaveSpeed flush lets a row's own pending delete skip the cloud hold only when that intent was
+// queued after the last restore (an older one is voided, and the restore kept the row); unknown restore time: none.
+test("deletesGoingSince: task-delete intents queued at or after the restore; unknown restore time -> none", () => {
+  localStorage.setItem("proximaai-failed-syncs", JSON.stringify([
+    { kind: "task-delete", id: "old", data: "old", ts: 90 }, { kind: "task-delete", id: "new", data: "new", ts: 110 },
+    { kind: "history-delete", id: "h", data: "h", ts: 120 }]));
+  assert.deepEqual([...deletesGoingSince(100)], ["new"]);
+  assert.deepEqual([...deletesGoingSince(0)].sort(), ["new", "old"], "no restore recorded: all");
+  assert.deepEqual([...deletesGoingSince(null)], [], "restore time unknown: none");
 });
 
 // Review round 4: "restore handled" is per tab. Another tab marking the shared key must not stop this tab from adopting
