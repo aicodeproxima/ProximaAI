@@ -12,7 +12,7 @@ import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears } from "./lib/clearOutcome.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge } from "./lib/supabase.js";
 import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, filesNote, fileFlushReady, classifyPath, liveFormPaths } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -4453,10 +4453,17 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
-                      // Every generation this account has: here and those only in the cloud.
-                      const remote = await pullAllRemoteData().catch(() => null);
+                      // Every generation this account has: here and every cloud row (all pages, any status), so the purge
+                      // reaches rows beyond the 500 loaded. A failed read clears nothing (review wf_ec400a67-988 #3).
+                      const remote = isSupabaseConfigured() ? await pullAllForPurge() : { tasks: [], history: [] };
+                      if (!remote) {
+                        setSaveStatus("error");
+                        setAccountToast("Couldn't read every generation from the cloud — nothing was cleared. Try again.");
+                        setTimeout(() => setAccountToast(""), 6000);
+                        return;
+                      }
                       const all = new Map(tasksRef.current.map(t => [t.id, t]));
-                      for (const t of remote?.tasks || []) if (!all.has(t.id)) all.set(t.id, t);
+                      for (const t of remote.tasks) if (!all.has(t.id)) all.set(t.id, t);
                       const removed = [...all.values()];
                       // Nothing removed may be uploaded again: the debounced queue, queued uploads (a failed upload left no
                       // tombstone to stop it) and this session's later replays (review wf_1945b758-923 #1).
@@ -4493,12 +4500,19 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
-                      // Everything this account has, here and only in the cloud: the purge needs it after the clears below.
-                      const remote = await pullAllRemoteData().catch(() => null);
+                      // Everything this account has, here and every cloud row (all pages, any status): the purge needs it
+                      // after the clears below. A failed read clears nothing (review wf_ec400a67-988 #3).
+                      const remote = isSupabaseConfigured() ? await pullAllForPurge() : { tasks: [], history: [] };
+                      if (!remote) {
+                        setSaveStatus("error");
+                        setAccountToast("Couldn't read every generation from the cloud — nothing was reset. Try again.");
+                        setTimeout(() => setAccountToast(""), 6000);
+                        return;
+                      }
                       const allTasks = new Map(tasksRef.current.map(t => [t.id, t]));
-                      for (const t of remote?.tasks || []) if (!allTasks.has(t.id)) allTasks.set(t.id, t);
+                      for (const t of remote.tasks) if (!allTasks.has(t.id)) allTasks.set(t.id, t);
                       const allLogs = new Map(logsRef.current.map(l => [l.id, l]));
-                      for (const l of remote?.history || []) if (!allLogs.has(l.id)) allLogs.set(l.id, l);
+                      for (const l of remote.history) if (!allLogs.has(l.id)) allLogs.set(l.id, l);
                       const removedTasks = [...allTasks.values()], removedLogs = [...allLogs.values()];
                       // Clear local state
                       const favoriteScope = getDeviceId();

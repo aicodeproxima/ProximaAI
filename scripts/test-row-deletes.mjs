@@ -32,5 +32,28 @@ for (const [name, table] of [["deleteTasksRemote", "tasks"], ["deleteHistoryRemo
   });
 }
 
+// #3: Clear Outputs / Reset purge every cloud row, not the 500 newest (or nothing when that read failed).
+const rows = (k, from = 0) => Array.from({ length: k }, (_, i) => ({ id: "r" + String(from + i).padStart(5, "0"), device_id: "user:owner", status: "pending", outputs: [], task_id: null }));
+await test("pullAllForPurge: every page of every status, mapped like pullTasks / pullHistory", async () => {
+  const c = fakeClient((q) => {
+    const after = q.ops.find(o => o[0] === "gt");
+    if (q.table === "tasks") return { data: after ? rows(3, 1000) : rows(1000), error: null };
+    return { data: [{ id: "h1", device_id: "user:owner", tasks: [{ id: "r00001" }], total_cost: 1 }], error: null };
+  });
+  sb.__setClientForTests(c);
+  const r = await sb.pullAllForPurge();
+  assert.equal(r.tasks.length, 1003);
+  assert.equal(r.tasks[0].status, "pending", "pending rows too (pullTasks skips them)");
+  assert.deepEqual(r.history.map(h => [h.id, h.tasks.length, h.totalCost]), [["h1", 1, 1]]);
+  assert.ok(c.calls.filter(q => q.table === "tasks").every(q => !q.ops.some(o => o[0] === "in")), "no status filter");
+  assert.ok(c.calls.every(q => q.ops.some(o => o[0] === "eq" && o[1] === "device_id" && o[2] === "user:owner")));
+});
+await test("pullAllForPurge: any failed page answers null, so nothing is cleared", async () => {
+  sb.__setClientForTests(fakeClient((q) => (q.ops.find(o => o[0] === "gt") ? { data: null, error: { message: "timeout" } } : { data: rows(1000), error: null })));
+  assert.equal(await sb.pullAllForPurge(), null);
+  sb.__setClientForTests(fakeClient(() => { throw new TypeError("Failed to fetch"); }));
+  assert.equal(await sb.pullAllForPurge(), null);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

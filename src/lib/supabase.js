@@ -155,6 +155,36 @@ export async function syncTasksBatch(tasks) {
   } catch (err) { warnOnce("syncTasksBatch", err); throw err; }
 }
 
+// A cloud tasks row as the app's task object (pullTasks, pullAllForPurge).
+const rowToTask = (row) => ({
+  id: row.id,
+  batchId: row.batch_id,
+  modelId: row.model_id,
+  modelName: row.model_name,
+  provider: row.provider,
+  price: row.price ?? 0,
+  status: row.status,
+  genType: row.gen_type,
+  prompt: row.prompt,
+  negPrompt: row.neg_prompt,
+  resolution: row.resolution,
+  duration: row.duration,
+  seed: row.seed,
+  aspectRatio: row.aspect_ratio,
+  sourceImageUrl: row.source_image_url,
+  sourceImageUrls: row.source_image_urls ?? [],
+  numImages: row.num_images ?? 1,
+  outputs: row.outputs ?? [],
+  error: row.error,
+  startTime: row.start_time,
+  endTime: row.end_time,
+  wallClockMs: row.wall_clock_ms ?? 0,
+  inferenceMs: row.inference_ms ?? 0,
+  perModelResolution: row.per_model_resolution ?? null,
+  nsfw: row.nsfw ?? null,
+  taskId: row.task_id ?? null,
+});
+
 export async function pullTasks(limit = 500) {
   if (!supabase) return [];
   try {
@@ -165,34 +195,7 @@ export async function pullTasks(limit = 500) {
       .in("status", ["completed", "failed", "processing"]) // running rows: another device may be frozen mid-generation
       .order("start_time", { ascending: false })
       .limit(limit);
-    return (data || []).map(row => ({
-      id: row.id,
-      batchId: row.batch_id,
-      modelId: row.model_id,
-      modelName: row.model_name,
-      provider: row.provider,
-      price: row.price ?? 0,
-      status: row.status,
-      genType: row.gen_type,
-      prompt: row.prompt,
-      negPrompt: row.neg_prompt,
-      resolution: row.resolution,
-      duration: row.duration,
-      seed: row.seed,
-      aspectRatio: row.aspect_ratio,
-      sourceImageUrl: row.source_image_url,
-      sourceImageUrls: row.source_image_urls ?? [],
-      numImages: row.num_images ?? 1,
-      outputs: row.outputs ?? [],
-      error: row.error,
-      startTime: row.start_time,
-      endTime: row.end_time,
-      wallClockMs: row.wall_clock_ms ?? 0,
-      inferenceMs: row.inference_ms ?? 0,
-      perModelResolution: row.per_model_resolution ?? null,
-      nsfw: row.nsfw ?? null,
-      taskId: row.task_id ?? null,
-    }));
+    return (data || []).map(rowToTask);
   } catch (err) { warnOnce("pullTasks", err); return []; }
 }
 
@@ -287,6 +290,25 @@ export async function syncHistoryEntry(entry) {
 }
 
 // null when the read failed (an empty History and a failed read used to look the same: [] either way).
+// A cloud history row as the app's log entry (pullHistory, pullAllForPurge).
+const rowToLog = (row) => ({
+  id: row.id,
+  timestamp: row.timestamp,
+  prompt: row.prompt,
+  negPrompt: row.neg_prompt,
+  genType: row.gen_type,
+  models: row.models || [],
+  resolution: row.resolution,
+  duration: row.duration,
+  seed: row.seed,
+  aspectRatio: row.aspect_ratio,
+  sourceImageUrl: row.source_image_url,
+  sourceImageUrls: row.source_image_urls || [],
+  numImages: row.num_images || 1,
+  tasks: row.tasks || [],
+  totalCost: row.total_cost,
+});
+
 export async function pullHistory(limit = 500) {
   if (!supabase) return [];
   try {
@@ -297,23 +319,7 @@ export async function pullHistory(limit = 500) {
       .order("timestamp", { ascending: false })
       .limit(limit);
     if (error) throw error;
-    return (data || []).map(row => ({
-      id: row.id,
-      timestamp: row.timestamp,
-      prompt: row.prompt,
-      negPrompt: row.neg_prompt,
-      genType: row.gen_type,
-      models: row.models || [],
-      resolution: row.resolution,
-      duration: row.duration,
-      seed: row.seed,
-      aspectRatio: row.aspect_ratio,
-      sourceImageUrl: row.source_image_url,
-      sourceImageUrls: row.source_image_urls || [],
-      numImages: row.num_images || 1,
-      tasks: row.tasks || [],
-      totalCost: row.total_cost,
-    }));
+    return (data || []).map(rowToLog);
   } catch (err) { warnOnce("pullHistory", err); return null; }
 }
 
@@ -462,6 +468,30 @@ export function subscribeToCloudChanges(onChange) {
 
 // ─── Bulk Pull (for initial sync on login) ───
 // Uses Promise.allSettled so one failing fetch doesn't nuke all cloud pulls.
+
+// Every task and History row of this account (any status, every page), for Clear Outputs / Reset Everything: their
+// purge (WaveSpeed copies, files, History) must cover rows beyond the 500 the app loads (review wf_ec400a67-988 #3).
+// Keyset-paged by id like pullAllIds. null when any page fails: the caller then clears nothing.
+export async function pullAllForPurge() {
+  if (!supabase) return null;
+  const all = async (table, map) => {
+    const out = [];
+    for (let last = null; ;) {
+      let q = supabase.from(table).select("*").eq("device_id", getDeviceId()).order("id").limit(1000);
+      if (last !== null) q = q.gt("id", last);
+      const { data, error } = await q;
+      if (error || !Array.isArray(data)) return null;
+      out.push(...data.map(map));
+      if (data.length < 1000) return out;
+      last = data[data.length - 1].id;
+    }
+  };
+  try {
+    const tasks = await all("tasks", rowToTask);
+    const history = tasks && await all("history", rowToLog);
+    return tasks && history ? { tasks, history } : null;
+  } catch (err) { warnOnce("pullAllForPurge", err); return null; }
+}
 
 export async function pullAllRemoteData() {
   if (!supabase) return null;
