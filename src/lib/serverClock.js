@@ -7,12 +7,19 @@ let offset = (() => { try { return Number(localStorage.getItem(KEY)) || 0; } cat
 
 export const serverNow = () => Date.now() + offset;
 
-// One sample: the header has whole seconds (its midpoint is +500 ms) against the request's midpoint. A sample whose
-// round trip took over 5 s says too little and is skipped. Returns the current offset.
+// One sample: the header has whole seconds (its midpoint is +500 ms) against the request's midpoint. The server stamps
+// Date when it answers, so a slow request (an upload, a large pull) puts it late and biases the estimate by up to half
+// its round trip (review round 4). So the quickest sample of the last 10 minutes wins, and one over 1.5 s is never
+// used. Returns the current offset.
+const MAX_RTT_MS = 1500, BEST_FOR_MS = 10 * 60 * 1000;
+let best = null;   // { rtt, at } of the sample the offset came from
 export function noteServerDate(date, sentAt, receivedAt) {
-  const t = Date.parse(date);
-  if (!Number.isFinite(t) || !(receivedAt >= sentAt) || receivedAt - sentAt > 5000) return offset;
+  const t = Date.parse(date), rtt = receivedAt - sentAt;
+  if (!Number.isFinite(t) || !(rtt >= 0) || rtt > MAX_RTT_MS) return offset;
+  const stale = !best || Math.abs(receivedAt - best.at) > BEST_FOR_MS;
+  if (!stale && rtt >= best.rtt) return offset;
   const next = Math.round(t + 500 - (sentAt + receivedAt) / 2);
+  best = { rtt, at: receivedAt };
   if (Math.abs(next - offset) >= 1000) { try { localStorage.setItem(KEY, String(next)); } catch {} }
   offset = next;
   return offset;

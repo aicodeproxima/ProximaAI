@@ -34,8 +34,22 @@ await test("withServerClock reads the response's Date header and returns the res
   assert.equal(await clock.withServerClock(async () => bare)("https://x"), bare, "no headers: passes through");
 });
 
+// Review round 4: an upload's Date is stamped near its end, so a slow sample biases the offset by about half its round
+// trip. The sample with the smallest round trip in the last 10 minutes wins; one over 1.5 s is never used.
+await test("the quickest recent sample wins; a slow one cannot replace it; a stale best is replaced", () => {
+  const T = 2_000_000_000_000;
+  clock.noteServerDate(new Date(T + 50_000).toUTCString(), T, T + 100);                       // offset ~ +50 s, rtt 100
+  const best = clock.noteServerDate(new Date(T + 60_000 + 2_000).toUTCString(), T + 60_000, T + 61_400);   // rtt 1.4 s: worse
+  assert.ok(Math.abs(best - 50_000) <= 1000, `kept the quick sample: ${best}`);
+  assert.ok(Math.abs(clock.noteServerDate(new Date(T + 120_000 + 70_000).toUTCString(), T + 120_000, T + 120_050) - 70_000) <= 1000, "a quicker one wins");
+  assert.ok(Math.abs(clock.noteServerDate(new Date(T + 900_000 + 40_000).toUTCString(), T + 900_000, T + 900_800) - 40_000) <= 1000,
+    "after 10 minutes the best is stale and a slower sample replaces it");
+  assert.equal(Math.round(clock.noteServerDate(new Date(T + 900_000).toUTCString(), T + 901_000, T + 902_600) / 1000), 40, "a 1.6 s sample is never used");
+});
+
 await test("queued uploads and delete intents are stamped in server time", () => {
-  clock.noteServerDate(new Date(Date.now() + 120_000).toUTCString(), Date.now(), Date.now() + 10);
+  const t0 = Date.now();
+  clock.noteServerDate(new Date(t0 + 120_000).toUTCString(), t0, t0);   // a 0 ms round trip beats every earlier sample
   addFailedSync({ kind: "task", id: "t", data: { id: "t" } });
   queueDeleteIntents("task-delete", ["d"]);
   for (const e of getFailedSyncs()) assert.ok(Math.abs(e.ts - (Date.now() + 120_000)) <= 1500, `${e.kind} ts ${e.ts - Date.now()}`);
