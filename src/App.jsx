@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
 import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, pullTaskInputs, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
@@ -1407,14 +1407,8 @@ export default function ProximaApp() {
   // ids (a restore came after them) leave the queue and stop being "deleted" here, so the rows the restore brought back
   // return on the next pass; deleted ones leave this device too. A failed call leaves its intents queued.
   const replayDeleteIntents = async (kind) => {
-    const byTs = new Map();
-    for (const f of getFailedSyncs()) {
-      if (f.kind !== kind || !f.id) continue;
-      if (!byTs.has(f.ts || 0)) byTs.set(f.ts || 0, []);
-      byTs.get(f.ts || 0).push(f.id);
-    }
     const isTask = kind === "task-delete";
-    for (const [ts, ids] of byTs) {
+    for (const [ts, ids] of intentGroups(kind)) {
       const r = await deleteQueuedRemote(isTask ? "task" : "history", ids, ts);
       if (r.voided.length) {
         settleDeleteIntents(kind, r.voided);
@@ -2510,8 +2504,8 @@ export default function ProximaApp() {
       for (const l of plan.rewrite) { savedLogIds.current.add(l.id); addHistoryEntry(l); addFailedSync({ kind: "history", id: l.id, data: l }); }
       for (const id of plan.remove) {
         deletingLogIds.current.add(id); savedLogIds.current.delete(id); removeFailedSync("history", id);
-        addFailedSync({ kind: "history-delete", id, data: id });
       }
+      queueDeleteIntents("history-delete", plan.remove);   // one queue time for the action (review round 5)
     }
     setFailedSyncCount(getFailedSyncs().length);
     return { ...plan, history, predictionIds: removed.map(t => t.taskId).filter(Boolean) };
@@ -3219,7 +3213,7 @@ export default function ProximaApp() {
     taskSyncQueueRef.current = taskSyncQueueRef.current.filter(t => !idSet.has(t.id));
     for (const id of ids) { savedTaskIds.current.delete(id); removeFailedSync("task", id); }
     // 3. Enqueue cloud-delete intents BEFORE firing, so a tab-close/network drop replays them.
-    for (const id of ids) addFailedSync({ kind: "task-delete", id, data: id });
+    queueDeleteIntents("task-delete", ids);   // one queue time for the action: one server-checked replay call (review round 5)
     // 4. Optimistic local removal. Fresh copies: a submit that answered during the backup gave its task a prediction id
     //    the snapshot lacks. Their ids are released, so a lost submit of the same model never adopts a deleted result. A
     //    task whose submit never answered (Cancelled and then lost to a freeze or reload) becomes a deleted claimant, so
@@ -3338,7 +3332,7 @@ export default function ProximaApp() {
     // 2. Drop stale "history" upsert intents for these ids.
     for (const id of ids) { savedLogIds.current.delete(id); removeFailedSync("history", id); }
     // 3. Enqueue cloud-delete intents BEFORE firing.
-    for (const id of ids) addFailedSync({ kind: "history-delete", id, data: id });
+    queueDeleteIntents("history-delete", ids);   // one queue time for the action (review round 5)
     // 4. Optimistic local removal.
     setLogs(prev => prev.filter(l => !idSet.has(l.id)));
     // 5. Local IndexedDB delete (awaited).

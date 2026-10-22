@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -180,6 +180,18 @@ test("confirmDeleteIntents: settles the intents and records each id's confirmati
   const m = confirmedDeletes("task-delete");
   assert.ok(m.get("a") >= t0 && !m.has("b"));
   assert.equal(confirmedDeletes("history-delete").has("a"), false);
+});
+
+// Review round 5: a bulk delete's intents share one queue time, so the server-checked replay sends one call per
+// action, not one per id; older per-id intents still group by their own time.
+test("intentGroups: one group per queue time; queueDeleteIntents stamps one time for the whole action", () => {
+  localStorage.setItem("proximaai-failed-syncs", JSON.stringify([
+    { kind: "task-delete", id: "old1", data: "old1", ts: 5 }, { kind: "task-delete", id: "old2", data: "old2", ts: 6 },
+    { kind: "history-delete", id: "h", data: "h", ts: 5 }]));
+  queueDeleteIntents("task-delete", ["n1", "n2", "n3"]);
+  const groups = intentGroups("task-delete");
+  assert.deepEqual(groups.map(([, ids]) => ids), [["old1"], ["old2"], ["n1", "n2", "n3"]]);
+  assert.deepEqual(intentGroups("history-delete"), [[5, ["h"]]]);
 });
 
 // Review round 4: "restore handled" is per tab. Another tab marking the shared key must not stop this tab from adopting

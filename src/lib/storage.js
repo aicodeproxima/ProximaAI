@@ -650,6 +650,19 @@ export function restoreGuard(settings) {
   return { known, fresh, restoreAt, voided, pending };
 }
 
+// The queued delete intents of one kind grouped by queue time, oldest first: the server-checked replay
+// (delete_queued_rows) sends one call per group, and a whole action shares one time (queueDeleteIntents).
+export function intentGroups(kind) {
+  const byTs = new Map();
+  for (const f of getFailedSyncs()) {
+    if (f.kind !== kind || !f.id) continue;
+    const ts = f.ts || 0;
+    if (!byTs.has(ts)) byTs.set(ts, []);
+    byTs.get(ts).push(f.id);
+  }
+  return [...byTs.entries()].sort((a, b) => a[0] - b[0]);
+}
+
 // A delete the cloud confirmed: its intents leave the queue, and this tab records when (review round 5). A later pass
 // whose reads began after that, and whose cloud holds the id again, knows a restore brought it back (only a restore
 // re-inserts a tombstoned id) and releases it (syncReconcile.js releaseRestored). Per tab, in memory: each tab releases
