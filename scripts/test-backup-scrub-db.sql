@@ -132,7 +132,8 @@ begin
     insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot)
       values (u, 'manual', 1, 0, (select jsonb_agg(row_to_json(t)) from tasks t where t.device_id = u), '[]')
       returning id into v_bk2;
-    insert into backup_scrub_queue (username, task_ids) values (u, '{sx-r}');
+    -- Deleted after the backup was taken: the delete trigger queues its scrub (a live row is never scrubbed, 20261022210000).
+    delete from tasks where id = 'sx-r';
     r := restore_my_backup_phase2(_sign_session_token(u, now() + interval '5 minutes'), v_bk2);
     out := out || case when r->>'ok' = 'true' and not exists (select 1 from backup_scrub_queue where username = u)
       and not exists (select 1 from tasks where id = 'sx-r')
