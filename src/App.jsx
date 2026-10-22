@@ -2266,9 +2266,10 @@ export default function ProximaApp() {
       const answeredFor = (t) => answeredWindows.some(w => w.after <= t.startTime - LOOKUP_SKEW_MS && t.startTime + ORPHAN_GRACE_MS <= w.before);
       // Owned = predictions any task holds: here, on another device (its row may not have reached this one yet), or
       // released by a delete or a cancel. Without the cloud's answer nothing is decided this pass.
+      // Rows started up to ORPHAN_GRACE_MS before a window or LOOKUP_SKEW_MS after it may own a prediction inside it.
       const cloudRows = [];
       for (const w of windows) {
-        const rows = await pullTaskStartsInWindow(w.after - ORPHAN_GRACE_MS, w.before);
+        const rows = await pullTaskStartsInWindow(w.after - ORPHAN_GRACE_MS, w.before + LOOKUP_SKEW_MS);
         if (!rows) return;
         cloudRows.push(...rows);
       }
@@ -2279,11 +2280,12 @@ export default function ProximaApp() {
       const { adopt, fail, claimed, resolved, claims } = planOrphans(orphans, items, owned, Date.now(), claimants, { answeredFor });
       releasePredictions(claimed);
       resolveClaimants(resolved);
-      // Deleted claimants: their prediction goes on WaveSpeed too, but only on an unambiguous match (taskResume.js
-      // unambiguousDeletes, review wf_ec400a67-988 #10); otherwise it is only released. Cancelled ones: the id is linked
-      // to the task, so a later delete on any device reaches it (planClaimOutcomes).
+      // Deleted claimants: their prediction goes on WaveSpeed too, but only on an unambiguous match, a lone claimant or a
+      // whole deleted batch whose count matches (taskResume.js unambiguousDeletes, review wf_ec400a67-988 #10 and round
+      // 2); otherwise it is only released. Cancelled ones: the id is linked to the task, so a later delete on any device
+      // reaches it (planClaimOutcomes).
       const { attach, del } = planClaimOutcomes(claims, tasksRef.current);
-      const sure = new Set(unambiguousDeletes(claims, claimants, items, cloudRows));
+      const sure = new Set(unambiguousDeletes(claims, cloudRows));
       const delNow = del.filter(id => sure.has(id));
       if (delNow.length) deleteOnWaveSpeed(delNow.map(id => ({ taskId: id, status: "processing" })));
       if (attach.length) {

@@ -452,7 +452,8 @@ test("a claim says which claimant took which prediction, and whether that claima
   assert.equal(c.deleted, true);
   const r = planOrphans([orphan("O", { startTime: NOW - 60_000 })],
     [item("Pc", { created_at: new Date(NOW - 69_000).toISOString() }), item("Po", { created_at: new Date(NOW - 59_000).toISOString() })], new Set(), NOW, [c]);
-  assert.deepEqual(r.claims, [{ claimantId: "C", predictionId: "Pc", deleted: true }]);
+  assert.deepEqual(r.claims.map(({ claimantId, predictionId, deleted, exact }) => ({ claimantId, predictionId, deleted, exact })),
+    [{ claimantId: "C", predictionId: "Pc", deleted: true, exact: false }], "shares its cluster with a live orphan: not exact");
   assert.equal(liveClaimants(rememberClaimants({}, [claimant("K", NOW)], NOW), NOW)[0].deleted, false, "a cancel's claimant");
 });
 
@@ -510,7 +511,9 @@ test("bulk delete flips a cancelled claimant to deleted (with a fresh hour), and
     { id: "K", deleted: true, startTime: NOW - 70_000, modelId: "bytedance/seedream-v4" });
   assert.equal(m.K.at, NOW, "a flip restarts the claimant hour");
   const r = planOrphans([], [item("Pk", { created_at: new Date(NOW - 69_000).toISOString() })], new Set(), NOW, liveClaimants(m, NOW));
-  assert.deepEqual(r.claims, [{ claimantId: "K", predictionId: "Pk", deleted: true }]);
+  assert.deepEqual(r.claims.map(({ claimantId, predictionId, deleted }) => ({ claimantId, predictionId, deleted })),
+    [{ claimantId: "K", predictionId: "Pk", deleted: true }]);
+  assert.deepEqual(unambiguousDeletes(r.claims, []), ["Pk"]);
   assert.deepEqual(r.resolved, ["K"]);
 });
 
@@ -527,20 +530,51 @@ test("only a waiting task or an earlier claimant is recorded; deleted never flip
   assert.equal(d.D.deleted, true);
 });
 
-// Review wf_ec400a67-988 #10: a deleted claimant's prediction is deleted only on an unambiguous match.
-test("a deleted claimant deletes only when its window holds one prediction of its model and no other row of it started", () => {
-  const C = { id: "C", modelId: "bytedance/seedream-v4", startTime: NOW - 60_000, deleted: true };
+// Review wf_ec400a67-988 #10: a deleted claimant's prediction is deleted only on an unambiguous match. Run through
+// planOrphans as App.jsx does: the claims carry their cluster's verdict.
+{
+  const M = "bytedance/seedream-v4";
   const at = (ms) => new Date(ms).toISOString();
-  const P = { id: "P", model: "bytedance/seedream-v4", status: "completed", created_at: at(NOW - 58_000) };
-  const claims = [{ claimantId: "C", predictionId: "P", deleted: true }];
-  assert.deepEqual(unambiguousDeletes(claims, [C], [P], []), ["P"]);
-  assert.deepEqual(unambiguousDeletes(claims, [C], [P], [{ id: "C", modelId: C.modelId, startTime: C.startTime, taskId: null }]), ["P"], "its own row does not count");
-  assert.deepEqual(unambiguousDeletes(claims, [C], [P], [{ id: "X", modelId: C.modelId, startTime: NOW - 50_000, taskId: null }]), [],
-    "another device started the same model in the window (its row has no id yet): release, never delete");
-  assert.deepEqual(unambiguousDeletes(claims, [C], [P, { ...P, id: "Q", created_at: at(NOW - 40_000) }], []), [], "two candidates: ambiguous");
-  assert.deepEqual(unambiguousDeletes([{ ...claims[0], deleted: false }], [C], [P], []), [], "a cancelled claimant never deletes");
-  assert.deepEqual(unambiguousDeletes(claims, [C], [P], [{ id: "Y", modelId: "other/model", startTime: NOW - 50_000, taskId: null }]), ["P"]);
-});
+  const pred = (id, ms) => ({ id, model: M, status: "completed", created_at: at(ms) });
+  const claimant = (id, ms, deleted = true) => ({ id, modelId: M, startTime: ms, deleted });
+  const sure = (claimants, items, cloudRows = [], { orphans = [], owned = new Set() } = {}) =>
+    unambiguousDeletes(planOrphans(orphans, items, owned, NOW, claimants).claims, cloudRows).sort();
+  const row = (id, ms, taskId = null, modelId = M) => ({ id, modelId, startTime: ms, taskId });
+  const C = claimant("C", NOW - 60_000), P = pred("P", NOW - 58_000);
+
+  test("a deleted claimant deletes only when its window holds one prediction of its model and no other row of it started", () => {
+    assert.deepEqual(sure([C], [P]), ["P"]);
+    assert.deepEqual(sure([C], [P], [row("C", C.startTime)]), ["P"], "its own row does not count");
+    assert.deepEqual(sure([C], [P], [row("X", NOW - 50_000)]), [],
+      "another device started the same model in the window (its row has no id yet): release, never delete");
+    assert.deepEqual(sure([C], [P, pred("Q", NOW - 40_000)]), [], "two candidates: ambiguous");
+    assert.deepEqual(sure([claimant("C", NOW - 60_000, false)], [P]), [], "a cancelled claimant never deletes");
+    assert.deepEqual(sure([C], [P], [row("Y", NOW - 50_000, null, "other/model")]), ["P"]);
+  });
+
+  // Review round 2: a batch of the same model deleted before its ids came back never deleted anything (each window held
+  // the batch's other predictions, and the batch's other rows). Count match: every member of the cluster is a deleted
+  // claimant and the cluster's unowned predictions are exactly as many.
+  test("a deleted batch deletes all its predictions when their count matches the batch; anything mixed or extra releases", () => {
+    const batch = [claimant("B1", NOW - 60_000), claimant("B2", NOW - 59_900), claimant("B3", NOW - 59_800)];
+    const preds = [pred("p1", NOW - 58_000), pred("p2", NOW - 57_000), pred("p3", NOW - 56_000)];
+    assert.deepEqual(sure(batch, preds), ["p1", "p2", "p3"]);
+    assert.deepEqual(sure(batch, [...preds, pred("p4", NOW - 55_000)]), [], "an extra prediction: someone else's may be among them");
+    assert.deepEqual(sure([...batch.slice(0, 2), claimant("B3", NOW - 59_800, false)], preds), [], "a cancelled member keeps its prediction");
+    assert.deepEqual(sure(batch.slice(0, 2), preds, [], { orphans: [{ id: "O", modelId: M, startTime: NOW - 59_800, status: "pending" }] }), [],
+      "a live orphan in the cluster: its own prediction may be paired to a deleted one");
+    assert.deepEqual(sure(batch, preds, [row("B1", NOW - 60_000), row("B2", NOW - 59_900)]), ["p1", "p2", "p3"], "the batch's own rows do not count");
+  });
+
+  test("rows with a prediction id never block (theirs is owned); rows without one block whenever theirs could land in the window", () => {
+    assert.deepEqual(sure([C], [P, pred("Q", NOW - 57_000)], [row("X", NOW - 59_000, "Q")], { owned: new Set(["Q"]) }), ["P"]);
+    assert.deepEqual(sure([C], [P], [row("E", C.startTime - LOOKUP_SKEW_MS - 60_000)]), [],
+      "started before the window, its prediction may be created inside it");
+    assert.deepEqual(sure([C], [P], [row("L", C.startTime + ORPHAN_GRACE_MS + 20_000)]), [],
+      "started just after the window, under clock skew its prediction may be stamped inside it");
+    assert.deepEqual(sure([C], [P], [row("F", C.startTime - LOOKUP_SKEW_MS - ORPHAN_GRACE_MS - 1)]), ["P"], "too early to land in it");
+  });
+}
 
 // Review wf_ec400a67-988 #9: a cancel lost to a freeze, deleted more than an hour later, still gets its prediction
 // deleted: the delete records a deleted claimant without a live entry, and deleted claimants live 48 h.

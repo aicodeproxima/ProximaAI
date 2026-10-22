@@ -143,17 +143,23 @@ export function planOrphans(orphans, items, owned, now, claimants = [], { answer
       // Oldest takes the oldest fit: right under any uniform clock skew between this device and WaveSpeed (a "prefer
       // created after the start" rule swapped same-model siblings when the device clock ran ahead). Leftovers of
       // deleted tasks are in `owned`; cancelled ones without an id are claimants.
+      // `exact` (review round 2): every member is a deleted claimant, each took one prediction, and the cluster holds no
+      // other unowned prediction of the model. Then every prediction here is one of theirs (unambiguousDeletes).
+      const ownClaims = [];
       for (const { t, claim } of c.parts) {
         const hit = claim && !withClaimants ? null : fits.find(x => !used.has(x.i.id) && inWindow(x, t));
         if (hit) used.add(hit.i.id);
         if (claim) {
-          if (hit) { claimed.push(hit.i.id); resolved.push(t.id); claims.push({ claimantId: t.id, predictionId: hit.i.id, deleted: !!t.deleted }); }
+          if (hit) { claimed.push(hit.i.id); resolved.push(t.id); ownClaims.push({ claimantId: t.id, predictionId: hit.i.id, deleted: !!t.deleted }); }
           else if (closed(t) && didAnswer(t)) resolved.push(t.id);   // its window closed and answered with nothing: done
           continue;
         }
         if (hit) adopt.push({ ...t, status: "processing", taskId: hit.i.id, pollUrl: hit.i.urls?.get || pollUrlFor({ taskId: hit.i.id }) });
         else if (closed(t)) fail.push(failTask(t, now, UNSUBMITTED_ERROR));
       }
+      const exact = fits.length === c.parts.length && ownClaims.length === c.parts.length && c.parts.every(p => p.claim && p.t.deleted);
+      const span = { model: k, lo: c.parts[0].t.startTime - LOOKUP_SKEW_MS, hi: c.until, members: c.parts.map(p => p.t.id) };
+      claims.push(...ownClaims.map(x => ({ ...x, exact, ...span })));
     }
   }
   return { adopt, fail, claimed, resolved, claims };
@@ -214,22 +220,18 @@ export function planClaimOutcomes(claims, tasks) {
   }
   return { attach, del };
 }
-// Review wf_ec400a67-988 #10: a deleted claimant pairs by model and time, so its prediction is deleted only when that
-// pairing is unambiguous: its window holds exactly one prediction of its model, and no other cloud row of that model
-// (another device's, any status, even one still waiting for its id) started in that window. Otherwise it is only
-// released: never delete what may be another device's live generation. `cloudRows`: pullTaskStartsInWindow rows.
-export function unambiguousDeletes(claims, claimants, items, cloudRows) {
-  const byId = new Map((claimants || []).map(c => [c.id, c]));
+// Review wf_ec400a67-988 #10 and round 2: a deleted claimant pairs by model and time, so its prediction is deleted only
+// when the pairing is unambiguous. Its cluster (planOrphans) must be `exact`: all deleted claimants, as many unowned
+// predictions of the model as members (one alone, or a whole batch). And no other cloud row of the model without a
+// prediction id (another device's, any status) may have started where its prediction could land in the cluster's span
+// [lo, hi]: from ORPHAN_GRACE_MS before it to LOOKUP_SKEW_MS after. A row with an id owns a prediction kept out of the
+// pool already. Otherwise it is only released: never delete what may be another device's live generation.
+// `cloudRows`: pullTaskStartsInWindow rows covering [lo - ORPHAN_GRACE_MS, hi + LOOKUP_SKEW_MS].
+export function unambiguousDeletes(claims, cloudRows) {
   const model = (m) => String(m || "").toLowerCase();
-  const at = (i) => Date.parse(String(i?.created_at || "").replace(/(\.\d{3})\d+/, "$1"));
-  return (claims || []).filter(c => {
-    const k = c.deleted && byId.get(c.claimantId);
-    if (!k) return false;
-    const lo = k.startTime - LOOKUP_SKEW_MS, hi = k.startTime + ORPHAN_GRACE_MS, m = model(k.modelId);
-    const same = (items || []).filter(i => i?.status !== "deleted" && model(i?.model) === m && at(i) >= lo && at(i) <= hi);
-    if (same.length !== 1) return false;
-    return !(cloudRows || []).some(r => r.id !== k.id && model(r.modelId) === m && r.startTime >= lo && r.startTime <= hi);
-  }).map(c => c.predictionId);
+  return (claims || []).filter(c => c.deleted && c.exact && !(cloudRows || []).some(r =>
+    !c.members.includes(r.id) && model(r.modelId) === c.model && (!r.taskId || r.taskId === c.predictionId)
+    && r.startTime + ORPHAN_GRACE_MS >= c.lo && r.startTime - LOOKUP_SKEW_MS <= c.hi)).map(c => c.predictionId);
 }
 // A submit that started while the lookup awaited may own a prediction the listing showed while its task has no id
 // yet: such a pass decides nothing.
