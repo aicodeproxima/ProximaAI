@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore, restoreGuard, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
 import { initSupabase, isSupabaseConfigured, pullSettings, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
@@ -19,7 +19,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs } from "./lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -1760,6 +1760,17 @@ export default function ProximaApp() {
             return [...newOnes, ...prev].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
           });
         }
+        // A restore this device had not handled yet: the cloud's copy of every entry both sides hold wins (restoreGuard,
+        // review round 3). Marked handled only once History answered, so a failed read retries on the next pass.
+        if (guard.fresh && remote.historyOk) {
+          const pendingLogs = new Set(getFailedSyncs().filter(f => f.kind === "history").map(f => f.id));
+          setLogs(prev => {
+            const take = new Map(restoredVersions(prev, remote.history, pendingLogs).map(l => [l.id, l]));
+            for (const l of take.values()) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
+            return take.size ? prev.map(l => take.get(l.id) || l) : prev;
+          });
+          markRestoreSeen(guard.restoreAt);
+        }
 
         // Favorites are a versioned per-category setting. A queued local write is
         // always newest; otherwise the latest timestamp wins across devices.
@@ -1893,6 +1904,15 @@ export default function ProximaApp() {
       const failed = getFailedSyncs();
       const pendingTasks = new Set([...failed.filter(f => f.kind === "task").map(f => f.id), ...taskSyncQueueRef.current.map(t => t.id)]);
       const pendingLogs = new Set(failed.filter(f => f.kind === "history").map(f => f.id));
+      // A restore this device had not handled yet: the cloud's copy of every shared entry wins (as at startup).
+      if (guard.fresh && remote.historyOk) {
+        const take = new Map(restoredVersions(logsRef.current, remote.history, pendingLogs).map(l => [l.id, l]));
+        if (take.size) {
+          for (const l of take.values()) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
+          setLogs(prev => prev.map(l => take.get(l.id) || l));
+        }
+        markRestoreSeen(guard.restoreAt);
+      }
       const taskPlan = planTaskSync({ local: tasksRef.current, cloud: remote.tasks || [], cloudIds: ids?.tasks ?? null,
         tombstones: ids?.taskTombstones ?? null, pending: pendingTasks, deleting: deletingIds.current, since });
       const logPlan = planLogSync({ local: logsRef.current, cloud: remote.history || [], cloudIds: ids?.history ?? null,

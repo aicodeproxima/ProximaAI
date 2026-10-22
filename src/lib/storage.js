@@ -570,15 +570,31 @@ export function dropDeleteIntentsBefore(ts) {
 // the intents still pending, so a caller marks as "being deleted" only ids that survived the void. `settings`: the cloud
 // settings map, or null when it could not be read: then the restore time is unknown, nothing is dropped, and the caller
 // must not replay delete intents this pass (they stay queued, and still keep their rows from being re-seeded).
+// `fresh`: a restore this device has not handled yet (markRestoreSeen). Only then is anything dropped: the delete
+// intents and the History rewrites queued before it (a delete's trimmed copy of an entry would be uploaded over the
+// restored one). Once handled, nothing queued later is compared with it (a clock running behind cannot void a delete
+// made after the restore). The caller then takes the cloud's copies of shared entries (batchLog.js restoredVersions)
+// and marks the restore seen.
+const SEEN_RESTORE_KEY = "proximaai-seen-restore";
+const seenRestore = () => { try { return Number(localStorage.getItem(SEEN_RESTORE_KEY)) || 0; } catch { return 0; } };
+export function markRestoreSeen(ts) { try { if (ts > seenRestore()) localStorage.setItem(SEEN_RESTORE_KEY, String(ts)); } catch {} }
 export function restoreGuard(settings) {
   const known = !!settings;
-  const voided = known ? dropDeleteIntentsBefore(Number(settings.last_restore_at) || 0) : { task: [], history: [] };
+  const restoreAt = known ? Number(settings.last_restore_at) || 0 : 0;
+  const fresh = known && restoreAt > seenRestore();
+  const voided = fresh ? dropDeleteIntentsBefore(restoreAt) : { task: [], history: [] };
+  if (fresh) {
+    try {
+      const all = getFailedSyncs(), keep = all.filter(e => !(e.kind === "history" && (e.ts || 0) < restoreAt));
+      if (keep.length !== all.length) localStorage.setItem(FAILED_KEY, JSON.stringify(keep));
+    } catch {}
+  }
   const pending = { task: [], history: [] };
   for (const e of getFailedSyncs()) {
     if (e.kind === "task-delete") pending.task.push(e.id);
     else if (e.kind === "history-delete") pending.history.push(e.id);
   }
-  return { known, voided, pending };
+  return { known, fresh, restoreAt, voided, pending };
 }
 
 // The intents a confirmed clear settled (clearOutcome.js clearSettlement), removed in one write.

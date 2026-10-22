@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, publishFormPaths, readFormPublications } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -110,11 +110,31 @@ test("restoreGuard: voids before it reports pending intents; unknown settings dr
     { kind: "history-delete", id: "L", data: "L", ts: R - 5 }, { kind: "task", id: "up", data: { id: "up" }, ts: R - 5 }]));
   seed();
   assert.deepEqual(restoreGuard({ last_restore_at: R }),
-    { known: true, voided: { task: ["a"], history: ["L"] }, pending: { task: ["b"], history: [] } });
+    { known: true, fresh: true, restoreAt: R, voided: { task: ["a"], history: ["L"] }, pending: { task: ["b"], history: [] } });
   seed();
-  assert.deepEqual(restoreGuard(null), { known: false, voided: { task: [], history: [] }, pending: { task: ["a", "b"], history: ["L"] } });
+  assert.deepEqual(restoreGuard(null), { known: false, fresh: false, restoreAt: 0, voided: { task: [], history: [] }, pending: { task: ["a", "b"], history: ["L"] } });
   assert.equal(getFailedSyncs().length, 4, "unknown: queue untouched");
   assert.deepEqual(restoreGuard({}).voided, { task: [], history: [] }, "no restore recorded");
+});
+
+// Review round 3: a History rewrite queued before the restore (a delete trimming an entry) is dropped with the delete
+// intents, while the restore is new to this device. Once the device has handled it (markRestoreSeen), nothing queued
+// later is compared with it again: a device clock running behind can no longer void a delete made after the restore.
+test("restoreGuard: a fresh restore also drops older History rewrites; a handled one drops nothing more", () => {
+  const R = 2_000_000;
+  localStorage.setItem("proximaai-failed-syncs", JSON.stringify([
+    { kind: "history", id: "E", data: { id: "E" }, ts: R - 5 }, { kind: "history", id: "F", data: { id: "F" }, ts: R + 5 },
+    { kind: "task", id: "t", data: { id: "t" }, ts: R - 5 }]));
+  const g = restoreGuard({ last_restore_at: R });
+  assert.equal(g.fresh, true);
+  assert.deepEqual(getFailedSyncs().map(e => `${e.kind}:${e.id}`), ["history:F", "task:t"], "older rewrite dropped, task upload kept");
+  markRestoreSeen(R);
+  localStorage.setItem("proximaai-failed-syncs", JSON.stringify([
+    { kind: "task-delete", id: "late", data: "late", ts: R - 60_000 }, { kind: "history", id: "G", data: { id: "G" }, ts: R - 60_000 }]));
+  const g2 = restoreGuard({ last_restore_at: R });
+  assert.equal(g2.fresh, false);
+  assert.deepEqual(g2.voided, { task: [], history: [] });
+  assert.equal(getFailedSyncs().length, 2, "a handled restore voids nothing queued later");
 });
 
 // RLS design panel wf_89f53ef9-80f (2026-10-22): favorites retries are keyed by the account scope and replayed only for

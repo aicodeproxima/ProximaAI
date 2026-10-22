@@ -1,6 +1,6 @@
 // Tests for src/lib/batchLog.js — the History entry of a generation batch. Run: node scripts/test-batch-log.mjs
 import assert from "node:assert/strict";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud } from "../src/lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud, restoredVersions } from "../src/lib/batchLog.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -112,6 +112,18 @@ test("queue bookkeeping: an upload clears only the version it sent", () => {
   const [done] = finishLogs([open], [task("a", { status: "completed", outputs: ["x"] })], NOW);
   assert.equal(sameLogContent(open, open), true);
   assert.equal(sameLogContent(open, done), false);
+});
+
+// Review round 3: a delete queued here before a restore trimmed the local copy of an entry; kept, it would be uploaded
+// over the restored entry on the next change. After a restore this device has not handled yet, the cloud's copy of an
+// entry both sides hold wins, keeping local-only fields; an entry with an upload queued after the restore keeps its own.
+test("restoredVersions: the cloud copy replaces a differing local one, except pending; local-only fields survive", () => {
+  const items = [{ id: "x", status: "completed", cost: 1, outputs: [] }, { id: "y", status: "completed", cost: 2, outputs: [] }];
+  const cloudE = { id: "E", tasks: items, totalCost: 3 }, localE = { id: "E", tasks: [items[0]], totalCost: 1, sourceAudioUrl: "a" };
+  const same = { id: "S", tasks: items, totalCost: 3 };
+  const out = restoredVersions([localE, same, { id: "L", tasks: [], totalCost: 0 }], [cloudE, same, { id: "C", tasks: [], totalCost: 0 }]);
+  assert.deepEqual(out, [{ id: "E", tasks: items, totalCost: 3, sourceAudioUrl: "a" }]);
+  assert.deepEqual(restoredVersions([localE], [cloudE], new Set(["E"])), [], "an upload queued after the restore keeps the local copy");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

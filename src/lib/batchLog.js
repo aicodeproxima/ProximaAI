@@ -105,6 +105,16 @@ export function takeFinishedFromCloud(local, cloud) {
   return out;
 }
 
+// After a restore this device has not handled yet (storage.js restoreGuard `fresh`), the cloud's copy of an entry both
+// sides hold wins: a delete queued here before the restore trimmed the local copy, and kept, it would be uploaded over
+// the restored entry on the next change (review round 3). Local-only fields (source audio/video URLs) stay. An entry
+// with an upload queued after the restore (`pending`) keeps its local copy. Returns the entries to replace.
+export function restoredVersions(local, cloud, pending = new Set()) {
+  const byId = new Map((cloud || []).filter(c => c?.id).map(c => [c.id, c]));
+  return (local || []).filter(l => byId.has(l?.id) && !pending.has(l.id) && !sameLogContent(l, byId.get(l.id)))
+    .map(l => { const c = byId.get(l.id); return { ...l, tasks: c.tasks, totalCost: c.totalCost }; });
+}
+
 // Tasks being deleted (here, by Clear, or because another device deleted them) close their items in open entries with
 // their last known state; one deleted while still running is recorded as removed. Without this the entry waited 48 h
 // for a task that was never coming back. Returns the entries that changed.
