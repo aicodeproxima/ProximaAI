@@ -374,17 +374,20 @@ export async function syncSetting(key, value, deviceScope = getDeviceId()) {
   }
 }
 
+// null when the read failed or was refused: "unknown", never "no settings" (the restore check, storage.js restoreGuard,
+// would otherwise see no restore and replay delete intents a restore voided; review round 3).
 export async function pullSettings() {
   if (!supabase) return {};
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("settings")
       .select("*")
       .eq("device_id", getDeviceId());
+    if (error) throw error;
     const map = {};
     for (const row of data || []) map[row.key] = row.value;
     return map;
-  } catch (err) { warnOnce("pullSettings", err); return {}; }
+  } catch (err) { warnOnce("pullSettings", err); return null; }
 }
 
 // ─── Favorites Sync ───
@@ -515,7 +518,7 @@ export async function pullAllRemoteData() {
     history: results[1].status === "fulfilled" && Array.isArray(results[1].value) ? results[1].value : [],
     // Whether History really answered: entries are finished locally only after a pass that saw the cloud's copies.
     historyOk: results[1].status === "fulfilled" && Array.isArray(results[1].value),
-    settings: results[2].status === "fulfilled" ? results[2].value : {},
+    settings: results[2].status === "fulfilled" ? results[2].value : null,   // null = unreadable (pullSettings)
     favorites: results[3].status === "fulfilled" ? results[3].value : [],
   };
 }

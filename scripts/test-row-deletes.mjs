@@ -106,5 +106,18 @@ await test("taskToRow / pullTasks carry the four input URLs", async () => {
   assert.deepEqual([back.endFrameUrl, back.sourceAudioUrl, back.sourceVideoUrl, back.refVideoUrl], ["e", "a", "v", "r"]);
 });
 
+// Review round 3: a refused or failed settings read must read as "unknown", never as "no settings" ({}): the restore
+// check (storage.js restoreGuard) would otherwise see no restore and replay delete intents a restore voided.
+await test("pullSettings: rows as a map; a refused or failed read answers null; pullAllRemoteData passes the null on", async () => {
+  sb.__setClientForTests(fakeClient((q) => (q.table === "settings" ? { data: [{ key: "last_restore_at", value: 5 }], error: null } : { data: [], error: null })));
+  assert.deepEqual(await sb.pullSettings(), { last_restore_at: 5 });
+  sb.__setClientForTests(fakeClient((q) => (q.table === "settings" ? { data: null, error: { message: "JWT expired" } } : { data: [], error: null })));
+  assert.equal(await sb.pullSettings(), null);
+  assert.equal((await sb.pullAllRemoteData()).settings, null);
+  sb.__setClientForTests(fakeClient((q) => { if (q.table === "settings") throw new TypeError("Failed to fetch"); return { data: [], error: null }; }));
+  assert.equal(await sb.pullSettings(), null);
+  assert.equal((await sb.pullAllRemoteData()).settings, null);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

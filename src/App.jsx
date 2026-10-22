@@ -12,7 +12,7 @@ import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore, restoreGuard, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, pullSettings, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
 import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -1404,6 +1404,11 @@ export default function ProximaApp() {
   // Force-flush all pending cloud writes + replay any failed entries
   const forceSaveAll = async () => {
     setSaveStatus("saving");
+    // Delete intents replay only after the restore check (review round 3): a restore since they were queued voids
+    // them, and while the settings cannot be read none is sent.
+    const guard = restoreGuard(await pullSettings());
+    for (const id of guard.voided.task) deletingIds.current.delete(id);
+    for (const id of guard.voided.history) deletingLogIds.current.delete(id);
     // Serialize with any click-triggered favorites save so an older snapshot can
     // never finish after a newer one and overwrite it.
     try { await favoriteSyncChainRef.current; } catch {}
@@ -1424,9 +1429,9 @@ export default function ProximaApp() {
     }
     // Replay any cloud deletes that didn't confirm (bulk-delete dropped mid-flight).
     const delRetries = failed.filter(f => f.kind === "task-delete").map(f => f.id);
-    if (delRetries.length > 0) { const dr = await deleteTasksRemote(delRetries); if (dr.ok) { await deleteTasks(delRetries); settleDeleteIntents("task-delete", delRetries); } }
+    if (guard.known && delRetries.length > 0) { const dr = await deleteTasksRemote(delRetries); if (dr.ok) { await deleteTasks(delRetries); settleDeleteIntents("task-delete", delRetries); } }
     const logDelRetries = failed.filter(f => f.kind === "history-delete").map(f => f.id);
-    if (logDelRetries.length > 0) { const hr = await deleteHistoryRemote(logDelRetries); if (hr.ok) { await deleteHistoryEntries(logDelRetries); settleDeleteIntents("history-delete", logDelRetries); } }
+    if (guard.known && logDelRetries.length > 0) { const hr = await deleteHistoryRemote(logDelRetries); if (hr.ok) { await deleteHistoryEntries(logDelRetries); settleDeleteIntents("history-delete", logDelRetries); } }
     const remaining = getFailedSyncs().length;
     setFailedSyncCount(remaining);
     if (remaining === 0) { setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000); }
@@ -1882,9 +1887,9 @@ export default function ProximaApp() {
       if (!remote) return;
       // A restore on any device voids the delete intents queued here before it (review round 2): their ids are no
       // longer being deleted, so the rows it brought back can return to this device.
-      const voided = dropDeleteIntentsBefore(Number(remote.settings?.last_restore_at) || 0);
-      for (const id of voided.task) deletingIds.current.delete(id);
-      for (const id of voided.history) deletingLogIds.current.delete(id);
+      const guard = restoreGuard(remote.settings);
+      for (const id of guard.voided.task) deletingIds.current.delete(id);
+      for (const id of guard.voided.history) deletingLogIds.current.delete(id);
       const failed = getFailedSyncs();
       const pendingTasks = new Set([...failed.filter(f => f.kind === "task").map(f => f.id), ...taskSyncQueueRef.current.map(t => t.id)]);
       const pendingLogs = new Set(failed.filter(f => f.kind === "history").map(f => f.id));
