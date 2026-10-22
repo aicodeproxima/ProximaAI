@@ -63,10 +63,13 @@ export const classifyPath = (path, { owned, forms, remote, formsKnown = true } =
 // form-inputs:<browser>), so a delete on the other device keeps them too. Republished when they change and at least
 // every FORM_CLOUD_HEARTBEAT_MS, well inside FORM_HOLD_ALIVE_MS, so a live hold never reads as lapsed elsewhere.
 export const FORM_CLOUD_HEARTBEAT_MS = 10 * 60 * 1000;
+export function sameFormSet(a, b) {
+  const x = new Set(a || []), y = new Set(b || []);
+  return x.size === y.size && [...y].every(p => x.has(p));
+}
 export function formPublishDue(last, paths, now) {
   if (!last) return true;
-  const a = new Set(last.paths || []), b = new Set(paths || []);
-  if (a.size !== b.size || [...b].some(p => !a.has(p))) return true;
+  if (!sameFormSet(last.paths, paths)) return true;
   return now - last.at >= FORM_CLOUD_HEARTBEAT_MS;
 }
 // Paths held by the forms of live (or frozen) tabs: publications refreshed within FORM_HOLD_ALIVE_MS.
@@ -89,7 +92,7 @@ export const heldOf = (queue, paths) => (paths || []).filter(p => queue?.[p]?.fo
 export function purgeNote({ files = 0, held = 0, ws = 0, history = false } = {}) {
   const s = (n) => (n === 1 ? "" : "s");
   return (files ? ` — ${files} file${s(files)} still being deleted (retried automatically)` : "")
-    + (held ? ` — ${held} file${s(held)} kept while the Generate form uses ${held === 1 ? "it" : "them"}` : "")
+    + (held ? ` — ${held} file${s(held)} kept while a Generate form may still use ${held === 1 ? "it" : "them"}` : "")
     + (ws ? ` — ${ws} WaveSpeed cop${ws === 1 ? "y" : "ies"} still being deleted (retried automatically)` : "")
     + (history ? " — History cleanup will finish on your next save or reload" : "");
 }

@@ -17,6 +17,15 @@ const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 let supabase = null;
 let deviceId = null;
 
+// While the page is going away (pagehide), a settings write keeps going after it unloads: the browser's Generate-form
+// hold publication, which tells the other device this tab's form let go of its uploads (review round 3). Only settings
+// writes: keepalive bodies share a 64 KB budget.
+let pageExiting = false;
+export function setPageExiting(on) { pageExiting = !!on; }
+export const withExitKeepalive = (f) => (input, init) =>
+  pageExiting && String(typeof input === "string" ? input : input?.url ?? input).includes("/rest/v1/settings")
+    ? f(input, { ...(init || {}), keepalive: true }) : f(input, init);
+
 // ─── Logging helper — rate-limited per site (F.6.1) ────────────────────────
 // Cooldown of 60s per call-site so a flapping path doesn't flood the console.
 // Phase 4 Order 12 routes these to Sentry; for now console only.
@@ -74,7 +83,7 @@ export async function initSupabase() {
       auth: { persistSession: false },
       global: { headers: { "x-device-id": getDeviceId() },
         // withServerClock: each response's Date header keeps this device's estimate of the server clock (serverClock.js).
-        fetch: withServerClock(withSessionHeader(globalThis.fetch.bind(globalThis), { baseUrl: SUPABASE_URL })) },
+        fetch: withServerClock(withExitKeepalive(withSessionHeader(globalThis.fetch.bind(globalThis), { baseUrl: SUPABASE_URL }))) },
     });
     return supabase;
   } catch {

@@ -4,7 +4,7 @@
 // Run: node scripts/test-file-delete.mjs
 import assert from "node:assert/strict";
 import { queueFileDeletes, dueFileDeletes, headOutcome, settleFileDelete, fileFlushReady, pendingOf, purgeNote, headStatus, FILE_DELETE_CHUNK,
-  classifyPath, liveFormPaths, heldOf, formPublishDue, FORM_CLOUD_HEARTBEAT_MS, FORM_HOLD_ALIVE_MS, historyLeft } from "../src/lib/fileDelete.js";
+  classifyPath, liveFormPaths, heldOf, formPublishDue, FORM_CLOUD_HEARTBEAT_MS, FORM_HOLD_ALIVE_MS, historyLeft, sameFormSet } from "../src/lib/fileDelete.js";
 
 let n = 0, failed = 0;
 const test = async (name, fn) => {
@@ -112,7 +112,9 @@ await test("#3: held files are counted apart from pending ones and named in the 
   const q = { p: { form: true }, r: {} };
   assert.equal(pendingOf(q, ["p", "r"]), 1);
   assert.equal(heldOf(q, ["p", "r"]), 1);
-  assert.match(purgeNote({ held: 1 }), /kept while the Generate form uses it/);
+  // Review round 3: a hold can outlive its form (a tab killed while frozen and never reopened, up to 7 days).
+  assert.match(purgeNote({ held: 1 }), /kept while a Generate form may still use it/);
+  assert.match(purgeNote({ held: 2 }), /2 files kept while a Generate form may still use them/);
   assert.match(purgeNote({ files: 2 }), /2 files still/);
 });
 
@@ -152,6 +154,14 @@ await test("purgeNote names pending WaveSpeed copies and a pending History remov
   const all = purgeNote({ files: 1, held: 1, ws: 2, history: true });
   for (const re of [/1 file still/, /kept while/, /2 WaveSpeed copies/, /History cleanup/]) assert.match(all, re);
   assert.equal(purgeNote({ files: 0, held: 0, ws: 0, history: false }), "");
+});
+
+// Review round 3: closing a browser republishes its cloud hold at once when the set changed (App.jsx pagehide).
+await test("sameFormSet: order and duplicates do not matter; any added or removed path does", () => {
+  assert.equal(sameFormSet(["a", "b"], ["b", "a", "a"]), true);
+  assert.equal(sameFormSet(["a"], ["a", "c"]), false);
+  assert.equal(sameFormSet(["a"], []), false);
+  assert.equal(sameFormSet([], undefined), true);
 });
 
 // Review round 2: a History entry that keeps some items is rewritten, and that upload can be pending too (the toast

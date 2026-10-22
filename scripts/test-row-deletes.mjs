@@ -119,5 +119,19 @@ await test("pullSettings: rows as a map; a refused or failed read answers null; 
   assert.equal((await sb.pullAllRemoteData()).settings, null);
 });
 
+// Review round 3: on pagehide the browser's form-hold publication is a settings write that must outlive the page.
+await test("withExitKeepalive: only settings writes, only while the page is exiting, get keepalive", async () => {
+  const seen = [];
+  const f = sb.withExitKeepalive(async (input, init) => { seen.push([String(input), !!init?.keepalive, init?.method]); return { ok: true }; });
+  await f("https://x.supabase.co/rest/v1/settings?on_conflict=device_id,key", { method: "POST" });
+  sb.setPageExiting(true);
+  await f("https://x.supabase.co/rest/v1/settings?on_conflict=device_id,key", { method: "POST" });
+  await f("https://x.supabase.co/rest/v1/history", { method: "POST" });
+  sb.setPageExiting(false);
+  await f("https://x.supabase.co/rest/v1/settings", { method: "POST" });
+  assert.deepEqual(seen.map(s => s[1]), [false, true, false, false]);
+  assert.deepEqual(seen.map(s => s[2]), ["POST", "POST", "POST", "POST"], "other options kept");
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);
