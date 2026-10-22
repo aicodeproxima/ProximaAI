@@ -10,6 +10,7 @@ export const FILE_DELETE_CHUNK = 50;
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 export const FORM_HOLD_RETRY_MS = 60 * 1000;   // a form-held path is re-checked this often (review #3)
 export const TAB_ALIVE_MS = 30 * 60 * 1000;    // a tab's form publication counts this long after its last heartbeat
+const OWNED_MAX_MS = 48 * 60 * 60 * 1000;      // an "owned" path is re-checked this long before it leaves (review #5)
 
 // Adds paths, due now. An entry already queued keeps its attempts and is only pulled earlier.
 export function queueFileDeletes(queue, paths, now) {
@@ -29,7 +30,15 @@ export const headOutcome = (status) => (status === 400 || status === 404 ? "gone
 export function settleFileDelete(queue, path, outcome, now) {
   const out = { ...(queue || {}) }; const e = out[path];
   if (!e) return out;
-  if (outcome === "deleted" || outcome === "gone" || outcome === "owned") { delete out[path]; return out; }
+  if (outcome === "deleted" || outcome === "gone") { delete out[path]; return out; }
+  // "owned": a kept generation here uses it. A view that has not caught up may still show a generation deleted
+  // elsewhere, so it is checked again in a minute rather than dropped; after OWNED_MAX_MS the owner's own delete
+  // re-queues it if it ever goes (review wf_ec400a67-988 #5).
+  if (outcome === "owned") {
+    if (now - e.at > OWNED_MAX_MS) delete out[path];
+    else out[path] = { ...e, next: now + FORM_HOLD_RETRY_MS };
+    return out;
+  }
   if (outcome === "form") { out[path] = { ...e, form: true, next: now + FORM_HOLD_RETRY_MS }; return out; }
   const attempts = e.attempts + 1;
   const { form, ...rest } = e;

@@ -73,9 +73,17 @@ export function failDeletes(queue, sentIds, error, now) {
 }
 
 // Ids a live task holds are never sent: that task is not deleted (a restore brought it back, or a lookup paired a
-// deleted claimant with a prediction a new generation owns). They leave the queue unsent.
-export function dropHeldIds(queue, heldIds) {
+// deleted claimant with a prediction a new generation owns). They are not dropped either, because a view that has not
+// caught up may still show a task deleted elsewhere (review wf_ec400a67-988 #5): they wait HELD_RECHECK_MS and are
+// checked again, and only after HELD_MAX_MS (every view has caught up; WaveSpeed purges its copy in ~54 h) leave unsent.
+export const HELD_RECHECK_MS = 60 * 1000;
+const HELD_MAX_MS = 48 * 60 * 60 * 1000;
+export function holdHeldIds(queue, heldIds, now) {
   const out = { ...(queue || {}) };
-  for (const id of heldIds || []) delete out[id];
+  for (const id of heldIds || []) {
+    if (!out[id]) continue;
+    if (now - out[id].at > HELD_MAX_MS) delete out[id];
+    else out[id] = { ...out[id], next: Math.max(out[id].next, now + HELD_RECHECK_MS) };
+  }
   return out;
 }

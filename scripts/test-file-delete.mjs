@@ -33,9 +33,12 @@ await test("a HEAD of the public URL: 400/404 gone, 2xx present, anything else u
   for (const s of [0, 500]) assert.equal(headOutcome(s), "unknown");
 });
 
-await test("settling: deleted / gone / owned leave; present / unknown back off and are never dropped", () => {
+await test("settling: deleted / gone leave; owned waits a minute (48 h at most); present / unknown back off and are never dropped", () => {
   const q = { a: { at: 0, attempts: 0, next: 0 } };
-  for (const o of ["deleted", "gone", "owned"]) assert.deepEqual(settleFileDelete(q, "a", o, 10), {});
+  for (const o of ["deleted", "gone"]) assert.deepEqual(settleFileDelete(q, "a", o, 10), {});
+  // Review wf_ec400a67-988 #5: a stale view may think a deleted generation still owns the path; checked again later.
+  assert.deepEqual(settleFileDelete(q, "a", "owned", 10).a, { at: 0, attempts: 0, next: 10 + 60_000 });
+  assert.deepEqual(settleFileDelete(q, "a", "owned", 49 * 3600_000), {}, "owned for over 48 h: its own delete re-queues it");
   const now = 1_000_000;
   const p1 = settleFileDelete(q, "a", "present", now);
   assert.deepEqual(p1.a, { at: 0, attempts: 1, next: now + 60_000 });

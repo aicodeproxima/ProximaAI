@@ -1,7 +1,7 @@
 // Tests for src/lib/wsDelete.js — deleting a generation in the app also deletes it on WaveSpeed.
 // Run: node scripts/test-ws-delete.mjs
 import assert from "node:assert/strict";
-import { queueDeletes, dueDeletes, settleDeletes, failDeletes, WS_DELETE_CHUNK, RUNNING_RETRY_MS, MAX_RUNNING_ATTEMPTS, dropHeldIds } from "../src/lib/wsDelete.js";
+import { queueDeletes, dueDeletes, settleDeletes, failDeletes, WS_DELETE_CHUNK, RUNNING_RETRY_MS, MAX_RUNNING_ATTEMPTS, holdHeldIds, HELD_RECHECK_MS } from "../src/lib/wsDelete.js";
 import { forwardParams } from "../src/lib/wsWebhook.js";
 
 const NOW = 1_800_000_000_000;
@@ -64,13 +64,19 @@ test("the proxy forwards the delete call as is (not a model submit: no result we
 });
 
 // Review #10 (2026-10-22): a deleted claimant's time-paired prediction can never be one a live task holds.
-test("an id a live task holds is never sent (dropHeldIds)", () => {
+// Review wf_ec400a67-988 #5: held is not dropped (a stale view may think a deleted task is live): it waits a minute and
+// is checked again; only after 48 h, when every view has caught up, does it leave unsent.
+test("an id a live task holds is never sent, and waits instead of being dropped (holdHeldIds)", () => {
   const q = { a: { at: NOW, attempts: 0, next: NOW, running: true }, b: { at: NOW, attempts: 0, next: NOW, running: false } };
   const copy = structuredClone(q);
-  assert.deepEqual(Object.keys(dropHeldIds(q, ["a", "z"])), ["b"]);
+  const h = holdHeldIds(q, ["a", "z"], NOW);
+  assert.deepEqual(Object.keys(h).sort(), ["a", "b"], "held stays queued");
+  assert.equal(h.a.next, NOW + HELD_RECHECK_MS);
+  assert.deepEqual(dueDeletes(h, NOW).flat(), ["b"], "held is not sent now");
   assert.deepEqual(q, copy, "input not mutated");
-  assert.deepEqual(dropHeldIds(q, []), q);
-  assert.deepEqual(dropHeldIds(null, ["a"]), {});
+  assert.deepEqual(holdHeldIds(q, [], NOW), q);
+  assert.deepEqual(holdHeldIds(null, ["a"], NOW), {});
+  assert.deepEqual(Object.keys(holdHeldIds(q, ["a"], NOW + 49 * 3600_000)), ["b"], "after 48 h a still-held id leaves");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

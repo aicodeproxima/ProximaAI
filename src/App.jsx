@@ -5,7 +5,7 @@ import { requestCost } from "./lib/pricing.js";
 import { draftTask, unitQuote, taskUserSettings } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
 import { submitTask, pollResult, listPredictions, deletePredictions, checkBalance, uploadMedia, API_BASE } from "./lib/api.js";
-import { queueDeletes, dueDeletes, settleDeletes, failDeletes, dropHeldIds } from "./lib/wsDelete.js";
+import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } from "./lib/wsDelete.js";
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
@@ -1961,6 +1961,8 @@ export default function ProximaApp() {
         try { await syncHistoryBatch(logUploads); for (const l of logUploads) removeFailedSync("history", l.id, sentVersion(l)); } catch {}
       }
       setFailedSyncCount(getFailedSyncs().length);
+      // The delete queues act on what this pass just merged, once React has applied it (review wf_ec400a67-988 #5).
+      setTimeout(() => { flushWsDeletes(); flushFileDeletes(); }, 1500);
     } catch (err) {
       console.warn("[sync] reconcile failed", err);
     } finally {
@@ -2290,15 +2292,17 @@ export default function ProximaApp() {
 
   // ─── DELETES REACH WAVESPEED TOO (rules in wsDelete.js) ───
   // A generation deleted here (bulk delete, Clear Outputs, Reset Everything) is deleted on WaveSpeed as well. The ids
-  // are queued first and the queue is sent now, on return to the app, when back online and every minute while it
-  // holds anything; each answer settles each id (deleted, skipped, still running, or a transient failure).
+  // are queued first and the queue is sent by the delete itself, after each cloud sync pass and every minute while it
+  // holds anything; each answer settles each id (deleted, skipped, still running, or a transient failure). Like the file
+  // queue, it acts only once this session's rows are loaded and the cloud has answered, so a stale view never decides
+  // (review wf_ec400a67-988 #5).
   const wsDeleteRunning = useRef(false);
   const flushWsDeletes = useCallback(async () => {
-    if (wsDeleteRunning.current) return;
+    if (wsDeleteRunning.current || !fileFlushReady({ loaded: initialLoadDone.current, synced: cloudSyncedRef.current })) return;
     wsDeleteRunning.current = true;
     try {
-      // Never send an id a live task holds (wsDelete.js dropHeldIds).
-      writeWsDeletes(dropHeldIds(readWsDeletes(), tasksRef.current.filter(t => !deletingIds.current.has(t.id)).map(t => t.taskId).filter(Boolean)));
+      // Never send an id a live task holds; it waits and is checked again (wsDelete.js holdHeldIds).
+      writeWsDeletes(holdHeldIds(readWsDeletes(), tasksRef.current.filter(t => !deletingIds.current.has(t.id)).map(t => t.taskId).filter(Boolean), Date.now()));
       for (const ids of dueDeletes(readWsDeletes(), Date.now())) {
         try {
           const deleted = await deletePredictions(ids);
@@ -2411,33 +2415,18 @@ export default function ProximaApp() {
       history: plan.history && plan.remove.some(id => failed.some(e => e.kind === "history-delete" && e.id === id)),
     }) };
   }, [flushWsDeletes, persistLog, flushFileDeletes]);
+  // Both delete queues also run every minute while visible. Return to the app and reconnecting run a cloud sync pass
+  // first, which flushes them once it has merged (reconcileWithCloud), never on the stale view (review #5). The file
+  // queue is not gated on the WaveSpeed key: Storage deletes do not need it.
   useEffect(() => {
     if (!isAuthed || keyBlocked) return;
-    flushWsDeletes();
-    const again = () => { if (document.visibilityState === "visible") flushWsDeletes(); };
-    const id = setInterval(again, 60000);
-    document.addEventListener("visibilitychange", again);
-    window.addEventListener("online", again);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", again);
-      window.removeEventListener("online", again);
-    };
+    const id = setInterval(() => { if (document.visibilityState === "visible") flushWsDeletes(); }, 60000);
+    return () => clearInterval(id);
   }, [isAuthed, keyBlocked, flushWsDeletes]);
-  // Files of deleted generations: replayed once this session's cloud sync has merged (flushFileDeletes waits for it),
-  // on return, when back online and every minute. Not gated on the WaveSpeed key: Storage deletes do not need it.
   useEffect(() => {
     if (!isAuthed || !historySyncReady) return;
-    flushFileDeletes();
-    const again = () => { if (document.visibilityState === "visible") flushFileDeletes(); };
-    const id = setInterval(again, 60000);
-    document.addEventListener("visibilitychange", again);
-    window.addEventListener("online", again);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", again);
-      window.removeEventListener("online", again);
-    };
+    const id = setInterval(() => { if (document.visibilityState === "visible") flushFileDeletes(); }, 60000);
+    return () => clearInterval(id);
   }, [isAuthed, historySyncReady, flushFileDeletes]);
 
   // ─── RESUME POLLING for in-flight tasks after refresh/close/OS-kill ───
