@@ -27,7 +27,7 @@
 //   Webhook — model submits carry standard_webhook=<prod>/api/ws-webhook (added here, never by the client) once
 //           WAVESPEED_WEBHOOK_SECRET is set; src/lib/wsWebhook.js forwardParams decides (2026-10-20).
 
-import { forwardParams, safeUpstreamPath } from '../src/lib/wsWebhook.js';
+import { forwardParams, safeUpstreamPath, deleteRequestIds, MAX_DELETE_IDS } from '../src/lib/wsWebhook.js';
 
 export const config = { runtime: 'edge' };
 
@@ -142,6 +142,27 @@ async function getUserWaveSpeedKey(token: string): Promise<KeyLookup> {
   }
 }
 
+// Delete means delete: the prediction ids the app deletes are recorded before WaveSpeed is asked, so ws_webhook_apply
+// drops a result delivered afterwards (WaveSpeed skips running predictions), and any delivery already waiting goes too.
+async function recordDeletedPredictions(ids: string[]): Promise<boolean> {
+  const SUPABASE_URL = process.env.SUPABASE_URL;
+  const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return false;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ws_predictions_deleted`, {
+      method: 'POST',
+      headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_ids: ids }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) console.warn('[wavespeed-v2] ws_predictions_deleted HTTP', r.status);
+    return r.ok;
+  } catch (e) {
+    console.warn('[wavespeed-v2] ws_predictions_deleted failed', String((e as Error)?.message || e));
+    return false;
+  }
+}
+
 // ─── Rate limiting (Upstash REST; no SDK import) ────────────────────────────
 // Sliding-ish fixed-window: INCR a per-minute bucket, EXPIRE 60s. 30 req / 60s.
 // If Upstash env is ABSENT → not configured yet (Deploy 1 pre-provisioning):
@@ -246,6 +267,20 @@ export default async function handler(req: Request, ctx?: { waitUntil?: (p: Prom
       });
     }
     body = buf.byteLength > 0 ? buf : undefined;
+  }
+
+  // 6a. A delete is recorded before it is forwarded (recordDeletedPredictions), in slices of MAX_DELETE_IDS. Failing to
+  //     record answers 503: the app's delete queue (wsDelete.js failDeletes) keeps the ids and retries, so a delete is
+  //     never half done.
+  const deleting = deleteRequestIds(req.method, path, body ?? '');
+  if (deleting?.length) {
+    for (let i = 0; i < deleting.length; i += MAX_DELETE_IDS) {
+      if (!(await recordDeletedPredictions(deleting.slice(i, i + MAX_DELETE_IDS)))) {
+        return new Response(JSON.stringify({ error: 'Could not record the delete, try again' }), {
+          status: 503, headers: { ...cors, 'Content-Type': 'application/json' },
+        });
+      }
+    }
   }
 
   // 6b. Query string: the client's own parameters (minus our internal 'p' and any webhook it tried to set). Model

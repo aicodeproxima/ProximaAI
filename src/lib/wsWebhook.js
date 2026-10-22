@@ -78,7 +78,8 @@ export function webhookUpdate(event, now) {
 }
 
 // One delivery → { status, body }. `apply` writes the update and answers "applied" | "finished" (row already
-// finished) | "queued" (no row with that task_id yet; applied when it lands) | "duplicate" (webhook id seen before).
+// finished) | "queued" (no row with that task_id yet; applied when it lands) | "duplicate" (webhook id seen before) |
+// "deleted" (the prediction was deleted in the app, so nothing is kept).
 // Anything it throws answers 503, so WaveSpeed redelivers.
 export async function handleWebhook({ headers, body, secrets, now, apply }) {
   const v = await verifyWebhook(headers, body, secrets, now);
@@ -130,4 +131,17 @@ const PATH_SEGMENT = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/; // never empty, never "
 export function safeUpstreamPath(raw) {
   const path = String(raw ?? "").replace(/^\/+/, "");
   return path && path.split("/").every(s => PATH_SEGMENT.test(s)) ? path : null;
+}
+
+// A delete the app sends through the proxy (POST api/v3/predictions/delete {ids}): the prediction ids it names, or null
+// for any other request. The proxy records them (ws_predictions_deleted) before WaveSpeed is asked, so a result WaveSpeed
+// delivers later (it will not delete a running prediction) is dropped instead of kept (finding #8, 2026-10-22).
+export const MAX_DELETE_IDS = 500;   // ids per ws_predictions_deleted call; the proxy records larger deletes in slices
+const DELETE_PATH = "api/v3/predictions/delete";
+export function deleteRequestIds(method, path, body) {
+  if (method !== "POST" || path !== DELETE_PATH) return null;
+  let payload;
+  try { payload = JSON.parse(typeof body === "string" ? body : new TextDecoder("utf-8", { fatal: true }).decode(body)); } catch { return []; }
+  const ids = Array.isArray(payload?.ids) ? payload.ids : [];
+  return [...new Set(ids.filter(i => typeof i === "string" && i.length > 0 && i.length <= MAX_ID_LENGTH))];
 }

@@ -2,7 +2,7 @@
 // standard_webhook parameter. Run: node scripts/test-ws-webhook.mjs
 import assert from "node:assert/strict";
 import { createHmac, randomBytes } from "node:crypto";
-import { verifyWebhook, webhookUpdate, handleWebhook, forwardParams, WEBHOOK_URL, WEBHOOK_TOLERANCE_S, safeUpstreamPath } from "../src/lib/wsWebhook.js";
+import { verifyWebhook, webhookUpdate, handleWebhook, forwardParams, WEBHOOK_URL, WEBHOOK_TOLERANCE_S, safeUpstreamPath, deleteRequestIds, MAX_DELETE_IDS } from "../src/lib/wsWebhook.js";
 import { applyPoll, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
@@ -268,6 +268,30 @@ await test("a path cannot carry its own query, fragment, escapes or dot segments
     "api\\v3\\o", "api/v3/o/m\n", "", null, undefined, "https://evil.example/api/v3/o/m"]) {
     assert.equal(safeUpstreamPath(p), null, JSON.stringify(p));
   }
+});
+
+// ─── Deletes (review finding #8, 2026-10-22) ───
+// The proxy records the ids of every delete the app sends (ws_predictions_deleted) before forwarding it, so a result
+// WaveSpeed delivers afterwards is dropped instead of kept.
+const DEL = "api/v3/predictions/delete";
+await test("deleteRequestIds: the proxy finds the ids of a WaveSpeed delete", async () => {
+  assert.deepEqual(deleteRequestIds("POST", DEL, '{"ids":["a","b","a"]}'), ["a", "b"]);
+  assert.deepEqual(deleteRequestIds("POST", DEL, new TextEncoder().encode('{"ids":["a","b"]}')), ["a", "b"]);
+  assert.deepEqual(deleteRequestIds("POST", DEL, JSON.stringify({ ids: ["ok", 7, "", null, "x".repeat(201)] })), ["ok"]);
+  for (const body of ["not json", "", "{}"]) assert.deepEqual(deleteRequestIds("POST", DEL, body), [], body || "(empty)");
+  for (const [m, p, b] of [["GET", DEL, '{"ids":["a"]}'], ["POST", "api/v3/predictions", '{"ids":["a"]}'],
+    ["POST", "api/v3/wavespeed-ai/z-image/turbo", '{"ids":["a"]}'], ["POST", "api/v3/predictions/a/result", ""]]) {
+    assert.equal(deleteRequestIds(m, p, b), null, `${m} ${p}`);
+  }
+  assert.equal(MAX_DELETE_IDS, 500);
+  const many = Array.from({ length: 501 }, (_, i) => `p${i}`);
+  assert.equal(deleteRequestIds("POST", DEL, JSON.stringify({ ids: many })).length, 501, "the proxy records them in slices");
+});
+
+await test("a delivery for a prediction deleted in the app is acknowledged as deleted (200, WaveSpeed stops)", async () => {
+  const r = await call({ answer: "deleted" });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.result, "deleted");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

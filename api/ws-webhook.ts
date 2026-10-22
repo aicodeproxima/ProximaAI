@@ -6,7 +6,8 @@
 // ws_webhook_apply RPC with the service-role key, so a generation finishes even when every device is closed.
 // The decisions live in src/lib/wsWebhook.js (tests: scripts/test-ws-webhook.mjs, scripts/test-ws-webhook-db.sql).
 //
-// Answers: 200 handled (applied / finished / queued / duplicate / still running), 401 bad or stale signature,
+// 'deleted' = the app deleted that prediction (ws_deleted_predictions) and no row carries it, so nothing is kept.
+// Answers: 200 handled (applied / finished / queued / duplicate / deleted / still running), 401 bad or stale signature,
 // 400 not a prediction, 413 oversize, 503 not configured or the database did not answer (WaveSpeed retries up to 3
 // times). WaveSpeed wants an answer within 10 s, so the database call gives up after 8 s. Nothing from the body
 // (prompt, outputs) is logged.
