@@ -80,6 +80,16 @@ export function applyCloudUpdate(task, u) {
   return takes ? { ...task, outputs: u.outputs, ...u.finish } : task;
 }
 
+// On a restore this tab has not handled (storage.js restoreGuard `fresh`): ids still marked as being deleted here whose
+// rows the cloud holds again. A delete confirmed earlier this session left its id marked for good, so the restored row
+// was never re-added and its WaveSpeed copy not held (review round 4). An id whose own delete intent is still pending
+// stays (the server decides it: delete_queued_rows). `cloudIds` null (unread): nothing is released.
+export function releaseRestored(deleting, pendingIds, cloudIds) {
+  if (!(cloudIds instanceof Set)) return [];
+  const pending = new Set(pendingIds || []);
+  return [...(deleting || [])].filter(id => cloudIds.has(id) && !pending.has(id));
+}
+
 // Rows saved before migration 20261022190000 carry no end frame / audio / driving video / reference video URL, so those
 // uploads were invisible to delete-everywhere and to paths_in_use (review round 3). The device that holds them fills in
 // only the columns its cloud row lacks (never overwriting a value); once written, the row no longer qualifies, so a

@@ -1,6 +1,6 @@
 // Tests for src/lib/syncReconcile.js — the cross-device sync decisions. Run: node scripts/test-sync-reconcile.mjs
 import assert from "node:assert/strict";
-import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
+import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
 
 const NOW = 1_800_000_000_000;
 const OLD = NOW - 10 * 60_000;
@@ -170,6 +170,15 @@ test("inputBackfill: the input URLs this device has and the cloud row lacks, per
   ];
   assert.deepEqual(inputBackfill(local, cloud), [{ id: "a", end_frame_url: "e" }],
     "b already has it; c has no cloud row; d has nothing; e's cloud value is never overwritten");
+});
+
+// Review round 4: ids deleted (and confirmed) earlier this session stay "deleting" here, so after a restore brought them
+// back they were never re-added and their WaveSpeed copy was not held. On a restore this tab has not handled, every
+// deleting id the cloud holds again is released, unless its own delete intent is still pending.
+test("releaseRestored: deleting ids the cloud holds again, except pending intents; unknown cloud ids release nothing", () => {
+  const deleting = new Set(["back", "pending", "gone"]);
+  assert.deepEqual(releaseRestored(deleting, ["pending"], new Set(["back", "pending", "other"])), ["back"]);
+  assert.deepEqual(releaseRestored(deleting, [], null), []);
 });
 
 console.log(`\n${n} passed`);

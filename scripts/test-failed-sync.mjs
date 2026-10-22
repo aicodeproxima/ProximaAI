@@ -171,6 +171,16 @@ test("publishFormPaths keeps a frozen tab's key for the hold's whole life, prune
   assert.deepEqual(readFormPublications().flatMap(p => p.paths).sort(), ["uploads/u/a.png", "uploads/u/c.png"]);
 });
 
+// Review round 4: "restore handled" is per tab. Another tab marking the shared key must not stop this tab from adopting
+// the restored History and releasing its own deleting ids.
+test("restoreGuard: a restore another tab handled is still fresh in this tab until this tab marks it", () => {
+  const R = 3_000_000;
+  localStorage.setItem("proximaai-seen-restore", String(R));   // the other tab handled it
+  assert.equal(restoreGuard({ last_restore_at: R }).fresh, true);
+  markRestoreSeen(R);
+  assert.equal(restoreGuard({ last_restore_at: R }).fresh, false);
+});
+
 // Review round 3: a tab Chrome killed while frozen left its form key holding its uploads for 7 days, because the page
 // that reopened in that tab got a new id. The tab's id now lives in sessionStorage (kept across a discard or a kill),
 // and the new page takes over the old key (its form starts empty, so the hold is released at once). A duplicated tab

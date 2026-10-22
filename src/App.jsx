@@ -18,7 +18,7 @@ import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headSt
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
-import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill } from "./lib/syncReconcile.js";
+import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
@@ -1892,6 +1892,9 @@ export default function ProximaApp() {
   // True once a reconcile pass this session got History from the cloud (or 2 minutes passed without an answer):
   // History entries are finished only then.
   const [historySyncReady, setHistorySyncReady] = useState(false);
+  // True while a restore this tab has not handled waits for History to answer (reconcile): nothing rewrites an entry
+  // from a pre-restore copy meanwhile (review round 4).
+  const restorePendingRef = useRef(false);
   // True only once the cloud really answered this session (not by the 2-minute fallback below): the file queue
   // (fileDelete.js) acts only then, when this device knows which queued paths a kept generation still uses.
   const cloudSyncedRef = useRef(false);
@@ -1918,14 +1921,25 @@ export default function ProximaApp() {
       const guard = restoreGuard(remote.settings);
       for (const id of guard.voided.task) deletingIds.current.delete(id);
       for (const id of guard.voided.history) deletingLogIds.current.delete(id);
+      // A restore this tab had not handled yet (review round 4): until History answers, this pass decides nothing, so
+      // no step below rewrites an entry from a pre-restore copy; finishLogs waits too (restorePendingRef).
+      restorePendingRef.current = guard.fresh && !remote.historyOk;
+      if (restorePendingRef.current) return;
+      if (guard.fresh) {
+        // Ids deleted earlier this session that the restore brought back stop being "deleted" here (releaseRestored).
+        for (const id of releaseRestored(deletingIds.current, guard.pending.task, ids?.tasks ?? null)) deletingIds.current.delete(id);
+        for (const id of releaseRestored(deletingLogIds.current, guard.pending.history, ids?.history ?? null)) deletingLogIds.current.delete(id);
+      }
       const failed = getFailedSyncs();
       const pendingTasks = new Set([...failed.filter(f => f.kind === "task").map(f => f.id), ...taskSyncQueueRef.current.map(t => t.id)]);
       const pendingLogs = new Set(failed.filter(f => f.kind === "history").map(f => f.id));
-      // A restore this device had not handled yet: the cloud's copy of every shared entry wins (as at startup).
-      if (guard.fresh && remote.historyOk) {
+      // The cloud's copy of every shared entry wins (as at startup); the ref is updated at once, because steps below in
+      // this pass (dropLogItemsFor, finishLogs input) read it.
+      if (guard.fresh) {
         const take = new Map(restoredVersions(logsRef.current, remote.history, pendingLogs).map(l => [l.id, l]));
         if (take.size) {
           for (const l of take.values()) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
+          logsRef.current = logsRef.current.map(l => take.get(l.id) || l);
           setLogs(prev => prev.map(l => take.get(l.id) || l));
         }
         markRestoreSeen(guard.restoreAt);
@@ -2097,7 +2111,7 @@ export default function ProximaApp() {
   // a load more than 48 h after the batch expires the local copies first, and finishing from those would overwrite
   // the entry another device already finished correctly (round-3 review wf_393b4699-2d7 #2).
   useEffect(() => {
-    if (!historySyncReady && isSupabaseConfigured()) return;
+    if ((!historySyncReady || restorePendingRef.current) && isSupabaseConfigured()) return;
     const done = finishLogs(logs, tasks, Date.now()).filter(l => !deletingLogIds.current.has(l.id));
     if (!done.length) return;
     const byId = new Map(done.map(l => [l.id, l]));

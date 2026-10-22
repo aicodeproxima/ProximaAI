@@ -597,13 +597,19 @@ export function dropDeleteIntentsBefore(ts) {
 // restored one). Once handled, nothing queued later is compared with it (a clock running behind cannot void a delete
 // made after the restore). The caller then takes the cloud's copies of shared entries (batchLog.js restoredVersions)
 // and marks the restore seen.
+// "Handled" is per tab (review round 4): each open tab must adopt the restored History and release its own deleting ids,
+// so the shared key only seeds a tab that loads later (its IndexedDB copy is already adopted).
 const SEEN_RESTORE_KEY = "proximaai-seen-restore";
 const seenRestore = () => { try { return Number(localStorage.getItem(SEEN_RESTORE_KEY)) || 0; } catch { return 0; } };
-export function markRestoreSeen(ts) { try { if (ts > seenRestore()) localStorage.setItem(SEEN_RESTORE_KEY, String(ts)); } catch {} }
+let handledRestore = seenRestore();
+export function markRestoreSeen(ts) {
+  if (ts > handledRestore) handledRestore = ts;
+  try { if (ts > seenRestore()) localStorage.setItem(SEEN_RESTORE_KEY, String(ts)); } catch {}
+}
 export function restoreGuard(settings) {
   const known = !!settings;
   const restoreAt = known ? Number(settings.last_restore_at) || 0 : 0;
-  const fresh = known && restoreAt > seenRestore();
+  const fresh = known && restoreAt > handledRestore;
   const voided = fresh ? dropDeleteIntentsBefore(restoreAt) : { task: [], history: [] };
   if (fresh) {
     try {
