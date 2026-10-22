@@ -84,5 +84,13 @@ test("a $ inside an identifier opens no dollar-quote; real dollar-quotes still d
   assert.ok(readOnlyEscape("select $tag$ commit $tag$ as s"));
 });
 
+// Review round 5: a dollar-quote tag may hold non-ASCII letters ($é$), as Postgres allows; the scanner missed it and
+// fell out of step.
+test("dollar-quote tags with non-ASCII letters are read as tags", () => {
+  for (const q of ["select $é$'$é$; commit; begin read write; select 'x'", "select $é$'$é$; set transaction read write; select 'x'"])
+    assert.ok(readOnlyEscape(q), q);
+  assert.equal(readOnlyEscape("select $é$ab'c$é$"), null);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

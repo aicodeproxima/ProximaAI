@@ -30,7 +30,9 @@ function scan(sql) {
       i = j + 1; code += ` ${c}${c} `; continue;
     }
     // As Postgres: a `$` inside an identifier (a$x$) opens no dollar-quote (review round 4).
-    const tag = c === "$" && !/[a-z0-9_$\u0080-￿]/i.test(sql[i - 1] || "") && /^\$([a-z_][a-z0-9_]*)?\$/i.exec(sql.slice(i));
+    // Tags may hold non-ASCII letters, as Postgres allows ($é$, review round 5).
+    const tag = c === "$" && !/[a-z0-9_$\u0080-￿]/i.test(sql[i - 1] || "")
+      && /^\$([a-z_\u0080-￿][a-z0-9_\u0080-￿]*)?\$/i.exec(sql.slice(i));
     if (tag) {
       const end = sql.indexOf(tag[0], i + tag[0].length);
       bodies.push(sql.slice(i + tag[0].length, end < 0 ? sql.length : end));
