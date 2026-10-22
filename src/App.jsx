@@ -2412,7 +2412,10 @@ export default function ProximaApp() {
       if (due.length) {
         const inUse = await predictionsInUseRemote(due);
         if (!inUse) return;
-        if (inUse.size) writeWsDeletes(holdHeldIds(readWsDeletes(), [...inUse], Date.now()));
+        // A row this device is deleting (its intent still queued) does not hold its own prediction back (review round 5).
+        const going = new Set(getFailedSyncs().filter(f => f.kind === "task-delete").map(f => f.id));
+        const held = [...inUse].filter(([, row]) => !going.has(row)).map(([prediction]) => prediction);
+        if (held.length) writeWsDeletes(holdHeldIds(readWsDeletes(), held, Date.now()));
       }
       for (const ids of dueDeletes(readWsDeletes(), Date.now())) {
         try {

@@ -162,11 +162,13 @@ await test("pullTaskInputs: id + the four input URLs for these ids, chunks of 10
 
 // Review round 4: before a WaveSpeed prediction is deleted, the cloud says which ids a row of this account still holds
 // (another device's, or one a restore brought back): those wait. null when it could not answer (nothing is sent).
-await test("predictionsInUseRemote: task_ids rows of this account hold, in chunks of 100; failure -> null", async () => {
-  const c = fakeClient((q) => ({ data: (inList(q) || []).filter(id => id === "t5" || id === "t150").map(id => ({ task_id: id })), error: null }));
+// Review round 5: it also says which row holds each one, so this device's own pending deletes do not hold their own
+// predictions back (their rows are going).
+await test("predictionsInUseRemote: prediction id -> holding row id, in chunks of 100; failure -> null", async () => {
+  const c = fakeClient((q) => ({ data: (inList(q) || []).filter(id => id === "t5" || id === "t150").map(id => ({ id: "row-" + id, task_id: id })), error: null }));
   sb.__setClientForTests(c);
   const r = await sb.predictionsInUseRemote(ids(160));
-  assert.deepEqual([...r].sort(), ["t150", "t5"]);
+  assert.deepEqual([...r.entries()].sort(), [["t150", "row-t150"], ["t5", "row-t5"]]);
   assert.deepEqual(c.calls.map(q => inList(q).length), [100, 60]);
   assert.ok(c.calls.every(q => q.table === "tasks" && q.ops.some(o => o[0] === "eq" && o[1] === "device_id" && o[2] === "user:owner")
     && q.ops.some(o => o[0] === "in" && o[1] === "task_id")));

@@ -698,18 +698,19 @@ export async function pathsInUseRemote(paths) {
 }
 
 // Which of these WaveSpeed prediction ids a tasks row of this account still holds, on any device (review round 4): the
-// WaveSpeed delete queue never sends one of them (a restore brought its row back, or another device kept it). Chunks of
-// 100. null when the cloud could not answer: then nothing is sent this pass.
+// WaveSpeed delete queue never sends one of them (a restore brought its row back, or another device kept it). Answers
+// prediction id -> the holding row's id, so a row this device is deleting does not hold its own prediction back (review
+// round 5). Chunks of 100. null when the cloud could not answer: then nothing is sent this pass.
 export async function predictionsInUseRemote(ids) {
   const list = (ids || []).filter(Boolean);
-  const out = new Set();
+  const out = new Map();
   if (!list.length) return out;
   try {
     if (!requireClient()) return out;
     for (let i = 0; i < list.length; i += 100) {
-      const { data, error } = await supabase.from("tasks").select("task_id").eq("device_id", getDeviceId()).in("task_id", list.slice(i, i + 100));
+      const { data, error } = await supabase.from("tasks").select("id,task_id").eq("device_id", getDeviceId()).in("task_id", list.slice(i, i + 100));
       if (error || !Array.isArray(data)) return null;
-      for (const r of data) if (r?.task_id) out.add(r.task_id);
+      for (const r of data) if (r?.task_id) out.set(r.task_id, r.id);
     }
     return out;
   } catch (err) { warnOnce("predictionsInUseRemote", err); return null; }
