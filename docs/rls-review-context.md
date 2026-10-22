@@ -43,7 +43,9 @@ SQL, each rolls back (run alone against live; to test an unapplied migration, pr
 scripts/test-rls-{phase0,tables,storage,triggers,plan,rpcs,rename}.sql; rollback proof =
 test-rls-rollback-before.sql + phase-2 migration + its rollback + test-rls-rollback.sql in ONE call;
 test-rls-phase0-rollback.sql likewise; the DELETE revoke's = test-rls-rollback-before.sql + 20261022350000 + its
-rollback + test-rls-grants-unchanged.sql. The other features' SQL tests (scripts/test-*-db.sql: ws-webhook,
+rollback + test-rls-grants-unchanged.sql. scripts/test-rls-queued-rpcs.sql: the restore-checked delete RPCs refuse 6 bad
+tokens each, a valid token reaches only its own scope, _clear_kind is closed to browser roles (32 checks; failing-first
+with 3 planted defects → 11 FAIL). The other features' SQL tests (scripts/test-*-db.sql: ws-webhook,
 ws-webhook-deleted, backup-scrub, backup-switch-off, history-strip, history-emptied, queued-deletes, paths-in-use,
 public-execute, restore-scrub, scrub-live) must stay green too.
 
