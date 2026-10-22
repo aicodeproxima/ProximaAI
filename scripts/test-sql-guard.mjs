@@ -73,5 +73,14 @@ test("harmless session settings pass; anything that could change the transaction
     assert.ok(readOnlyEscape(q), q);
 });
 
+// Review round 4: `a$x$` is one identifier in Postgres, but the scanner opened a dollar-quote at its `$` and took the
+// statements after it for a body.
+test("a $ inside an identifier opens no dollar-quote; real dollar-quotes still do", () => {
+  for (const q of ["select 1 as a$x$; end; begin read write; select 2", "select 1 as a$x$; abort; start transaction read write; select 2"])
+    assert.ok(readOnlyEscape(q), q);
+  for (const q of ["select 1 as a$x$", "select $tag$ end; commit $tag$ as s", "do $b$ begin perform 1; end $b$", "select $1"])
+    assert.equal(readOnlyEscape(q), null, q);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;
