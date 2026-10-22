@@ -79,5 +79,15 @@ test("an id a live task holds is never sent, and waits instead of being dropped 
   assert.deepEqual(Object.keys(holdHeldIds(q, ["a"], NOW + 49 * 3600_000)), ["b"], "after 48 h a still-held id leaves");
 });
 
+// Review round 6: an entry keeps its generation's id (tid), so the flush can hold the copy of a generation a restore
+// brought back History-only (generations_live); the id survives a hold, a failure and a settle of other entries.
+test("queueDeletes keeps the generation id; it survives hold and failure", () => {
+  let q = queueDeletes({}, [{ id: "gen1", taskId: "p1", status: "completed" }, { taskId: "p2", status: "completed" }], NOW);
+  assert.deepEqual([q.p1.tid, q.p2.tid], ["gen1", undefined]);
+  q = holdHeldIds(q, ["p1"], NOW);
+  q = failDeletes(q, ["p1"], new Error("x"), NOW);
+  assert.equal(q.p1.tid, "gen1");
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

@@ -99,6 +99,26 @@ begin
       else format('FAIL user-tombstone-for-history-only %s; ', (select string_agg(id || ':' || by_restore, ',') from sync_tombstones where id like 'qd-%')) end;
   exception when others then out := out || format('FAIL user-tombstone-for-history-only %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 9. Review round 6 (migration 20261022264000): generations_live answers which generations are live by the liveness
+  --    rule (a tasks row, or a live History item without a user tombstone), so the WaveSpeed queue holds the copy of a
+  --    generation a restore brought back History-only.
+  declare v_live text[];
+  begin
+    insert into tasks (id, device_id, status, start_time, outputs) values ('qd-row', u, 'completed', 1000, '[]');
+    insert into history (id, device_id, timestamp, tasks, total_cost) values
+      ('qd-HL', u, 1000, '[{"id":"qd-hlive","status":"completed","cost":1,"outputs":[]},{"id":"qd-hdead","status":"completed","cost":1,"outputs":[]},{"id":"qd-hrest","status":"completed","cost":1,"outputs":[]}]', 3);
+    insert into sync_tombstones (id, kind, device_id, deleted_at, by_restore) values
+      ('qd-hdead', 'task', u, now(), false), ('qd-hrest', 'task', u, now(), true);
+    set local role anon;
+    v_live := generations_live(v_tok, array['qd-row', 'qd-hlive', 'qd-hdead', 'qd-hrest', 'qd-none']);
+    reset role;
+    begin perform generations_live(_sign_session_token(u, now() + interval '5 minutes'), array['x']);
+          v_live := v_live || array['non-admin-answered'];
+    exception when insufficient_privilege then null; end;
+    out := out || case when (select array_agg(x order by x) from unnest(v_live) x) = array['qd-hlive', 'qd-hrest', 'qd-row']
+      then 'ok generations-live; ' else format('FAIL generations-live %s; ', v_live) end;
+  exception when others then reset role; out := out || format('FAIL generations-live %s %s; ', sqlstate, sqlerrm); end;
+
   -- 7. Review round 6 (migration 20261022261000): the backup-scrub drain takes each account's restore marker before it
   --    touches the queue or the backups, like restore, rename and replayed deletes (a cron drain and a rename locked
   --    backup_scrub_queue / data_backups in opposite orders).

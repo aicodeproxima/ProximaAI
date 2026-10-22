@@ -26,7 +26,8 @@ export function queueDeletes(queue, tasks, now) {
   for (const t of tasks) {
     if (!t?.taskId || out[t.taskId]) continue;
     const running = IN_FLIGHT.has(t.status) || t.error === "Cancelled" || isRecoverableFailure(t, now);
-    out[t.taskId] = { at: now, attempts: 0, next: now, running };
+    // tid: the generation's id, so the flush can ask whether it is still live (generations_live, review round 6).
+    out[t.taskId] = { at: now, attempts: 0, next: now, running, ...(t.id ? { tid: t.id } : {}) };
   }
   return out;
 }

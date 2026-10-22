@@ -178,6 +178,19 @@ await test("predictionsInUseRemote: prediction id -> holding row id, in chunks o
   assert.deepEqual([...(await sb.predictionsInUseRemote([]))], []);
 });
 
+// Review round 6: which generations are live by the liveness rule (generations_live), chunks of 200; failure -> null.
+await test("generationsLiveRemote: the server's answer as a Set, chunks of 200; a failed call answers null", async () => {
+  const c = fakeClient(); const sizes = [];
+  c.rpc = async (fn, args) => { sizes.push([fn, args.p_ids.length]); return { data: args.p_ids.filter(x => x === "t3" || x === "t250"), error: null }; };
+  sb.__setClientForTests(c);
+  const r = await sb.generationsLiveRemote(ids(260));
+  assert.deepEqual([...r].sort(), ["t250", "t3"]);
+  assert.deepEqual(sizes, [["generations_live", 200], ["generations_live", 60]]);
+  c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
+  assert.equal(await sb.generationsLiveRemote(["a"]), null);
+  assert.deepEqual([...(await sb.generationsLiveRemote([]))], []);
+});
+
 // Review round 6: fresh task deletes go through delete_queued_rows too (a user tombstone even for a History-only
 // generation), stamped with the current server time.
 await test("deleteTasksRemote: through delete_queued_rows, chunks of 100, stamped now; voided or refused -> not ok", async () => {

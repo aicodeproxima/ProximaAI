@@ -722,6 +722,21 @@ export async function predictionsInUseRemote(ids) {
   } catch (err) { warnOnce("predictionsInUseRemote", err); return null; }
 }
 
+// Which of these generation ids are live by the liveness rule (review round 6): a tasks row of the account, or an item
+// of a live History entry with no user tombstone (a generation a restore brought back History-only). Chunks of 200. null
+// when the server could not answer: then the WaveSpeed queue sends nothing this pass.
+export async function generationsLiveRemote(ids) {
+  const list = (ids || []).filter(Boolean);
+  const out = new Set();
+  try {
+    for (let i = 0; i < list.length; i += 200) {
+      const r = await sessionRpc("generations_live", { p_ids: list.slice(i, i + 200) });
+      for (const id of Array.isArray(r) ? r : []) out.add(id);
+    }
+    return out;
+  } catch (err) { warnOnce("generationsLiveRemote", err); return null; }
+}
+
 // The four input URLs of these tasks' cloud rows, whatever their age (inputBackfill, review round 4: the sync pulls only
 // the newest 500, and the rows that need the backfill are the oldest). Chunks of 100. null when the read failed.
 export async function pullTaskInputs(ids) {
