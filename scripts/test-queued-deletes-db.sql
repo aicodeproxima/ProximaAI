@@ -84,6 +84,15 @@ begin
                        else format('FAIL recheck-after-lock %s; ', v_bad) end;
   exception when others then out := out || format('FAIL recheck-after-lock %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 7. Review round 6 (migration 20261022261000): the backup-scrub drain takes each account's restore marker before it
+  --    touches the queue or the backups, like restore, rename and replayed deletes (a cron drain and a rename locked
+  --    backup_scrub_queue / data_backups in opposite orders).
+  begin
+    out := out || case when (select position('last_restore_at'' for' in prosrc) between 1 and position('delete from backup_scrub_queue' in prosrc)
+                              from pg_proc where pronamespace = 'public'::regnamespace and proname = '_drain_backup_scrubs')
+      then 'ok drain-marker-first; ' else 'FAIL drain-marker-first; ' end;
+  exception when others then out := out || format('FAIL drain-marker-first %s %s; ', sqlstate, sqlerrm); end;
+
   -- 5. Review round 5 (migration 20261022250000): restore, delete_queued_rows and rename_my_account all take the account's
   --    restore marker before they touch its tasks rows, so no two of them wait on each other in opposite orders (the
   --    rename needs the owner's password, so its body is checked here rather than called).
