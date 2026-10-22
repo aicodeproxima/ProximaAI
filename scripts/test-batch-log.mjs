@@ -1,6 +1,6 @@
 // Tests for src/lib/batchLog.js — the History entry of a generation batch. Run: node scripts/test-batch-log.mjs
 import assert from "node:assert/strict";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud, restoredVersions, clientHistoryWork } from "../src/lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, closeRemovedItems, takeFinishedFromCloud, restoredVersions, clientHistoryWork, withoutDeleting } from "../src/lib/batchLog.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -138,6 +138,20 @@ test("clientHistoryWork: only entries whose dropped or removed items include one
   const plan = { rewrite: [{ id: "A", tasks: [{ id: "y" }] }, { id: "B", tasks: [{ id: "y" }] }], remove: ["C", "D"] };
   const w = clientHistoryWork(originals, plan);
   assert.deepEqual([w.rewrite.map(l => l.id), w.remove], [["B"], ["D"]]);
+});
+
+// Review round 9 (guard): a History upload never carries a generation this device is deleting. An entry that still holds
+// one (an IndexedDB copy a crash kept, a stale queued upload) goes without it; one left with no item is not sent at all.
+test("withoutDeleting: deleting items leave the upload, emptied entries are skipped, the rest go as given", () => {
+  const a = { id: "A", tasks: [{ id: "x", status: "completed", cost: 1 }, { id: "y", status: "completed", cost: 2 }], totalCost: 3 };
+  const b = { id: "B", tasks: [{ id: "x", cost: 1 }], totalCost: 1 };
+  const c = { id: "C", tasks: [{ id: "z", cost: 4 }, { cost: 5 }], totalCost: 9 };
+  const open = { id: "D", tasks: [], totalCost: 0 };
+  const r = withoutDeleting([a, b, c, open], new Set(["x"]));
+  assert.deepEqual(r.upload, [{ id: "A", tasks: [{ id: "y", status: "completed", cost: 2 }], totalCost: 2 }, c, open]);
+  assert.equal(r.upload[1], c, "unchanged entries are passed through as given");
+  assert.deepEqual(r.skip, ["B"]);
+  assert.deepEqual(withoutDeleting([a], new Set()), { upload: [a], skip: [] });
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { noteClaimants, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, rememberReleased, liveReleased, rememberClaimants, liveClaimants, dropClaimants, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { noteClaimants, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, rememberReleased, liveReleased, rememberClaimants, liveClaimants, dropClaimants, putBackClaimantRecords, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -602,6 +602,17 @@ test("claim outcomes: link a cancelled claimant's prediction, delete a deleted o
   assert.equal(lookupStale(5, 5, 0), false); assert.equal(lookupStale(5, 6, 0), true); assert.equal(lookupStale(5, 5, 1), true);
   const r = planOrphans([], [], new Set(), NOW, [{ id: "C", modelId: "bytedance/seedream-v4", startTime: NOW - 5 * 60_000, deleted: true }]);
   assert.deepEqual(r.resolved, ["C"]); assert.deepEqual(r.claims, []);
+});
+
+// Review round 9: a delete a restore voided (bulk delete, Clear Outputs, Reset) puts the claimant records back as they
+// were before it: a lost submit it marked deleted claims nothing (the restored task adopts its result), and one an
+// earlier Cancel recorded keeps that record instead of being dropped.
+test("putBackClaimantRecords: each id back to its record before the delete; none before -> dropped; others untouched", () => {
+  const cancelled = { modelId: "m", startTime: NOW, at: NOW - 1000, deleted: false };
+  const now = { A: { modelId: "m", startTime: NOW, at: NOW, deleted: true }, B: { modelId: "m", startTime: NOW, at: NOW, deleted: true },
+    C: { modelId: "m", startTime: NOW, at: NOW, deleted: true } };
+  assert.deepEqual(putBackClaimantRecords(now, ["A", "B"], { A: cancelled }), { A: cancelled, C: now.C });
+  assert.deepEqual(putBackClaimantRecords(now, [], {}), now);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

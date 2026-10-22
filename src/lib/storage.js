@@ -2,7 +2,7 @@
 // Optimized for: tasks with outputs, generation history, settings, favorites, presets
 // Falls back to localStorage if IndexedDB unavailable.
 
-import { planResume, rememberReleased, liveReleased, noteClaimants, liveClaimants, dropClaimants } from "./taskResume.js";
+import { planResume, rememberReleased, liveReleased, noteClaimants, liveClaimants, dropClaimants, putBackClaimantRecords } from "./taskResume.js";
 import { FORM_HOLD_ALIVE_MS } from "./fileDelete.js";
 import { serverNow } from "./serverClock.js";
 
@@ -542,6 +542,13 @@ export function recordClaimants(tasks, opts) {
 }
 export const storedClaimants = () => liveClaimants(readClaimants(), Date.now());
 export function resolveClaimants(ids) { if (ids?.length) writeClaimants(dropClaimants(readClaimants(), ids)); }
+// The records of these ids as they are now, taken before a delete records them, so a voided delete can put them back.
+export function claimantRecords(ids) {
+  const m = readClaimants(), out = {};
+  for (const id of ids || []) if (m[id]) out[id] = m[id];
+  return out;
+}
+export function putBackClaimants(ids, before) { if (ids?.length) writeClaimants(putBackClaimantRecords(readClaimants(), ids, before)); }
 
 const FAILED_KEY = "proximaai-failed-syncs";
 
@@ -576,6 +583,20 @@ export const sentVersion = (data) => { const sent = JSON.stringify(data); return
 
 // `onlyIf(entry)`: remove the entry only while it still matches, e.g. still the "processing" version a finished upload
 // sent, not the "completed" version that replaced it in the queue meanwhile.
+// A queued upload's data replaced in place, its queue time and attempts kept (review round 9): a delete whose History
+// work the server does still trims an entry's queued upload, which would otherwise bring the deleted items back when it
+// replays. Nothing queued: nothing is added. Says whether one was replaced.
+export function replaceQueuedUpload(kind, id, data) {
+  try {
+    const list = getFailedSyncs();
+    const i = list.findIndex(e => e.kind === kind && e.id === id);
+    if (i < 0) return false;
+    list[i] = { ...list[i], data };
+    localStorage.setItem(FAILED_KEY, JSON.stringify(list));
+    return true;
+  } catch { return false; }
+}
+
 export function removeFailedSync(kind, id, onlyIf) {
   try {
     const list = getFailedSyncs().filter(e => !(e.kind === kind && e.id === id && (!onlyIf || onlyIf(e))));

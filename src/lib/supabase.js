@@ -233,20 +233,9 @@ export async function pullTaskStartsInWindow(after, before) {
   } catch (err) { warnOnce("pullTaskStartsInWindow", err); return null; }
 }
 
-// Deletes this scope's rows of `table` (narrowed by `narrow`) and says whether the server confirmed it: { ok, error }.
-// A local-only install has nothing to delete; a configured cloud that has not started has deleted nothing.
-async function deleteScoped(site, table, narrow = (q) => q) {
-  if (!supabase) return isSupabaseConfigured() ? { ok: false, error: "Cloud sync is not initialized" } : { ok: true, localOnly: true };
-  try {
-    const { error } = await narrow(supabase.from(table).delete()).eq("device_id", getDeviceId());
-    if (error) { warnOnce(site, error); return { ok: false, error: error.message }; }
-    return { ok: true };
-  } catch (err) { warnOnce(site, err); return { ok: false, error: err?.message }; }
-}
-
-export async function deleteTaskRemote(id) {
-  return deleteScoped("deleteTaskRemote", "tasks", (q) => q.eq("id", id));
-}
+// Every delete or clear of this account's rows goes through a restore-checked server function (delete_queued_rows,
+// clear_queued_rows). The plain scoped deletes are gone (review round 9): Reset's settings clear, the last one in use,
+// deleted the restore marker and wiped a restore that landed after the checked clears.
 
 // Through delete_queued_rows (review round 6): the server records a user tombstone even for a generation without a tasks
 // row (History-only, e.g. after a restore), so other devices drop it from History too. `queuedAt`: the action's own queue
@@ -272,10 +261,6 @@ export async function deleteQueuedRemote(kind, ids, queuedAt) {
   }
   if (out.deleted.length) touchSync();
   return out;
-}
-
-export async function clearTasksRemote() {
-  return deleteScoped("clearTasksRemote", "tasks");
 }
 
 // ─── History Sync ───
@@ -353,23 +338,33 @@ export async function deleteHistoryRemote(ids, queuedAt = serverNow()) {
 
 // Clear Logs / Clear Outputs / Reset: every row of one kind of this account, through clear_queued_rows at the action's
 // queue time (review round 8): voided when a restore landed after it; for tasks the server also strips their History.
-export async function clearQueuedRemote(kind, queuedAt) {
+// Kinds task, history, settings (the restore marker and form holds stay) and favorites. A clear takes the rows that
+// existed when it was queued plus `ids`, the ones this device knew (review round 9): a row another device created
+// later stays, and a named generation without a row that History holds gets a user tombstone.
+export async function clearQueuedRemote(kind, queuedAt, ids) {
   try {
-    const r = await sessionRpc("clear_queued_rows", { p_kind: kind, p_queued_at: Math.floor(queuedAt || 0) });
+    const args = { p_kind: kind, p_queued_at: Math.floor(queuedAt || 0) };
+    if (ids) args.p_ids = [...new Set(ids.filter(Boolean))];
+    const r = await sessionRpc("clear_queued_rows", args);
     return { ok: !!r?.ok && !r?.voided, voided: !!r?.voided, deleted: r?.deleted ?? 0 };
   } catch (err) { warnOnce("clearQueuedRemote", err); return { ok: false, voided: false, deleted: 0 }; }
 }
 
-export async function clearHistoryRemote() {
-  return deleteScoped("clearHistoryRemote", "history");
-}
-
-export async function clearSettingsRemote() {
-  return deleteScoped("clearSettingsRemote", "settings");
-}
-
-export async function clearFavoritesRemote() {
-  return deleteScoped("clearFavoritesRemote", "favorites");
+// A delete's History rewrites (entries losing items without an id; the server strips the items with one itself) go
+// through upsert_queued_history at the delete's queue time (review round 9): a restore that landed after it voids them,
+// as it voids the delete. 100 per call. { ok, voided: ids, upserted: ids }.
+export async function upsertQueuedHistory(entries, queuedAt) {
+  const list = (entries || []).filter(e => e?.id);
+  const out = { ok: true, voided: [], upserted: [] };
+  for (let i = 0; i < list.length; i += 100) {
+    const chunk = list.slice(i, i + 100);
+    try {
+      const r = await sessionRpc("upsert_queued_history", { p_entries: chunk.map(historyToRow), p_queued_at: Math.floor(queuedAt || 0) });
+      (r?.voided ? out.voided : out.upserted).push(...chunk.map(e => e.id));
+    } catch (err) { warnOnce("upsertQueuedHistory", err); out.ok = false; }
+  }
+  if (out.upserted.length) touchSync();
+  return out;
 }
 
 // ─── Settings Sync ───

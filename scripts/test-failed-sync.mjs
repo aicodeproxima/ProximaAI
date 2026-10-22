@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -265,6 +265,18 @@ const presenceOk = await (async () => {
   } catch (e) { console.log("FAIL - tabPresence\n   ", e.message.split("\n")[0]); return false; }
 })();
 if (presenceOk) { n++; console.log("ok - tabPresence: a live original answers; a dead page's key is released"); } else failed++;
+
+// Review round 9: a delete whose History work the server does still trims an entry's queued upload: left as queued, the
+// stale copy brought the deleted item back when it replayed (no tombstone named it when neither upload had landed).
+test("replaceQueuedUpload: replaces a queued upload's data in place, keeping its queue time; nothing queued -> nothing added", () => {
+  addFailedSync({ kind: "history", id: "E", data: { id: "E", tasks: [{ id: "X" }, { id: "Y" }] } });
+  const before = getFailedSyncs()[0];
+  assert.equal(replaceQueuedUpload("history", "E", { id: "E", tasks: [{ id: "Y" }] }), true);
+  const after = getFailedSyncs()[0];
+  assert.deepEqual([after.data.tasks, after.ts, after.attempts], [[{ id: "Y" }], before.ts, before.attempts]);
+  assert.equal(replaceQueuedUpload("history", "F", { id: "F", tasks: [] }), false);
+  assert.equal(getFailedSyncs().length, 1);
+});
 
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

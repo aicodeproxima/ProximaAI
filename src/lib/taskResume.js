@@ -183,6 +183,13 @@ export function dropClaimants(map, ids) {
   for (const id of ids) delete out[id];
   return out;
 }
+// A delete a restore voided puts the claimant records back as they were before it (review round 9): a lost submit it
+// marked deleted claims nothing then (the restored task adopts its result), and one an earlier Cancel recorded keeps it.
+export function putBackClaimantRecords(map, ids, before) {
+  const out = { ...(map || {}) };
+  for (const id of ids || []) { if (before?.[id]) out[id] = before[id]; else delete out[id]; }
+  return out;
+}
 // What Cancel, bulk delete, Clear Outputs, Reset Everything and another device's delete record (storage.js
 // recordClaimants). A task still waiting for its submit's answer (pending, no prediction id) becomes a claimant. With
 // `deleted`, a claimant a Cancel recorded earlier (the task now shows failed, still without an id: its answer was lost

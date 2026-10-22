@@ -98,6 +98,22 @@ export function clientHistoryWork(originals, plan) {
   return { rewrite, remove };
 }
 
+// A History upload never carries a generation this device is deleting (review round 9 guard): an entry still holding one
+// (an IndexedDB copy a crash kept, a stale queued upload) is sent without it, and one left with no item is not sent.
+// Returns { upload, skip }: the entries to send (unchanged ones as given) and the ids of those not to send.
+export function withoutDeleting(entries, ids) {
+  const gone = ids instanceof Set ? ids : new Set(ids || []);
+  const upload = [], skip = [];
+  for (const l of entries || []) {
+    const items = Array.isArray(l?.tasks) ? l.tasks : [];
+    const left = gone.size ? items.filter(i => !(i?.id && gone.has(i.id))) : items;
+    if (left.length === items.length) upload.push(l);
+    else if (left.length === 0) skip.push(l.id);
+    else upload.push({ ...l, tasks: left, totalCost: totalOf(left) });
+  }
+  return { upload, skip };
+}
+
 // Generations History holds without a task among `taskIds` (History-only: a restore keeps 500 tasks rows but up to 1000
 // entries, or a task upload never landed), as generations a purge removes: id, entry, outputs, status. Clear Outputs
 // removes them too, files included (review round 7).

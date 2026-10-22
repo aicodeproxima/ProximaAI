@@ -222,6 +222,34 @@ await test("clearQueuedRemote: one clear_queued_rows call; voided and failures r
   assert.deepEqual(await sb.clearQueuedRemote("history", 1), { ok: false, voided: false, deleted: 0 });
 });
 
+// Review round 9: a clear covers the rows that existed when it was queued plus the ids its device named (p_ids), so a
+// row another device created later stays; Reset's settings and favorites clears go through it too.
+await test("clearQueuedRemote: the ids its device knew go along (p_ids, de-duplicated); none -> p_ids left out", async () => {
+  const c = fakeClient(); const seen = [];
+  c.rpc = async (fn, args) => { seen.push(args); return { data: { ok: true, voided: false, deleted: 2 }, error: null }; };
+  sb.__setClientForTests(c);
+  await sb.clearQueuedRemote("task", 5, ["a", "b", null, "a"]);
+  await sb.clearQueuedRemote("settings", 6);
+  assert.deepEqual(seen[0].p_ids, ["a", "b"]);
+  assert.deepEqual([seen[1].p_kind, "p_ids" in seen[1]], ["settings", false]);
+});
+// Review round 9: a delete's History rewrite (an entry losing items without an id) was a plain upsert sent after the
+// restore-checked row delete; it goes through upsert_queued_history at the delete's queue time now.
+await test("upsertQueuedHistory: rows as historyToRow, 100 per call, with the queue time; voided / upserted apart; failure -> not ok", async () => {
+  const c = fakeClient(); const seen = [];
+  c.rpc = async (fn, args) => { seen.push([fn, args.p_entries.length, args.p_queued_at, args.p_entries[0]]);
+    return { data: { ok: true, voided: seen.length === 2, upserted: seen.length === 2 ? 0 : args.p_entries.length }, error: null }; };
+  sb.__setClientForTests(c);
+  const entries = Array.from({ length: 150 }, (_, i) => ({ id: "h" + i, timestamp: 1, tasks: [], totalCost: 0, negPrompt: "n" }));
+  const r = await sb.upsertQueuedHistory(entries, 777);
+  assert.deepEqual(seen.map(s => s.slice(0, 3)), [["upsert_queued_history", 100, 777], ["upsert_queued_history", 50, 777]]);
+  assert.deepEqual([seen[0][3].id, seen[0][3].neg_prompt, seen[0][3].total_cost], ["h0", "n", 0]);
+  assert.deepEqual([r.ok, r.upserted.length, r.voided], [true, 100, entries.slice(100).map(e => e.id)]);
+  c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
+  assert.equal((await sb.upsertQueuedHistory([{ id: "x" }], 1)).ok, false);
+  assert.deepEqual(await sb.upsertQueuedHistory([], 1), { ok: true, voided: [], upserted: [] });
+});
+
 // Review round 4: replayed delete intents go through delete_queued_rows, which refuses them when a restore committed
 // after they were queued. Chunks of 100; each chunk's ids come back voided or deleted (a restore can land between two).
 await test("deleteQueuedRemote: chunks of 100 with the queue time; voided and deleted ids reported apart; failure -> not ok", async () => {
