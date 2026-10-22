@@ -49,16 +49,23 @@ test("Clear drops every queued upload of the cleared kinds and says which ids th
 
 // Review wf_ec400a67-988 #2 (2026-10-22): the 200-entry cap evicted the oldest entries whatever they were, so a large
 // clear's delete intents pushed each other (and History removals) out and those generations came back on reload.
-test("delete intents are never evicted by the cap; only uploads are", () => {
+// Review round 2: delete intents do not count toward the cap either, so 200+ queued deletes no longer push out every
+// upload (a delete's History rewrites included).
+test("delete intents are never evicted and do not count; the cap keeps 200 uploads", () => {
   for (let i = 0; i < 10; i++) addFailedSync({ kind: "task", id: "up" + i, data: { id: "up" + i } });
   for (let i = 0; i < 250; i++) addFailedSync({ kind: "task-delete", id: "d" + i, data: "d" + i });
   addFailedSync({ kind: "history-delete", id: "h0", data: "h0" });
-  const q = getFailedSyncs();
+  let q = getFailedSyncs();
   assert.equal(q.filter(e => e.kind === "task-delete").length, 250, "every task-delete kept");
   assert.ok(q.some(e => e.kind === "history-delete" && e.id === "h0"));
-  assert.equal(q.filter(e => e.kind === "task").length, 0, "uploads are what the cap trims");
+  assert.equal(q.filter(e => e.kind === "task").length, 10, "uploads are not pushed out by deletes");
+  for (let i = 10; i < 205; i++) addFailedSync({ kind: "history", id: "up" + i, data: { id: "up" + i } });
   addFailedSync({ kind: "task", id: "late", data: { id: "late" } });
-  assert.ok(getFailedSyncs().some(e => e.id === "late"), "the newest upload is never the one dropped");
+  q = getFailedSyncs();
+  assert.equal(q.filter(e => !/-delete$/.test(e.kind)).length, 200, "200 uploads kept");
+  assert.ok(q.some(e => e.id === "late"), "the newest upload is never the one dropped");
+  assert.ok(!q.some(e => e.id === "up0"), "the oldest uploads go first");
+  assert.equal(q.filter(e => /-delete$/.test(e.kind)).length, 251);
 });
 
 // Review wf_ec400a67-988 #1 (2026-10-22): a clear queues its delete intents in one write BEFORE the request fires, and

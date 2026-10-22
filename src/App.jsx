@@ -1424,9 +1424,9 @@ export default function ProximaApp() {
     }
     // Replay any cloud deletes that didn't confirm (bulk-delete dropped mid-flight).
     const delRetries = failed.filter(f => f.kind === "task-delete").map(f => f.id);
-    if (delRetries.length > 0) { const dr = await deleteTasksRemote(delRetries); if (dr.ok) { await deleteTasks(delRetries); for (const id of delRetries) removeFailedSync("task-delete", id); } }
+    if (delRetries.length > 0) { const dr = await deleteTasksRemote(delRetries); if (dr.ok) { await deleteTasks(delRetries); settleDeleteIntents("task-delete", delRetries); } }
     const logDelRetries = failed.filter(f => f.kind === "history-delete").map(f => f.id);
-    if (logDelRetries.length > 0) { const hr = await deleteHistoryRemote(logDelRetries); if (hr.ok) { await deleteHistoryEntries(logDelRetries); for (const id of logDelRetries) removeFailedSync("history-delete", id); } }
+    if (logDelRetries.length > 0) { const hr = await deleteHistoryRemote(logDelRetries); if (hr.ok) { await deleteHistoryEntries(logDelRetries); settleDeleteIntents("history-delete", logDelRetries); } }
     const remaining = getFailedSyncs().length;
     setFailedSyncCount(remaining);
     if (remaining === 0) { setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000); }
@@ -1817,7 +1817,7 @@ export default function ProximaApp() {
             if (dr.ok) {
               setTasks(prev => prev.filter(t => !delSet.has(t.id)));
               await deleteTasks(delRetries);
-              for (const id of delRetries) { removeFailedSync("task-delete", id); savedTaskIds.current.delete(id); }
+              settleDeleteIntents("task-delete", delRetries); for (const id of delRetries) savedTaskIds.current.delete(id);
             }
           }
           if (logDelRetries.length > 0) {
@@ -1825,7 +1825,7 @@ export default function ProximaApp() {
             if (hr.ok) {
               setLogs(prev => prev.filter(l => !logDelSet.has(l.id)));
               await deleteHistoryEntries(logDelRetries);
-              for (const id of logDelRetries) { removeFailedSync("history-delete", id); savedLogIds.current.delete(id); }
+              settleDeleteIntents("history-delete", logDelRetries); for (const id of logDelRetries) savedLogIds.current.delete(id);
             }
           }
           setFailedSyncCount(getFailedSyncs().length);
@@ -2423,7 +2423,7 @@ export default function ProximaApp() {
       if (plan.remove.length) {
         await deleteHistoryEntries(plan.remove);
         const hr = await deleteHistoryRemote(plan.remove);
-        if (hr?.ok) for (const id of plan.remove) removeFailedSync("history-delete", id);
+        if (hr?.ok) settleDeleteIntents("history-delete", plan.remove);
       }
     }
     await flushFileDeletes();
@@ -3120,7 +3120,7 @@ export default function ProximaApp() {
     await deleteTasks(ids);
     // 6. Cloud delete (batched, device-scoped). On success, clear the replay intents.
     const r = await deleteTasksRemote(ids);
-    if (r.ok) for (const id of ids) removeFailedSync("task-delete", id);
+    if (r.ok) settleDeleteIntents("task-delete", ids);
     // 7. Everywhere else, now that the row delete answered: WaveSpeed, History, files (purgeEverywhere). Backup copies
     //    are scrubbed by the server (migration 20261021175100).
     const { note } = await purgeEverywhere(plan);
@@ -3230,7 +3230,7 @@ export default function ProximaApp() {
     await deleteHistoryEntries(ids);
     // 6. Cloud delete (batched, device-scoped).
     const r = await deleteHistoryRemote(ids);
-    if (r.ok) for (const id of ids) removeFailedSync("history-delete", id);
+    if (r.ok) settleDeleteIntents("history-delete", ids);
     // 7. Refresh counters + status (honest).
     setFailedSyncCount(getFailedSyncs().length);
     getStorageStats().then(s => setStorageStats(s));
