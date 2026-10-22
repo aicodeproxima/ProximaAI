@@ -1440,6 +1440,10 @@ export default function ProximaApp() {
     // Serialize with any click-triggered favorites save so an older snapshot can
     // never finish after a newer one and overwrite it.
     try { await favoriteSyncChainRef.current; } catch {}
+    // Replay any cloud deletes that didn't confirm (bulk-delete dropped mid-flight) FIRST: a delete's History rewrite
+    // replayed before it would leave the server no item to record a History-only generation's user tombstone from
+    // (review round 7).
+    if (guard.known) { await replayDeleteIntents("task-delete"); await replayDeleteIntents("history-delete"); }
     if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
     const queue = taskSyncQueueRef.current.splice(0).filter(t => !deletingIds.current.has(t.id));
     if (queue.length > 0) {
@@ -1455,8 +1459,6 @@ export default function ProximaApp() {
     if (failed.some(f => f.kind === "model-favorites" && f.scope === favoriteScope)) {
       try { await flushQueuedModelFavorites(favoriteScope); } catch {}
     }
-    // Replay any cloud deletes that didn't confirm (bulk-delete dropped mid-flight).
-    if (guard.known) { await replayDeleteIntents("task-delete"); await replayDeleteIntents("history-delete"); }
     const remaining = getFailedSyncs().length;
     setFailedSyncCount(remaining);
     if (remaining === 0) { setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000); }
@@ -1837,6 +1839,13 @@ export default function ProximaApp() {
           const logDelRetries = failed.filter(f => f.kind === "history-delete").map(f => f.id).filter(Boolean);
           const logDelSet = new Set(logDelRetries);
           for (const id of logDelRetries) deletingLogIds.current.add(id);
+          // Replay deferred bulk-deletes FIRST (review round 7: a History rewrite replayed before its delete would leave
+          // the server no item to record a History-only generation's user tombstone from). The bootstrap pull above may
+          // have re-fetched these rows from the cloud, so on a confirmed remote delete we also scrub them back out of
+          // local state + IndexedDB (awaited) to prevent zombie rows. Only when the restore time was read (restoreGuard):
+          // otherwise they wait for a pass that can tell whether a restore voided them. The server checks again,
+          // atomically with the delete (replayDeleteIntents).
+          if (restoreKnown) { await replayDeleteIntents("task-delete"); await replayDeleteIntents("history-delete"); }
           const taskRetries = failed.filter(f => f.kind === "task" && !delSet.has(f.id) && !deletingIds.current.has(f.id)).map(f => f.data).filter(Boolean);
           if (taskRetries.length > 0) {
             try {
@@ -1856,12 +1865,6 @@ export default function ProximaApp() {
           if (favoriteRetries.length > 0) {
             try { await flushQueuedModelFavorites(favoriteScope); } catch {}
           }
-          // Replay deferred bulk-deletes. The bootstrap pull above may have re-fetched
-          // these rows from the cloud, so on a confirmed remote delete we also scrub them
-          // back out of local state + IndexedDB (awaited) to prevent zombie rows. Only when the restore time was read
-          // (restoreGuard): otherwise they wait for a pass that can tell whether a restore voided them. The server checks
-          // again, atomically with the delete (replayDeleteIntents), so a restore while the uploads above ran wins.
-          if (restoreKnown) { await replayDeleteIntents("task-delete"); await replayDeleteIntents("history-delete"); }
           setFailedSyncCount(getFailedSyncs().length);
         }
       }
