@@ -1,0 +1,68 @@
+-- Tests for supabase/migrations/20261022230000_queued_deletes_check_restore.sql: a delete intent replayed from a device's
+-- queue goes through delete_queued_rows, which refuses it when a restore committed after the intent was queued (review
+-- round 4: the client checked once, then sent its deletes tens of seconds later). Same harness as test-paths-in-use-db.sql:
+-- one DO block that always ends in an exception, so everything rolls back (the admin_username swap included). Run before
+-- the migration exists as "begin;" + migration + this file; afterwards this file alone. Fixtures: account '__qd_test'.
+do $t$
+declare
+  out text := '';
+  u constant text := 'user:__qd_test';
+  v_tok text; r json; v_bk uuid; v_marker bigint;
+begin
+  update app_secrets set value = jsonb_set(value, '{username}', '"__qd_test"') where key = 'admin_username';
+  v_tok := _sign_session_token('admin:__qd_test', now() + interval '12 hours 5 minutes');
+  insert into tasks (id, device_id, status, start_time, outputs) values
+    ('qd-1', u, 'completed', 1000, '[]'), ('qd-2', u, 'completed', 1000, '[]'), ('qd-3', u, 'completed', 1000, '[]');
+  insert into history (id, device_id, timestamp, tasks, total_cost) values ('qd-L', u, 1000, '[]', 0);
+
+  -- 1. No restore recorded: the queued delete runs (as the app calls it: anon + token).
+  begin
+    set local role anon;
+    r := delete_queued_rows(v_tok, 'task', array['qd-1'], 1000);
+    reset role;
+    out := out || case when (r->>'voided')::boolean = false and (r->>'deleted')::int = 1 and not exists (select 1 from tasks where id = 'qd-1')
+      then 'ok runs-without-restore; ' else format('FAIL runs-without-restore %s; ', r) end;
+  exception when others then reset role; out := out || format('FAIL runs-without-restore %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 2. A restore after the intent was queued voids it: nothing is deleted.
+  begin
+    insert into settings (device_id, key, value) values (u, 'last_restore_at', '5000')
+      on conflict (device_id, key) do update set value = excluded.value;
+    r := delete_queued_rows(v_tok, 'task', array['qd-2'], 4000);
+    out := out || case when (r->>'voided')::boolean and (r->>'deleted')::int = 0 and exists (select 1 from tasks where id = 'qd-2')
+      then 'ok voided-before-restore; ' else format('FAIL voided-before-restore %s; ', r) end;
+    r := delete_queued_rows(v_tok, 'history', array['qd-L'], 6000);
+    out := out || case when not (r->>'voided')::boolean and (r->>'deleted')::int = 1 and not exists (select 1 from history where id = 'qd-L')
+      then 'ok runs-after-restore; ' else format('FAIL runs-after-restore %s; ', r) end;
+  exception when others then out := out || format('FAIL voided-before-restore %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 3. Only admin sessions; only task/history; at most 200 ids; only this account's rows.
+  begin
+    begin perform delete_queued_rows(_sign_session_token(u, now() + interval '5 minutes'), 'task', array['qd-2'], 9e12::bigint);
+          out := out || 'FAIL guards non-admin; ';
+    exception when insufficient_privilege then null; end;
+    begin perform delete_queued_rows(v_tok, 'settings', array['x'], 9e12::bigint); out := out || 'FAIL guards kind; ';
+    exception when others then null; end;
+    begin perform delete_queued_rows(v_tok, 'task', array(select 'x' || g from generate_series(1, 201) g), 9e12::bigint);
+          out := out || 'FAIL guards 201; ';
+    exception when others then null; end;
+    insert into tasks (id, device_id, status, start_time, outputs) values ('qd-other', 'user:__someone', 'completed', 1, '[]');
+    r := delete_queued_rows(v_tok, 'task', array['qd-other'], 9e12::bigint);
+    out := out || case when (r->>'deleted')::int = 0 and exists (select 1 from tasks where id = 'qd-other')
+      then 'ok guards; ' else format('FAIL guards scope %s; ', r) end;
+  exception when others then out := out || format('FAIL guards %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 4. A real restore moves the marker forward (and keeps it in place): an intent queued before it is then voided.
+  begin
+    insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot, settings_snapshot)
+      values (u, 'manual', 0, 0, '[]', '[]', '{"last_restore_at": 1}') returning id into v_bk;
+    r := restore_my_backup_phase2(v_tok, v_bk);
+    select (value #>> '{}')::bigint into v_marker from settings where device_id = u and key = 'last_restore_at';
+    insert into tasks (id, device_id, status, start_time, outputs) values ('qd-4', u, 'completed', 1000, '[]');
+    r := delete_queued_rows(v_tok, 'task', array['qd-4'], v_marker - 1);
+    out := out || case when v_marker > 5000 and (r->>'voided')::boolean and exists (select 1 from tasks where id = 'qd-4')
+      then 'ok restore-voids-older; ' else format('FAIL restore-voids-older marker=%s %s; ', v_marker, r) end;
+  exception when others then out := out || format('FAIL restore-voids-older %s %s; ', sqlstate, sqlerrm); end;
+
+  raise exception 'RESULT: %', out;
+end $t$;

@@ -12,7 +12,7 @@ import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
-import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
 import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue, sameFormSet } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -1402,6 +1402,40 @@ export default function ProximaApp() {
   useTheme({ theme, lightMode });
 
   // Force-flush all pending cloud writes + replay any failed entries
+  // Queued delete intents replay through the server's restore check (delete_queued_rows, review round 4), one call per
+  // queue time: the check and the delete are one transaction, however long this device waited before sending. Voided
+  // ids (a restore came after them) leave the queue and stop being "deleted" here, so the rows the restore brought back
+  // return on the next pass; deleted ones leave this device too. A failed call leaves its intents queued.
+  const replayDeleteIntents = async (kind) => {
+    const byTs = new Map();
+    for (const f of getFailedSyncs()) {
+      if (f.kind !== kind || !f.id) continue;
+      if (!byTs.has(f.ts || 0)) byTs.set(f.ts || 0, []);
+      byTs.get(f.ts || 0).push(f.id);
+    }
+    const isTask = kind === "task-delete";
+    for (const [ts, ids] of byTs) {
+      const r = await deleteQueuedRemote(isTask ? "task" : "history", ids, ts);
+      if (r.voided.length) {
+        settleDeleteIntents(kind, r.voided);
+        for (const id of r.voided) (isTask ? deletingIds : deletingLogIds).current.delete(id);
+      }
+      if (r.deleted.length) {
+        const gone = new Set(r.deleted);
+        if (isTask) {
+          setTasks(prev => prev.filter(t => !gone.has(t.id)));
+          await deleteTasks(r.deleted);
+          for (const id of r.deleted) savedTaskIds.current.delete(id);
+        } else {
+          setLogs(prev => prev.filter(l => !gone.has(l.id)));
+          await deleteHistoryEntries(r.deleted);
+          for (const id of r.deleted) savedLogIds.current.delete(id);
+        }
+        settleDeleteIntents(kind, r.deleted);
+      }
+    }
+  };
+
   const forceSaveAll = async () => {
     setSaveStatus("saving");
     // Delete intents replay only after the restore check (review round 3): a restore since they were queued voids
@@ -1428,10 +1462,7 @@ export default function ProximaApp() {
       try { await flushQueuedModelFavorites(favoriteScope); } catch {}
     }
     // Replay any cloud deletes that didn't confirm (bulk-delete dropped mid-flight).
-    const delRetries = failed.filter(f => f.kind === "task-delete").map(f => f.id);
-    if (guard.known && delRetries.length > 0) { const dr = await deleteTasksRemote(delRetries); if (dr.ok) { await deleteTasks(delRetries); settleDeleteIntents("task-delete", delRetries); } }
-    const logDelRetries = failed.filter(f => f.kind === "history-delete").map(f => f.id);
-    if (guard.known && logDelRetries.length > 0) { const hr = await deleteHistoryRemote(logDelRetries); if (hr.ok) { await deleteHistoryEntries(logDelRetries); settleDeleteIntents("history-delete", logDelRetries); } }
+    if (guard.known) { await replayDeleteIntents("task-delete"); await replayDeleteIntents("history-delete"); }
     const remaining = getFailedSyncs().length;
     setFailedSyncCount(remaining);
     if (remaining === 0) { setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000); }
@@ -1834,23 +1865,9 @@ export default function ProximaApp() {
           // Replay deferred bulk-deletes. The bootstrap pull above may have re-fetched
           // these rows from the cloud, so on a confirmed remote delete we also scrub them
           // back out of local state + IndexedDB (awaited) to prevent zombie rows. Only when the restore time was read
-          // (restoreGuard): otherwise they wait for a pass that can tell whether a restore voided them.
-          if (restoreKnown && delRetries.length > 0) {
-            const dr = await deleteTasksRemote(delRetries);
-            if (dr.ok) {
-              setTasks(prev => prev.filter(t => !delSet.has(t.id)));
-              await deleteTasks(delRetries);
-              settleDeleteIntents("task-delete", delRetries); for (const id of delRetries) savedTaskIds.current.delete(id);
-            }
-          }
-          if (restoreKnown && logDelRetries.length > 0) {
-            const hr = await deleteHistoryRemote(logDelRetries);
-            if (hr.ok) {
-              setLogs(prev => prev.filter(l => !logDelSet.has(l.id)));
-              await deleteHistoryEntries(logDelRetries);
-              settleDeleteIntents("history-delete", logDelRetries); for (const id of logDelRetries) savedLogIds.current.delete(id);
-            }
-          }
+          // (restoreGuard): otherwise they wait for a pass that can tell whether a restore voided them. The server checks
+          // again, atomically with the delete (replayDeleteIntents), so a restore while the uploads above ran wins.
+          if (restoreKnown) { await replayDeleteIntents("task-delete"); await replayDeleteIntents("history-delete"); }
           setFailedSyncCount(getFailedSyncs().length);
         }
       }

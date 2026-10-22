@@ -132,6 +132,20 @@ await test("backfillTaskInputs: one narrow update per row, scoped to this accoun
   assert.deepEqual(await sb.backfillTaskInputs([]), { ok: true });
 });
 
+// Review round 4: replayed delete intents go through delete_queued_rows, which refuses them when a restore committed
+// after they were queued. Chunks of 100; each chunk's ids come back voided or deleted (a restore can land between two).
+await test("deleteQueuedRemote: chunks of 100 with the queue time; voided and deleted ids reported apart; failure -> not ok", async () => {
+  const c = fakeClient(); const seen = [];
+  c.rpc = async (fn, args) => { seen.push({ fn, n: args.p_ids.length, kind: args.p_kind, at: args.p_queued_at });
+    return { data: { ok: true, voided: seen.length === 3, deleted: seen.length === 3 ? 0 : args.p_ids.length }, error: null }; };
+  sb.__setClientForTests(c);
+  const r = await sb.deleteQueuedRemote("task", ids(250), 777);
+  assert.deepEqual(seen.map(s => [s.fn, s.n, s.kind, s.at]), [["delete_queued_rows", 100, "task", 777], ["delete_queued_rows", 100, "task", 777], ["delete_queued_rows", 50, "task", 777]]);
+  assert.deepEqual([r.ok, r.deleted.length, r.voided], [true, 200, ids(250).slice(200)]);
+  c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
+  assert.equal((await sb.deleteQueuedRemote("history", ["h"], 1)).ok, false);
+});
+
 // Review round 3: on pagehide the browser's form-hold publication is a settings write that must outlive the page.
 await test("withExitKeepalive: only settings writes, only while the page is exiting, get keepalive", async () => {
   const seen = [];

@@ -273,6 +273,23 @@ export async function deleteTasksRemote(ids) {
   return deleteByIds("deleteTasksRemote", "tasks", ids);
 }
 
+// A replayed delete intent (queued earlier, still pending): the server refuses it when a restore committed after
+// `queuedAt` (server-time ms, serverClock.js), atomically with the delete (delete_queued_rows, review round 4). Chunks of
+// 100; each chunk's ids come back voided or deleted. { ok: false } when any chunk failed (its intents stay queued).
+export async function deleteQueuedRemote(kind, ids, queuedAt) {
+  const list = (ids || []).filter(Boolean);
+  const out = { ok: true, voided: [], deleted: [] };
+  for (let i = 0; i < list.length; i += 100) {
+    const chunk = list.slice(i, i + 100);
+    try {
+      const r = await sessionRpc("delete_queued_rows", { p_kind: kind, p_ids: chunk, p_queued_at: Math.floor(queuedAt || 0) });
+      (r?.voided ? out.voided : out.deleted).push(...chunk);
+    } catch (err) { warnOnce("deleteQueuedRemote", err); out.ok = false; }
+  }
+  if (out.deleted.length) touchSync();
+  return out;
+}
+
 export async function clearTasksRemote() {
   return deleteScoped("clearTasksRemote", "tasks");
 }
