@@ -448,9 +448,30 @@ export const readFileDeletes = () => { try { return JSON.parse(localStorage.getI
 export const writeFileDeletes = (q) => { try { localStorage.setItem(FILE_DELETES_KEY, JSON.stringify(q || {})); } catch {} };
 
 // The Generate form's input paths, published per tab so no tab's file flush deletes a file another tab's form still
-// uses (fileDelete.js liveFormPaths, review #3). One key per page load, so a duplicated tab never shares one.
+// uses (fileDelete.js liveFormPaths, review #3). One key per tab: its id lives in sessionStorage, which survives Chrome
+// discarding or killing the tab, so the page that reopens in it takes over the old key. Its form starts empty, so a
+// hold left by a page killed while frozen is released at once instead of lasting FORM_HOLD_ALIVE_MS (review round 3).
+// A duplicated tab copies sessionStorage too: while the original still heartbeats (its key is fresh), the duplicate
+// takes a new id; document.wasDiscarded marks Chrome restoring this very tab.
 const FORM_KEY = "proximaai-form-inputs:";
-const TAB_ID = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const TAB_KEY = "proximaai-tab-id";
+const TAB_TAKEOVER_MS = 2 * 60 * 1000;   // two missed heartbeats (App.jsx publishes every minute)
+export function pickTabId(stored, keyAt, wasDiscarded, now, fresh) {
+  if (!stored) return fresh;
+  if (wasDiscarded) return stored;
+  return Number.isFinite(keyAt) && now - keyAt < TAB_TAKEOVER_MS ? fresh : stored;
+}
+const TAB_ID = (() => {
+  const fresh = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  try {
+    const stored = sessionStorage.getItem(TAB_KEY);
+    let keyAt = NaN;
+    try { keyAt = JSON.parse(localStorage.getItem(FORM_KEY + stored))?.at; } catch {}
+    const id = pickTabId(stored, keyAt, globalThis.document?.wasDiscarded === true, Date.now(), fresh);
+    sessionStorage.setItem(TAB_KEY, id);
+    return id;
+  } catch { return fresh; }
+})();
 // Another tab's key is pruned only once its hold has lapsed: a frozen tab's form still holds its uploads (review round 2).
 const STALE_FORM_KEY_MS = FORM_HOLD_ALIVE_MS;
 export function publishFormPaths(paths, now = Date.now()) {

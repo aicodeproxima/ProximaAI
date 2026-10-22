@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -169,6 +169,19 @@ test("publishFormPaths keeps a frozen tab's key for the hold's whole life, prune
   mem.set("proximaai-form-inputs:dead", JSON.stringify({ at: NOW - 8 * DAY, paths: ["uploads/u/b.png"] }));
   publishFormPaths(["uploads/u/c.png"], NOW);
   assert.deepEqual(readFormPublications().flatMap(p => p.paths).sort(), ["uploads/u/a.png", "uploads/u/c.png"]);
+});
+
+// Review round 3: a tab Chrome killed while frozen left its form key holding its uploads for 7 days, because the page
+// that reopened in that tab got a new id. The tab's id now lives in sessionStorage (kept across a discard or a kill),
+// and the new page takes over the old key (its form starts empty, so the hold is released at once). A duplicated tab
+// copies sessionStorage too: while the original still heartbeats (key fresh), the duplicate gets a new id.
+test("pickTabId: a reopened tab takes over its key; a duplicate of a live tab gets a new one", () => {
+  const NOW = 10_000_000;
+  assert.equal(pickTabId(null, NaN, false, NOW, "new"), "new", "first load");
+  assert.equal(pickTabId("old", NaN, false, NOW, "new"), "old", "reload after pagehide: key already gone");
+  assert.equal(pickTabId("old", NOW - 3 * 3600_000, false, NOW, "new"), "old", "killed while frozen: stale key taken over");
+  assert.equal(pickTabId("old", NOW - 30_000, false, NOW, "new"), "new", "duplicate of a live tab");
+  assert.equal(pickTabId("old", NOW - 30_000, true, NOW, "new"), "old", "a discarded tab restored by Chrome");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);
