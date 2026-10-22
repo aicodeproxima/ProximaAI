@@ -71,7 +71,9 @@ export function purgeLogsForDeleted(logs, removedTasks, keptTasks, { removeEntri
     const outstanding = !all && items.some(i => i?.id && !removedIds.has(i.id));
     if (removeEntries && !outstanding && !keptBatches.has(log.id)) { remove.push(log.id); continue; }
     const left = items.filter(i => i?.id ? !removedIds.has(i.id) : !(i?.outputs || []).some(o => removedOutputs.has(o)));
-    if (removeEntries && left.length === 0) { remove.push(log.id); continue; }
+    // An entry with no item left is removed even on the sync path: kept, it would show a deleted batch's prompt and
+    // models for good (review wf_ec400a67-988 #8; the server deletes such a row too, migration 20261022150000).
+    if (left.length === 0 && (removeEntries || items.length > 0)) { remove.push(log.id); continue; }
     if (left.length !== items.length) rewrite.push({ ...log, tasks: left, totalCost: totalOf(left) });
   }
   return { remove, rewrite };

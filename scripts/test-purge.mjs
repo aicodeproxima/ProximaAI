@@ -54,11 +54,11 @@ test("History: entries from before items carried ids are matched by batch, and b
   assert.deepEqual(r.rewrite.map(l => [l.id, l.tasks.map(i => i.outputs[0]), l.totalCost]), [["old2", ["https://cdn/o3.png"], 0.03]]);
 });
 
-test("History on another device (removeEntries: false): items are dropped, whole entries are left to the deleting device", () => {
+test("History on another device (removeEntries: false): items are dropped; an entry left with none is removed (#8)", () => {
   const logs = [{ id: "b2", tasks: [{ id: "c", status: "completed", cost: 0.02, outputs: ["z"] }], totalCost: 0.02 }];
   const r = purgeLogsForDeleted(logs, [{ id: "c", batchId: "b2" }], [], { removeEntries: false });
-  assert.deepEqual(r.remove, []);
-  assert.deepEqual(r.rewrite.map(l => l.tasks.length), [0]);
+  assert.deepEqual(r.remove, ["b2"], "review wf_ec400a67-988 #8: an empty entry used to be kept with 0 items");
+  assert.deepEqual(r.rewrite, []);
 });
 
 test("entries untouched by the delete are never rewritten", () => {
@@ -120,6 +120,14 @@ test("ownedPaths ignores what is being deleted; an entry left with none of its i
     assert.deepEqual(planPurge(L(), removed, [], { all: true }).paths.sort(), ["u/o1.png", "u/o2.png", "uploads/u/s1.png"]);
   });
 }
+
+// Review wf_ec400a67-988 #8: an entry left with no items is removed, even on the sync path (removeEntries: false).
+test("#8: an entry whose last item another device deleted is removed, not kept empty", () => {
+  const E = [{ id: "E", tasks: [{ id: "a", status: "completed", outputs: [] }] }];
+  assert.deepEqual(purgeLogsForDeleted(E, [{ id: "a" }], [], { removeEntries: false }), { remove: ["E"], rewrite: [] });
+  const F = [{ id: "F", tasks: [{ id: "a", status: "completed" }, { id: "b", status: "completed" }] }];
+  assert.deepEqual(purgeLogsForDeleted(F, [{ id: "a" }], [], { removeEntries: false }).remove, [], "items left: rewritten as before");
+});
 
 test("publicUrlOf round-trips through storagePathOf", () => {
   const url = publicUrlOf("https://x.supabase.co/", "user_X/arch ive.png");

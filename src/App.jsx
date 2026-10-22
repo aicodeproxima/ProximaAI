@@ -2007,13 +2007,22 @@ export default function ProximaApp() {
   const dropLogItemsFor = useCallback((removed) => {
     const gone = new Set(removed.map(t => t.id));
     const kept = tasksRef.current.filter(t => !gone.has(t.id));
-    const { rewrite } = purgeLogsForDeleted(logsRef.current, removed, kept, { removeEntries: false });
+    const { remove, rewrite } = purgeLogsForDeleted(logsRef.current, removed, kept, { removeEntries: false });
     const changed = rewrite.filter(l => !deletingLogIds.current.has(l.id));
-    if (!changed.length) return;
-    const byId = new Map(changed.map(l => [l.id, l]));
-    logsRef.current = logsRef.current.map(l => byId.get(l.id) || l);
-    setLogs(prev => prev.map(l => byId.get(l.id) || l));
+    // An entry left with no items goes (review wf_ec400a67-988 #8): queued first, then removed here and in the cloud.
+    const emptied = remove.filter(id => !deletingLogIds.current.has(id));
+    if (!changed.length && !emptied.length) return;
+    if (emptied.length) {
+      for (const id of emptied) { deletingLogIds.current.add(id); savedLogIds.current.delete(id); removeFailedSync("history", id); }
+      queueDeleteIntents("history-delete", emptied);
+      deleteHistoryEntries(emptied);
+      deleteHistoryRemote(emptied).then(r => { if (r?.ok) settleDeleteIntents("history-delete", emptied); setFailedSyncCount(getFailedSyncs().length); });
+    }
+    const dropped = new Set(emptied), byId = new Map(changed.map(l => [l.id, l]));
+    logsRef.current = logsRef.current.filter(l => !dropped.has(l.id)).map(l => byId.get(l.id) || l);
+    setLogs(prev => prev.filter(l => !dropped.has(l.id)).map(l => byId.get(l.id) || l));
     for (const l of changed) persistLog(l);
+    setFailedSyncCount(getFailedSyncs().length);
   }, [persistLog]);
 
   // Save NEW logs to IndexedDB (and sync to Supabase): every entry not saved yet, not only the newest (two batches
