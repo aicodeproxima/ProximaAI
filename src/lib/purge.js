@@ -62,7 +62,7 @@ export function planPurge(logs, removed, kept, { history = true, alsoLogs = [], 
   const base = (logs || []).filter(l => !alsoIds.has(l.id));
   let remove = [], rewrite = [], keptLogs = base;
   const goneLogs = [...alsoLogs];
-  if (history && removed.length) {
+  if (history && (removed.length || all)) {   // all: Clear Outputs removes every entry even with nothing removed (review round 8)
     ({ remove, rewrite } = purgeLogsForDeleted(base, removed, kept, { all }));
     const gone = new Set(remove), byId = new Map(rewrite.map(l => [l.id, l]));
     goneLogs.push(...base.filter(l => gone.has(l.id)));

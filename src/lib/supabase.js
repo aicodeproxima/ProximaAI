@@ -248,27 +248,6 @@ export async function deleteTaskRemote(id) {
   return deleteScoped("deleteTaskRemote", "tasks", (q) => q.eq("id", id));
 }
 
-// Bulk-delete specific task ids from the cloud, scoped to this device/user.
-// Returns { ok } so callers can keep the failed-sync replay queue honest.
-// Deletes this scope's rows by id in chunks: a replayed large clear can hold hundreds of ids, and one request naming them
-// all builds an overlong URL. ok only when every chunk was confirmed (review wf_ec400a67-988 #2).
-const ROW_DELETE_CHUNK = 100;
-async function deleteByIds(site, table, ids) {
-  if (!supabase) return { ok: false };
-  const list = (ids || []).filter(Boolean);
-  try {
-    for (let i = 0; i < list.length; i += ROW_DELETE_CHUNK) {
-      const { error } = await supabase
-        .from(table)
-        .delete()
-        .in("id", list.slice(i, i + ROW_DELETE_CHUNK))
-        .eq("device_id", getDeviceId());
-      if (error) { warnOnce(site, error); return { ok: false, error: error.message }; }
-    }
-    return { ok: true };
-  } catch (err) { warnOnce(site, err); return { ok: false, error: err?.message }; }
-}
-
 // Through delete_queued_rows (review round 6): the server records a user tombstone even for a generation without a tasks
 // row (History-only, e.g. after a restore), so other devices drop it from History too. `queuedAt`: the action's own queue
 // time (queueDeleteIntents), so a restore between queueing and sending voids it (review round 7); now when absent.
@@ -365,9 +344,20 @@ export async function pullHistory(limit = 500) {
   } catch (err) { warnOnce("pullHistory", err); return null; }
 }
 
-// Bulk-delete specific history (log) ids from the cloud, scoped to this device/user.
-export async function deleteHistoryRemote(ids) {
-  return deleteByIds("deleteHistoryRemote", "history", ids);
+// History (log) deletes go through delete_queued_rows too, at the action's queue time (review round 8): a restore that
+// landed after it voids them. { ok, voided, deleted } as deleteTasksRemote; chunks of 100 (deleteQueuedRemote).
+export async function deleteHistoryRemote(ids, queuedAt = serverNow()) {
+  const r = await deleteQueuedRemote("history", ids, queuedAt);
+  return { ok: r.ok && !r.voided.length, voided: r.voided, deleted: r.deleted, ...(r.ok ? {} : { error: "delete_queued_rows failed" }) };
+}
+
+// Clear Logs / Clear Outputs / Reset: every row of one kind of this account, through clear_queued_rows at the action's
+// queue time (review round 8): voided when a restore landed after it; for tasks the server also strips their History.
+export async function clearQueuedRemote(kind, queuedAt) {
+  try {
+    const r = await sessionRpc("clear_queued_rows", { p_kind: kind, p_queued_at: Math.floor(queuedAt || 0) });
+    return { ok: !!r?.ok && !r?.voided, voided: !!r?.voided, deleted: r?.deleted ?? 0 };
+  } catch (err) { warnOnce("clearQueuedRemote", err); return { ok: false, voided: false, deleted: 0 }; }
 }
 
 export async function clearHistoryRemote() {

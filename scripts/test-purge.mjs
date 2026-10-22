@@ -158,6 +158,12 @@ test("Clear Outputs: History-only generations are removed with their files; all:
   assert.ok(["u/a.png", "u/h.png", "u/old.png"].every(x => p.paths.includes(x)), p.paths.join(","));
 });
 
+// Review round 8: an account with no tasks and only older (id-less) History entries: Clear Outputs still removes them.
+test("Clear Outputs with nothing but id-less History entries still removes them and their files", () => {
+  const p = planPurge([{ id: "OLD", tasks: [{ status: "completed", outputs: [S + "u/old.png"] }] }], [], [], { all: true });
+  assert.deepEqual([p.remove, p.paths], [["OLD"], ["u/old.png"]]);
+});
+
 test("publicUrlOf round-trips through storagePathOf", () => {
   const url = publicUrlOf("https://x.supabase.co/", "user_X/arch ive.png");
   assert.equal(url, "https://x.supabase.co/storage/v1/object/public/generations/user_X/arch%20ive.png");

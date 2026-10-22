@@ -142,6 +142,33 @@ begin
       else format('FAIL history-in-same-transaction SH=%s cost=%s SE=%s; ', v_tasks, v_cost, exists (select 1 from history where id = 'qd-SE')) end;
   exception when others then out := out || format('FAIL history-in-same-transaction %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 11. Review round 8 (migration 20261022290000): Clear Logs / Clear Outputs / Reset clear through clear_queued_rows,
+  --     checked against restores like the replays: queued before the last restore -> voided, nothing cleared; after it
+  --     -> every row of that kind of this account goes (tasks: their History items too, entries left empty go).
+  declare v_n_tasks int; v_left_hist int;
+  begin
+    delete from settings where device_id = u and key = 'last_restore_at';
+    insert into settings (device_id, key, value) values (u, 'last_restore_at', '5000');
+    insert into tasks (id, device_id, status, start_time, outputs) values ('qd-c1', u, 'completed', 1000, '[]');
+    insert into history (id, device_id, timestamp, tasks, total_cost) values
+      ('qd-CH', u, 1000, '[{"id":"qd-c1","status":"completed","cost":1,"outputs":[]}]', 1);
+    insert into tasks (id, device_id, status, start_time, outputs) values ('qd-cother', 'user:__someone_else', 'completed', 1, '[]');
+    r := clear_queued_rows(v_tok, 'task', 4000);
+    v_n_tasks := (select count(*) from tasks where device_id = u);
+    if not (r->>'voided')::boolean or v_n_tasks = 0 then
+      out := out || format('FAIL clear-queued voided %s tasks=%s; ', r, v_n_tasks);
+    else
+      r := clear_queued_rows(v_tok, 'task', 6000);
+      v_n_tasks := (select count(*) from tasks where device_id = u);
+      v_left_hist := (select count(*) from history where id = 'qd-CH');
+      out := out || case when not (r->>'voided')::boolean and v_n_tasks = 0 and v_left_hist = 0
+                          and exists (select 1 from tasks where id = 'qd-cother')
+        then 'ok clear-queued; ' else format('FAIL clear-queued %s tasks=%s CH=%s; ', r, v_n_tasks, v_left_hist) end;
+    end if;
+    begin perform clear_queued_rows(v_tok, 'settings', 6000); out := out || 'FAIL clear-queued kind; ';
+    exception when others then null; end;
+  exception when others then out := out || format('FAIL clear-queued %s %s; ', sqlstate, sqlerrm); end;
+
   -- 7. Review round 6 (migration 20261022261000): the backup-scrub drain takes each account's restore marker before it
   --    touches the queue or the backups, like restore, rename and replayed deletes (a cron drain and a rename locked
   --    backup_scrub_queue / data_backups in opposite orders).

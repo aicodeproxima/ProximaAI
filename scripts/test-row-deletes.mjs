@@ -17,21 +17,7 @@ const test = async (name, fn) => {
 const ids = (k) => Array.from({ length: k }, (_, i) => "t" + i);
 const inList = (q) => q.ops.find(o => o[0] === "in")?.[2];
 
-// Task deletes go through delete_queued_rows (review round 6; tested below, with a session): History deletes stay plain.
-for (const [name, table] of [["deleteHistoryRemote", "history"]]) {
-  await test(`${name}: 250 ids go in chunks of at most 100, all scoped to this account`, async () => {
-    const c = fakeClient(); sb.__setClientForTests(c);
-    assert.deepEqual(await sb[name](ids(250)), { ok: true });
-    assert.deepEqual(c.calls.map(q => inList(q).length), [100, 100, 50]);
-    assert.ok(c.calls.every(q => q.table === table && q.ops.some(o => o[0] === "eq" && o[1] === "device_id" && o[2] === "user:owner")));
-    assert.deepEqual(c.calls.flatMap(inList), ids(250));
-  });
-  await test(`${name}: one refused chunk makes the whole delete not ok (its intents stay queued)`, async () => {
-    let k = 0;
-    sb.__setClientForTests(fakeClient(() => (++k === 2 ? { data: null, error: { message: "boom" } } : { data: null, error: null })));
-    assert.deepEqual(await sb[name](ids(250)), { ok: false, error: "boom" });
-  });
-}
+// Task and History deletes go through delete_queued_rows (review rounds 6 and 8); tested below, with a session.
 
 // #3: Clear Outputs / Reset purge every cloud row, not the 500 newest (or nothing when that read failed).
 const rows = (k, from = 0) => Array.from({ length: k }, (_, i) => ({ id: "r" + String(from + i).padStart(5, "0"), device_id: "user:owner", status: "pending", outputs: [], task_id: null }));
@@ -211,6 +197,29 @@ await test("deleteTasksRemote: through delete_queued_rows, chunks of 100, stampe
   assert.deepEqual([v.ok, v.voided, v.deleted], [false, ["a"], []], "voided: the rows were restored, not deleted");
   c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
   assert.equal((await sb.deleteTasksRemote(["a"])).ok, false);
+});
+
+// Review round 8: History deletes and whole-kind clears are restore-checked too (delete_queued_rows, clear_queued_rows).
+await test("deleteHistoryRemote: through delete_queued_rows (kind history) with the queue time; voided/deleted reported", async () => {
+  const c = fakeClient(); const seen = [];
+  c.rpc = async (fn, args) => { seen.push([fn, args.p_kind, args.p_ids.length, args.p_queued_at]); return { data: { ok: true, voided: false, deleted: args.p_ids.length }, error: null }; };
+  sb.__setClientForTests(c);
+  const r = await sb.deleteHistoryRemote(ids(150), 777);
+  assert.deepEqual([r.ok, r.deleted.length, seen.map(s => s.slice(0, 3)), seen[0][3]],
+    [true, 150, [["delete_queued_rows", "history", 100], ["delete_queued_rows", "history", 50]], 777]);
+  c.rpc = async () => ({ data: { ok: true, voided: true, deleted: 0 }, error: null });
+  assert.deepEqual((await sb.deleteHistoryRemote(["h"], 1)).voided, ["h"]);
+});
+await test("clearQueuedRemote: one clear_queued_rows call; voided and failures reported", async () => {
+  const c = fakeClient(); let seen;
+  c.rpc = async (fn, args) => { seen = [fn, args.p_kind, args.p_queued_at]; return { data: { ok: true, voided: false, deleted: 3 }, error: null }; };
+  sb.__setClientForTests(c);
+  assert.deepEqual(await sb.clearQueuedRemote("task", 99), { ok: true, voided: false, deleted: 3 });
+  assert.deepEqual(seen, ["clear_queued_rows", "task", 99]);
+  c.rpc = async () => ({ data: { ok: true, voided: true, deleted: 0 }, error: null });
+  assert.deepEqual(await sb.clearQueuedRemote("history", 1), { ok: false, voided: true, deleted: 0 });
+  c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
+  assert.deepEqual(await sb.clearQueuedRemote("history", 1), { ok: false, voided: false, deleted: 0 });
 });
 
 // Review round 4: replayed delete intents go through delete_queued_rows, which refuses them when a restore committed
