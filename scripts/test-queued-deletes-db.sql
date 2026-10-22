@@ -71,7 +71,7 @@ begin
   declare v_old_tok text := v_tok; v_bad text;
   begin
     select string_agg(p.proname, ',') into v_bad from pg_proc p
-     where p.pronamespace = 'public'::regnamespace and p.proname in ('restore_my_backup_phase2', 'delete_queued_rows')
+     where p.pronamespace = 'public'::regnamespace and p.proname in ('restore_my_backup_phase2', 'delete_queued_rows', 'rename_my_account')   -- rename: review round 7
        and not (position('_verify_session_token(p_session_token)' in substr(p.prosrc, position('last_restore_at'' for' in p.prosrc))) > 0);
     insert into tasks (id, device_id, status, start_time, outputs) values ('qd-6', u, 'completed', 1000, '[]');
     update app_secrets set value = jsonb_set(value, '{username}', '"__qd_renamed"') where key = 'admin_username';
