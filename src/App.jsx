@@ -11,6 +11,7 @@ import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
+import { unconfirmedClears } from "./lib/clearOutcome.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, purgeMyBackupsOf } from "./lib/supabase.js";
 import { storagePathsToDelete } from "./lib/purge.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -4438,18 +4439,27 @@ export default function ProximaApp() {
                       await clearHistory();
                       await clearTasksDB();
                       // Clear cloud (all tables)
-                      await Promise.allSettled([
+                      const cloudClears = await Promise.allSettled([
                         clearHistoryRemote(),
                         clearTasksRemote(),
                         clearSettingsRemote(),
                         clearFavoritesRemote(),
                       ]);
+                      // Tasks and History are re-checked and retried below (queueCloudLeftovers); settings and favorites
+                      // have no retry, so a refused clear must be reported, or the cloud copy returns on the next load.
+                      const prefsLeft = unconfirmedClears(cloudClears.slice(2), ["settings", "favorites"]);
                       // Everywhere else: WaveSpeed, all files, backup copies (History was cleared above).
                       await purgeEverywhere(removedTasks, [], { backupTaken: !!bk.id, history: false, alsoLogs: removedLogs });
                       const resetGone = await queueCloudLeftovers({ tasks: removedTasks.map(t => t.id), history: removedLogs.map(l => l.id) });
                       // Clear local settings
                       setBalance(null);
                       getStorageStats().then(s => setStorageStats(s));
+                      if (prefsLeft.length) {
+                        setSaveStatus("error");
+                        setAccountToast(`Cleared here, but the cloud ${prefsLeft.join(" and ")} could not be cleared — press Reset Everything again`);
+                        setTimeout(() => setAccountToast(""), 8000);
+                        return;
+                      }
                       if (!resetGone) {
                         setSaveStatus("error");
                         setAccountToast("Everything cleared here — the cloud clear will finish on your next save or reload");
