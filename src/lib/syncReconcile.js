@@ -89,14 +89,17 @@ export function historyRemovals(removedTasks, restoreRemoved) {
   return (removedTasks || []).filter(t => !restoreRemoved.has(t?.id));
 }
 
-// On a restore this tab has not handled (storage.js restoreGuard `fresh`): ids still marked as being deleted here whose
-// rows the cloud holds again. A delete confirmed earlier this session left its id marked for good, so the restored row
-// was never re-added and its WaveSpeed copy not held (review round 4). An id whose own delete intent is still pending
-// stays (the server decides it: delete_queued_rows). `cloudIds` null (unread): nothing is released.
-export function releaseRestored(deleting, pendingIds, cloudIds) {
-  if (!(cloudIds instanceof Set)) return [];
+// Ids still marked as being deleted here whose rows the cloud holds again. A delete confirmed earlier this session left
+// its id marked for good, so a restored row was never re-added and its WaveSpeed copy not held (review round 4). Only a
+// delete confirmed before this pass's cloud reads began (`confirmed`: id -> when, storage.js confirmDeleteIntents;
+// `since`: the pass start) counts: a tombstoned id comes back only by a restore, so its cloud copy then proves one. A
+// delete still in flight, or confirmed after the reads, is never released, nor one with a pending intent (the server
+// decides those: delete_queued_rows). Every pass, not only the one that saw the restore (review round 5).
+// `cloudIds` null (unread): nothing is released.
+export function releaseRestored(deleting, pendingIds, cloudIds, confirmed, since) {
+  if (!(cloudIds instanceof Set) || !(confirmed instanceof Map)) return [];
   const pending = new Set(pendingIds || []);
-  return [...(deleting || [])].filter(id => cloudIds.has(id) && !pending.has(id));
+  return [...(deleting || [])].filter(id => cloudIds.has(id) && !pending.has(id) && confirmed.get(id) < since);
 }
 
 // Rows saved before migration 20261022190000 carry no end frame / audio / driving video / reference video URL, so those

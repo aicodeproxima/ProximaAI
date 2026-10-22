@@ -175,10 +175,15 @@ test("inputBackfill: the input URLs this device has and the cloud row lacks, per
 // Review round 4: ids deleted (and confirmed) earlier this session stay "deleting" here, so after a restore brought them
 // back they were never re-added and their WaveSpeed copy was not held. On a restore this tab has not handled, every
 // deleting id the cloud holds again is released, unless its own delete intent is still pending.
-test("releaseRestored: deleting ids the cloud holds again, except pending intents; unknown cloud ids release nothing", () => {
-  const deleting = new Set(["back", "pending", "gone"]);
-  assert.deepEqual(releaseRestored(deleting, ["pending"], new Set(["back", "pending", "other"])), ["back"]);
-  assert.deepEqual(releaseRestored(deleting, [], null), []);
+// Review round 5: only deletes confirmed before this pass's cloud reads began are released (a delete still in flight,
+// or one confirmed after the reads, is never released), on every pass, not only on the pass that saw the restore.
+test("releaseRestored: confirmed-earlier deletes the cloud holds again; never in-flight, late-confirmed or pending ones", () => {
+  const since = 10_000;
+  const deleting = new Set(["back", "inflight", "late", "pending", "gone"]);
+  const confirmed = new Map([["back", 5_000], ["late", 12_000], ["pending", 5_000], ["gone", 5_000]]);
+  const cloud = new Set(["back", "inflight", "late", "pending"]);
+  assert.deepEqual(releaseRestored(deleting, ["pending"], cloud, confirmed, since), ["back"]);
+  assert.deepEqual(releaseRestored(deleting, [], null, confirmed, since), [], "cloud ids unread: nothing");
 });
 
 // Review round 5: a task a restore removed (by_restore tombstone) leaves this device, but its History items stay: the

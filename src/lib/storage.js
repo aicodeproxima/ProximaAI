@@ -650,6 +650,18 @@ export function restoreGuard(settings) {
   return { known, fresh, restoreAt, voided, pending };
 }
 
+// A delete the cloud confirmed: its intents leave the queue, and this tab records when (review round 5). A later pass
+// whose reads began after that, and whose cloud holds the id again, knows a restore brought it back (only a restore
+// re-inserts a tombstoned id) and releases it (syncReconcile.js releaseRestored). Per tab, in memory: each tab releases
+// only what it marked itself.
+const confirmed = { "task-delete": new Map(), "history-delete": new Map() };
+export function confirmDeleteIntents(kind, ids) {
+  settleDeleteIntents(kind, ids);
+  const at = Date.now(), m = confirmed[kind];
+  if (m) for (const id of ids || []) if (id) m.set(id, at);
+}
+export const confirmedDeletes = (kind) => confirmed[kind] || new Map();
+
 // The intents a confirmed clear settled (clearOutcome.js clearSettlement), removed in one write.
 export function settleDeleteIntents(kind, ids) {
   try {

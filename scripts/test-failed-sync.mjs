@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -169,6 +169,17 @@ test("publishFormPaths keeps a frozen tab's key for the hold's whole life, prune
   mem.set("proximaai-form-inputs:dead", JSON.stringify({ at: NOW - 8 * DAY, paths: ["uploads/u/b.png"] }));
   publishFormPaths(["uploads/u/c.png"], NOW);
   assert.deepEqual(readFormPublications().flatMap(p => p.paths).sort(), ["uploads/u/a.png", "uploads/u/c.png"]);
+});
+
+// Review round 5: a confirmed delete settles its intents and records when (per tab), for the restore release.
+test("confirmDeleteIntents: settles the intents and records each id's confirmation time per kind", () => {
+  queueDeleteIntents("task-delete", ["a", "b"]);
+  const t0 = Date.now();
+  confirmDeleteIntents("task-delete", ["a"]);
+  assert.deepEqual(getFailedSyncs().map(e => e.id), ["b"]);
+  const m = confirmedDeletes("task-delete");
+  assert.ok(m.get("a") >= t0 && !m.has("b"));
+  assert.equal(confirmedDeletes("history-delete").has("a"), false);
 });
 
 // Review round 4: "restore handled" is per tab. Another tab marking the shared key must not stop this tab from adopting
