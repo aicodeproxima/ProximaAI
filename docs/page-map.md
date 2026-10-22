@@ -54,6 +54,15 @@ click OK. Cards do not show the prompt text: find yours by `.task-model`, `.task
 `.task-card.card-selected`, `.log-row.log-row-selected`; count in `.sel-count`; `.sel-cancel` exits.
 Always assert the selection is exactly your own rows before clicking delete.
 
+Restore-check probe that writes nothing (measured 2026-10-22, bundle jENc_sX8): push a queued entry into localStorage
+`proximaai-failed-syncs` — `{kind:"history", id:"probe-…", data:{id, timestamp:1, prompt:"[PROBE]", tasks:[], totalCost:0},
+queuedAt:-1, ts:Date.now(), attempts:1}` — then short-press the Save button (`button.sidebar-btn`, title "Saved…" or
+"Retry (n)"; dispatch mousedown, then mouseup within 600 ms, since a long press makes a backup). Expect POST
+`rpc/upsert_queued_history` 200, the entry gone from the queue, title "Saved!", and no `history` row with that id.
+queuedAt must be negative: the account's restore marker (settings `last_restore_at`) is `0` until a restore runs, so
+any queuedAt ≥ 0 is NOT voided and the entry is written. Task/History delete intents (`task-delete`/`history-delete`
+with ids that do not exist) probe `delete_queued_rows` the same way.
+
 ## Logs
 Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 4 images"), `.log-cost`.
 

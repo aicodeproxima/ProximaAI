@@ -66,6 +66,10 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   heartbeat (`FORM_HOLD_ALIVE_MS`): a page Chrome froze sends nothing but still holds its form. A History entry with
   an item whose task this device lacks is rewritten, not removed, and the server strips items of deleted tasks from
   every History upload (`history_strip_deleted_items`).
+  A restore wins over every delete queued before it: deletes, clears and a delete's History rewrites go only through
+  restore-checked functions that take the account's marker (settings `last_restore_at`, server-only since 20261022301000)
+  — `delete_queued_rows`, `clear_queued_rows` (rows that existed at the queue time + the ids named), `upsert_queued_history`.
+  Never add a plain REST delete or clear of tasks/history/settings/favorites.
 - **Back-button trap**: PWA must not exit on Android back gesture (kills in-flight polls).
 - **Only a valid session touches the data (2026-10-22)**: tasks, history, settings, favorites, presets, sync_tombstones and
   bucket `generations` are closed by row policies that verify the `x-proxima-session` header on every statement
