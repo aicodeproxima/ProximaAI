@@ -124,6 +124,10 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   Database tests (each rolls back; run alone against live): scripts/test-rls-{tables,storage,triggers,plan,rpcs,
   rename,phase0}.sql, rollback proof scripts/test-rls-rollback-before.sql + phase-2 file + rollback file +
   scripts/test-rls-rollback.sql in one call. Rollback files: supabase/rollback/ (never in migrations/).
+  Test with pending migrations: `node scripts/tools/sql-tx.mjs [migration.sql ...] --test <test.sql>` (begin + files +
+  a guard that always aborts; prints one line per case, exit 0 only with zero FAIL). Apply + record a migration in
+  schema_migrations: `node scripts/tools/apply-migration.mjs <file.sql> --dry-run` first (writes nothing, says whether
+  the version is already recorded), then without --dry-run (one transaction per file; refuses recorded versions).
 - Opening the app on the phone: Chrome's `/json/new` is refused; use `adb shell am start -a android.intent.action.VIEW
   -d https://proxima-ai-seven.vercel.app/ com.android.chrome` (new tab, other tabs untouched).
 
