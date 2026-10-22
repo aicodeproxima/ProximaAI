@@ -50,17 +50,22 @@ begin
 
   -- Pings: one per statement that changed rows, none for a statement that changed nothing; content-free.
   select count(*) into m0 from realtime.messages m where m.topic = v_topic;
-  execute 'set local role anon';                               -- today's open policies
+  -- Browser roles write as anon; since 20261022350000 deletes run as the owner role (the delete RPCs do the same).
+  execute 'set local role anon';
   insert into public.tasks (id, device_id, status) values (p || '_t', s, 'processing');                          -- +1
-  delete from public.tasks where id = p || '_no_such_row';                                                       -- +0
   update public.tasks set status = status where id = p || '_no_such_row';                                        -- +0
+  execute 'reset role';
+  delete from public.tasks where id = p || '_no_such_row';                                                       -- +0
+  execute 'set local role anon';
   insert into public.tasks (id, device_id, status) values (p || '_t', s, 'completed')
     on conflict (id) do update set status = excluded.status;                                                     -- +1 (update part)
   insert into public.history (id, device_id) values (p || '_h', s);                                              -- +1
-  delete from public.history where id = p || '_h';                                                               -- +1
-  insert into public.history (id, device_id) values (p || '_h', s);                                              -- +0 (tombstoned: skipped)
-  delete from public.tasks where id = p || '_t';                                                                 -- +1
   execute 'reset role';
+  delete from public.history where id = p || '_h';                                                               -- +1
+  execute 'set local role anon';
+  insert into public.history (id, device_id) values (p || '_h', s);                                              -- +0 (tombstoned: skipped)
+  execute 'reset role';
+  delete from public.tasks where id = p || '_t';                                                                 -- +1
   select count(*) into m1 from realtime.messages m where m.topic = v_topic;
   r := r || format('%s pings per changing statement (%s -> %s, want +5)', case when m1 = m0 + 5 then 'PASS' else 'FAIL' end, m0, m1);
   select count(*) into msgs from realtime.messages m where m.topic = v_topic and m.event = 'changed' and not m.private;

@@ -13,7 +13,7 @@ begin
       format('insert into public.tasks (id, device_id) values (%L, %L) on conflict (id) do update set device_id = excluded.device_id', '__rls_explain', s),
       format('select id from public.tasks where device_id = %L order by id limit 1000', s),
       format('select id from public.sync_tombstones where device_id = %L and kind = %L order by id limit 1000', s, 'task'),
-      format('delete from public.tasks where id = any (%L::text[]) and device_id = %L', '{__rls_explain}', s),
+      format('update public.tasks set status = status where id = any (%L::text[]) and device_id = %L', '{__rls_explain}', s),
       'select name from storage.objects where bucket_id = ''generations'' limit 100'] loop
     plan := '';
     for ln in execute 'explain (costs off) ' || stmt loop plan := plan || ln || ' / '; end loop;

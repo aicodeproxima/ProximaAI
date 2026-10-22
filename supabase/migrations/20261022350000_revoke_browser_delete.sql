@@ -1,0 +1,11 @@
+-- Browser roles lose DELETE on the data tables (delete-review round 10, finding 1; requested by the lockdown session,
+-- 2026-10-22). Since 403c0d4 / 20261022300000 every delete or clear the app makes goes through the restore-checked
+-- SECURITY DEFINER RPCs (delete_queued_rows, clear_queued_rows, reset_queued_rows), and every function that deletes from
+-- these tables runs as the owner postgres (_history_drop_emptied, clear_queued_rows, delete_queued_rows,
+-- rename_my_account, restore_my_backup_phase2 — verified 2026-10-22). A stale cached bundle still sends plain REST
+-- deletes, which skip the restore check, so a restore landing between them was wiped. Without the privilege they fail
+-- with 42501 ("permission denied") before any policy runs; the app keeps the intent queued and replays it through the
+-- RPC once it reloads. presets is included for consistency (no client code touches it).
+-- The strict DELETE policies of 20261022120000 stay: harmless, and they still guard any role that regains the grant.
+-- Rollback: supabase/rollback/20261022350000_revoke_browser_delete.rollback.sql
+revoke delete on public.tasks, public.history, public.settings, public.favorites, public.presets from anon, authenticated;

@@ -34,8 +34,9 @@ begin
   execute 'set local role anon';
   for i in 1..5 loop
     q := p || '_' || tbls[i];
-    -- A. MUST DENY without a header (or with unparsable request.headers): reads and writes raise 28000. A delete/update
-    --    that matches NO row may raise or report 0 rows (nothing to change either way); both are accepted.
+    -- A. MUST DENY without a header (or with unparsable request.headers): reads and writes raise 28000, and a plain
+    --    DELETE is refused by privilege (42501, migration 20261022350000). An UPDATE that matches NO row may raise or
+    --    report 0 rows (nothing to change either way); both are accepted.
     foreach tok in array array['{}', 'not json'] loop
       perform set_config('request.headers', tok, true);
       begin
@@ -57,15 +58,18 @@ begin
           execute stmt;
           get diagnostics n = row_count;
           r := r || format('%s %s no-header(%s) %s allowed rows=%s',
-                 case when verb like '%(no match)' and n = 0 then 'PASS' else 'FAIL' end, tbls[i], tok, verb, n);
+                 case when verb = 'update(no match)' and n = 0 then 'PASS' else 'FAIL' end, tbls[i], tok, verb, n);
         exception
           when sqlstate '28000' then r := r || format('%s %s no-header(%s) %s: %s',
-                 case when sqlerrm = 'session token missing' then 'PASS' else 'FAIL' end, tbls[i], tok, verb, sqlerrm);
+                 case when sqlerrm = 'session token missing' and verb not like 'delete%' then 'PASS' else 'FAIL' end, tbls[i], tok, verb, sqlerrm);
+          when sqlstate '42501' then r := r || format('%s %s no-header(%s) %s: %s',
+                 case when verb like 'delete%' and sqlerrm like 'permission denied for table%' then 'PASS' else 'FAIL' end, tbls[i], tok, verb, sqlerrm);
           when others then r := r || format('FAIL %s no-header(%s) %s: %s %s', tbls[i], tok, verb, sqlstate, sqlerrm);
         end;
       end loop;
     end loop;
-    -- B. MUST DENY: forged / expired / other subject / non-admin / garbage -> read and write raise 28000 with the right message
+    -- B. MUST DENY: forged / expired / other subject / non-admin / garbage -> read and write raise 28000 with the right message;
+    --    a plain DELETE is refused by privilege (42501) before the token is even looked at
     for j in 1..5 loop
       perform set_config('request.headers', json_build_object('x-proxima-session', bad[j])::text, true);
       foreach stmt in array array[
@@ -78,12 +82,15 @@ begin
           r := r || format('FAIL %s %s %s allowed', tbls[i], bad_lbl[j], verb);
         exception
           when sqlstate '28000' then r := r || format('%s %s %s %s: %s',
-                 case when sqlerrm = bad_msg[j] then 'PASS' else 'FAIL' end, tbls[i], bad_lbl[j], verb, sqlerrm);
+                 case when sqlerrm = bad_msg[j] and verb <> 'delete' then 'PASS' else 'FAIL' end, tbls[i], bad_lbl[j], verb, sqlerrm);
+          when sqlstate '42501' then r := r || format('%s %s %s %s: %s',
+                 case when verb = 'delete' and sqlerrm like 'permission denied for table%' then 'PASS' else 'FAIL' end, tbls[i], bad_lbl[j], verb, sqlerrm);
           when others then r := r || format('FAIL %s %s %s: %s %s', tbls[i], bad_lbl[j], verb, sqlstate, sqlerrm);
         end;
       end loop;
     end loop;
-    -- C. MUST ALLOW with a valid token: full read, insert, upsert over an existing row, update, delete
+    -- C. MUST ALLOW with a valid token: full read, insert, upsert over an existing row, update. A plain DELETE stays
+    --    refused (42501) even with a valid session: deletes go through the restore-checked RPCs (delete_queued_rows ...).
     perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
     begin
       execute format('select count(*) from public.%I', tbls[i]) into n;
@@ -97,9 +104,12 @@ begin
       execute format('update public.%I set device_id = device_id where %I = %L', tbls[i], kcol[i], q || '_v');
       get diagnostics n = row_count;
       r := r || format('%s %s valid update rows=%s', case when n = 1 then 'PASS' else 'FAIL' end, tbls[i], n);
-      execute format('delete from public.%I where %I in (%L, %L)', tbls[i], kcol[i], q || '_v', q || '_seed');
-      get diagnostics n = row_count;
-      r := r || format('%s %s valid delete rows=%s', case when n = 2 then 'PASS' else 'FAIL' end, tbls[i], n);
+      begin
+        execute format('delete from public.%I where %I in (%L, %L)', tbls[i], kcol[i], q || '_v', q || '_seed');
+        r := r || format('FAIL %s plain delete allowed with a valid session', tbls[i]);
+      exception when sqlstate '42501' then r := r || format('%s %s plain delete refused even with a valid session',
+                  case when sqlerrm like 'permission denied for table%' then 'PASS' else 'FAIL' end, tbls[i]);
+      end;
     exception when others then r := r || format('FAIL %s valid path raised %s %s', tbls[i], sqlstate, sqlerrm);
     end;
     -- D. MUST DENY: a valid token writing into another scope
@@ -111,6 +121,12 @@ begin
       when others then r := r || format('FAIL %s other-scope insert: %s %s', tbls[i], sqlstate, sqlerrm);
     end;
   end loop;
+
+  -- Deletes run server-side now (owner role, as delete_queued_rows does): make the 4 tombstones section E counts.
+  execute 'reset role';
+  delete from public.tasks where id in (p || '_tasks_v', p || '_tasks_seed');
+  delete from public.history where id in (p || '_history_v', p || '_history_seed');
+  execute 'set local role anon';
 
   -- E. sync_tombstones: read with a session only; never writable by browser roles
   perform set_config('request.headers', '{}', true);
@@ -147,6 +163,10 @@ begin
          unnest(array['TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) pr
    where has_table_privilege(g, 'public.' || t, pr);
   r := r || format('%s no TRUNCATE/REFERENCES/TRIGGER/MAINTAIN for browser roles (%s left)', case when n = 0 then 'PASS' else 'FAIL' end, n);
+  select count(*) into n
+    from unnest(array['tasks','history','settings','favorites','presets']) t, unnest(array['anon','authenticated']) g
+   where has_table_privilege(g, 'public.' || t, 'DELETE');
+  r := r || format('%s no DELETE for browser roles on the data tables (%s left)', case when n = 0 then 'PASS' else 'FAIL' end, n);
 
   -- G. role authenticated (the Email-OTP window): same gate
   execute 'set local role authenticated';
@@ -155,9 +175,12 @@ begin
     select count(*) into n from public.tasks;
     r := r || format('%s authenticated valid select=%s', case when n = total[1] - 1 then 'PASS' else 'FAIL' end, n);
     insert into public.settings (device_id, key) values (s, p || '_auth');
-    delete from public.settings where device_id = s and key = p || '_auth';
-    get diagnostics n = row_count;
-    r := r || format('%s authenticated valid write+delete', case when n = 1 then 'PASS' else 'FAIL' end);
+    r := r || text 'PASS authenticated valid write';
+    begin
+      delete from public.settings where device_id = s and key = p || '_auth';
+      r := r || text 'FAIL authenticated plain delete allowed';
+    exception when sqlstate '42501' then r := r || text 'PASS authenticated plain delete refused (privilege)';
+    end;
   exception when others then r := r || format('FAIL authenticated valid raised %s %s', sqlstate, sqlerrm);
   end;
   perform set_config('request.headers', '{}', true);
@@ -167,7 +190,7 @@ begin
 
   -- H. MUST DENY: revoked (password change / backup unlock bump admin_sessions_valid_after) -> the very next statement fails
   execute 'reset role';
-  insert into public.history (id, device_id) values (p || '_history_h', s);   -- a row the revoked delete would remove
+  insert into public.history (id, device_id) values (p || '_history_h', s);   -- a row the revoked update would touch
   insert into public.app_secrets (key, value)
     values ('admin_sessions_valid_after', jsonb_build_object('at', extract(epoch from now())::bigint + 60))
     on conflict (key) do update set value = excluded.value;
@@ -176,7 +199,7 @@ begin
   foreach stmt in array array[
       'select count(*) from public.tasks',
       format('insert into public.settings (device_id, key) values (%L, %L)', s, p || '_rev'),
-      format('delete from public.history where id = %L', p || '_history_h')] loop
+      format('update public.history set prompt = prompt where id = %L', p || '_history_h')] loop
     begin
       execute stmt;
       r := r || format('FAIL revoked %s allowed', split_part(stmt, ' ', 1));
