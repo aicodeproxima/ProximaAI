@@ -54,6 +54,13 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   by the server (`ws_deleted_predictions`, filled by the tasks delete trigger and by `api/ws-proxy.ts` before it
   forwards `POST api/v3/predictions/delete`; the proxy answers 503 if it cannot record, so the client queue retries).
   The 5-minute sweep also removes deliveries that waited over 2 days for a row that never came.
+  Backup copies are scrubbed by the server, never by the client: while the switch is off, the tasks/history delete
+  triggers and the history update trigger queue into `backup_scrub_queue` in the change's own transaction; cron
+  `backup-scrub-drain` drains it every minute, and restore drains first and refuses while anything is left. Switching
+  OFF scrubs every existing backup of every deleted id, restore-replaced rows included, and trims backed-up History
+  entries to their live items (owner rulings 2026-10-22). Files go through the durable queue `proximaai-file-deletes`
+  (`fileDelete.js`): queued by `stagePurge` before any network call, settled only on a confirmed remove or a HEAD
+  400/404, and a path a kept generation uses again is never deleted. Log deletes delete no files.
 - **Back-button trap**: PWA must not exit on Android back gesture (kills in-flight polls).
 
 ## Transparency + theming

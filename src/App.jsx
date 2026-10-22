@@ -4570,10 +4570,13 @@ export default function ProximaApp() {
                       onClick={async () => {
                         if (autoBackups === null) { readAutoBackups(); return; }   // unknown: a tap retries the read
                         const next = !autoBackups;
+                        // Owner rulings on #7 (2026-10-22): switching off scrubs every existing backup of what was already
+                        // deleted, restore-replaced rows included (migration 20261021175200).
+                        if (!next && !confirm("Turn Automatic backups off?\n\nFrom now on nothing is copied, and every existing backup loses the generations and History you have already deleted, including what a restore replaced (so a restore can no longer be undone). Turning it back on does not bring them back.")) return;
                         try {
                           const v = await setAutoBackups(next);
                           setAutoBackupsState(v);
-                          setAccountToast(v ? "Automatic backups on" : "Automatic backups off — deletes are now final");
+                          setAccountToast(v ? "Automatic backups on" : "Automatic backups off — deletes are now final, and deleted items are being removed from your backups");
                         } catch (e) {
                           setAccountToast("Couldn't change Automatic backups: " + (e?.message || "unknown error"));
                         }
