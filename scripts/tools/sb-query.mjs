@@ -5,7 +5,8 @@
 //   node scripts/tools/sb-query.mjs -f some.sql
 //   node scripts/tools/sb-query.mjs --write -f migration.sql     anything that changes data or schema needs --write
 //
-// Token: see accessToken() in supabase-admin.mjs.
+// Without --write the database runs the query in a read-only transaction: any write fails, including one hidden in a
+// function call (review wf_ec400a67-988 #12). Token: see accessToken() in supabase-admin.mjs.
 import fs from "node:fs";
 import { sql as runSql } from "./supabase-admin.mjs";
 
@@ -15,12 +16,10 @@ const fi = args.indexOf("-f");
 const sql = fi >= 0 ? fs.readFileSync(args[fi + 1], "utf8") : args.filter(a => !a.startsWith("--")).join(" ");
 if (!sql.trim()) { console.error('usage: node scripts/tools/sb-query.mjs "<sql>" | -f file.sql [--write]'); process.exit(2); }
 
-// Read-only unless --write: a crude keyword check, enough to stop an accidental change from a read-only caller.
-const code = sql.replace(/--[^\n]*/g, " ").replace(/'(?:[^']|'')*'/g, "''");
-if (!write && /\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|comment|vacuum|call|do|copy|merge|reindex|cluster|lock|set\s+role)\b/i.test(code)) {
-  console.error("Refused: this SQL changes data or schema. Re-run with --write if that is intended.");
-  process.exit(3);
+// process.exitCode, not process.exit(): exiting while fetch handles close trips a libuv assertion on Windows (exit 127).
+try { console.log(JSON.stringify(await runSql(sql, { readOnly: !write }))); }
+catch (e) {
+  const refused = !write && /read-only transaction|25006|42501/.test(e.message);
+  console.error(e.message + (refused ? "\n(read-only: re-run with --write if the change is intended)" : ""));
+  process.exitCode = refused ? 3 : 1;
 }
-
-try { console.log(JSON.stringify(await runSql(sql))); }
-catch (e) { console.error(e.message); process.exit(1); }

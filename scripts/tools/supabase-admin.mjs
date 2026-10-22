@@ -16,12 +16,13 @@ export function accessToken() {
   return t;
 }
 
-// Runs SQL as the database owner; returns the parsed rows (throws on an HTTP error).
-export async function sql(query) {
+// Runs SQL as the database owner; returns the parsed rows (throws on an HTTP error). `readOnly`: the database runs it in
+// a read-only transaction, so any write (a statement or a function that writes) fails with 25006.
+export async function sql(query, { readOnly = false } = {}) {
   const r = await fetch(`https://api.supabase.com/v1/projects/${REF}/database/query`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken()}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, read_only: readOnly }),
   });
   const text = await r.text();
   if (!r.ok) throw new Error(`SQL HTTP ${r.status}: ${text.slice(0, 2000)}`);
