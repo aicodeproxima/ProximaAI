@@ -472,6 +472,14 @@ export function readFormPublications() {
   return out;
 }
 export function forgetFormPaths() { try { localStorage.removeItem(FORM_KEY + TAB_ID); } catch {} }
+// One id per browser, shared by its tabs: the key of this browser's cloud form publication (review wf_ec400a67-988 #6).
+export function browserId() {
+  try {
+    let id = localStorage.getItem("proximaai-browser-id");
+    if (!id) { id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8); localStorage.setItem("proximaai-browser-id", id); }
+    return id;
+  } catch { return "unknown"; }
+}
 
 // Tasks cancelled or cleared before their submit gave a prediction id: the lost-submit lookup pairs them with their
 // prediction so no other task adopts it (taskResume.js planOrphans `claimants`).

@@ -68,5 +68,18 @@ await test("pathsInUseRemote: the server's answer as a Set; a failed call answer
   assert.equal(await sb.pathsInUseRemote(["a"]), null);
 });
 
+// #6: each browser publishes its Generate forms' uploads to the cloud; the other device's file flush reads them.
+await test("pullFormHolds: this account's form-inputs:* setting values; a failed read answers null", async () => {
+  const c = fakeClient(() => ({ data: [{ key: "form-inputs:b1", value: { at: 5, paths: ["u/x.png"] } }], error: null }));
+  sb.__setClientForTests(c);
+  assert.deepEqual(await sb.pullFormHolds(), [{ at: 5, paths: ["u/x.png"] }]);
+  const ops = c.calls[0].ops;
+  assert.equal(c.calls[0].table, "settings");
+  assert.ok(ops.some(o => o[0] === "eq" && o[1] === "device_id" && o[2] === "user:owner"));
+  assert.ok(ops.some(o => o[0] === "like" && o[1] === "key" && o[2] === "form-inputs:%"));
+  sb.__setClientForTests(fakeClient(() => ({ data: null, error: { message: "403" } })));
+  assert.equal(await sb.pullFormHolds(), null);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

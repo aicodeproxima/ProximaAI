@@ -50,8 +50,21 @@ export function settleFileDelete(queue, path, outcome, now) {
 // "owned": a kept generation here uses it, or the server says a row of this account does (`remote`, review #7):
 // checked again later. "form": a Generate form still holds it (held). "unknown": the server did not answer (wait).
 // null: nobody uses it, delete it.
-export const classifyPath = (path, { owned, forms, remote } = {}) =>
-  owned?.has(path) ? "owned" : forms?.has(path) ? "form" : remote === null ? "unknown" : remote?.has(path) ? "owned" : null;
+// `formsKnown: false`: the other devices' form holds could not be read (review #6), so an upload waits ("unknown").
+export const classifyPath = (path, { owned, forms, remote, formsKnown = true } = {}) =>
+  owned?.has(path) ? "owned" : forms?.has(path) ? "form" : (!formsKnown && path.startsWith("uploads/")) ? "unknown"
+    : remote === null ? "unknown" : remote?.has(path) ? "owned" : null;
+
+// Review wf_ec400a67-988 #6: each browser also publishes its live form holds to the cloud (settings row
+// form-inputs:<browser>), so a delete on the other device keeps them too. Republished when they change and at least
+// every FORM_CLOUD_HEARTBEAT_MS, well inside TAB_ALIVE_MS, so a live hold never reads as lapsed elsewhere.
+export const FORM_CLOUD_HEARTBEAT_MS = 10 * 60 * 1000;
+export function formPublishDue(last, paths, now) {
+  if (!last) return true;
+  const a = new Set(last.paths || []), b = new Set(paths || []);
+  if (a.size !== b.size || [...b].some(p => !a.has(p))) return true;
+  return now - last.at >= FORM_CLOUD_HEARTBEAT_MS;
+}
 // Paths held by the forms of live tabs (publications refreshed within TAB_ALIVE_MS).
 export function liveFormPaths(pubs, now) {
   const out = new Set();

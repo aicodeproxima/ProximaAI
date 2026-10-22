@@ -633,6 +633,17 @@ export async function deleteBackup(id) {
 // The "Automatic backups" switch (migration 20261021171500; off by default). While off, the 2-day job, the app's
 // pre-* snapshots and the restore's safety snapshot take no copy, so a delete leaves nothing recoverable. null = unknown
 // (read failed): callers must treat that as "do not assume a backup exists".
+// The Generate-form holds every browser of this account published (settings rows form-inputs:<browser>, review
+// wf_ec400a67-988 #6). null when the read failed: the file queue then keeps uploads waiting.
+export async function pullFormHolds() {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase.from("settings").select("key,value").eq("device_id", getDeviceId()).like("key", "form-inputs:%");
+    if (error || !Array.isArray(data)) return null;
+    return data.map(r => r.value);
+  } catch (err) { warnOnce("pullFormHolds", err); return null; }
+}
+
 // Which of these bucket paths a tasks or History row of this account still references, on any device and however old
 // (review wf_ec400a67-988 #7): the file-delete queue never deletes one of them. null when the server could not answer.
 export async function pathsInUseRemote(paths) {

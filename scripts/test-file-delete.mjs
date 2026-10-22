@@ -4,7 +4,7 @@
 // Run: node scripts/test-file-delete.mjs
 import assert from "node:assert/strict";
 import { queueFileDeletes, dueFileDeletes, headOutcome, settleFileDelete, fileFlushReady, pendingOf, purgeNote, headStatus, FILE_DELETE_CHUNK,
-  classifyPath, liveFormPaths, heldOf } from "../src/lib/fileDelete.js";
+  classifyPath, liveFormPaths, heldOf, formPublishDue, FORM_CLOUD_HEARTBEAT_MS, TAB_ALIVE_MS } from "../src/lib/fileDelete.js";
 
 let n = 0, failed = 0;
 const test = async (name, fn) => {
@@ -120,6 +120,24 @@ await test("#7: a path the server says is in use is kept; no server answer means
   assert.equal(classifyPath("p", { owned: none, forms: none, remote: new Set() }), null, "nobody uses it: delete");
   assert.equal(classifyPath("p", { owned: new Set(["p"]), forms: none, remote: null }), "owned");
   assert.equal(classifyPath("p", { owned: none, forms: new Set(["p"]), remote: null }), "form");
+});
+
+// Review wf_ec400a67-988 #6: a browser republishes its form holds to the cloud when they change, and at least every
+// 10 minutes (well inside TAB_ALIVE_MS, so the other device never sees a live hold as lapsed).
+await test("#6: cloud form publication: on a change, on a heartbeat, never otherwise", () => {
+  const T = 1_000_000;
+  assert.equal(formPublishDue(null, ["a"], T), true, "first publication");
+  assert.equal(formPublishDue({ at: T, paths: ["a", "b"] }, ["b", "a"], T + 60_000), false, "same set, fresh");
+  assert.equal(formPublishDue({ at: T, paths: ["a"] }, ["a", "c"], T + 1), true, "changed");
+  assert.equal(formPublishDue({ at: T, paths: ["a"] }, [], T + 1), true, "released");
+  assert.equal(formPublishDue({ at: T, paths: ["a"] }, ["a"], T + FORM_CLOUD_HEARTBEAT_MS), true, "heartbeat");
+  assert.ok(FORM_CLOUD_HEARTBEAT_MS * 2 < TAB_ALIVE_MS);
+});
+await test("#6: when the other devices' form holds could not be read, an upload waits; an archive does not", () => {
+  const none = new Set();
+  assert.equal(classifyPath("uploads/u/a.png", { owned: none, forms: none, remote: none, formsKnown: false }), "unknown");
+  assert.equal(classifyPath("u/archive.png", { owned: none, forms: none, remote: none, formsKnown: false }), null);
+  assert.equal(classifyPath("uploads/u/a.png", { owned: none, forms: none, remote: none }), null, "known and free: delete");
 });
 
 // Review wf_ec400a67-988 #4: a delete reports every part still pending, not only files.

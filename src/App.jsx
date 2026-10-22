@@ -9,12 +9,12 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
 import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
-import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, fileFlushReady, classifyPath, liveFormPaths } from "./lib/fileDelete.js";
+import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, fileFlushReady, classifyPath, liveFormPaths, formPublishDue } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
@@ -1559,6 +1559,7 @@ export default function ProximaApp() {
   // ids in here, so a just-deleted log can't be resurrected by an in-flight sync.
   const deletingLogIds = useRef(new Set());
   const draftFormRef = useRef(null);   // the Generate form's inputs, read by flushFileDeletes (declared before draftForm)
+  const cloudFormPubRef = useRef(null);   // this browser's last cloud form publication {at, paths} (review wf_ec400a67-988 #6)
   const [failedSyncCount, setFailedSyncCount] = useState(0);
 
   // ─── AUTH HANDLERS ───
@@ -2354,13 +2355,16 @@ export default function ProximaApp() {
       const due = dueFileDeletes(readFileDeletes(), Date.now());
       if (!due.length) return;
       const owned = ownedPaths(tasksRef.current, logsRef.current, { taskIds: deletingIds.current, logIds: deletingLogIds.current });
-      const forms = new Set([...pathsInUse([draftFormRef.current]), ...liveFormPaths(readFormPublications(), Date.now())]);
+      // Forms holding uploads: this tab, this browser's other tabs, and the other device (cloud; null = unreadable).
+      const cloudHolds = isSupabaseConfigured() ? await pullFormHolds() : [];
+      const forms = new Set([...pathsInUse([draftFormRef.current]), ...liveFormPaths(readFormPublications(), Date.now()),
+        ...liveFormPaths(cloudHolds || [], Date.now())]);
       // Rows beyond this device's view (older than the 500 loaded, or on the other device) count too: one server question
       // per flush (review wf_ec400a67-988 #7). No answer: those paths wait.
       const candidates = due.filter(p => !owned.has(p) && !forms.has(p));
       const remote = candidates.length && isSupabaseConfigured() ? await pathsInUseRemote(candidates) : new Set();
       for (const p of due) {
-        let outcome = classifyPath(p, { owned, forms, remote });
+        let outcome = classifyPath(p, { owned, forms, remote, formsKnown: cloudHolds !== null });
         if (!outcome) {
           if ((await deleteArchivedPath(p)) || (await deleteArchivedPath(p))) outcome = "deleted";
           else outcome = headOutcome(await headStatus(publicUrlOf(SUPA_BASE, p)));
@@ -2565,9 +2569,17 @@ export default function ProximaApp() {
     perModelRes, optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl };
   draftFormRef.current = draftForm;
   // This tab's Generate form inputs, published for every tab's file flush (fileDelete.js liveFormPaths, review #3):
-  // refreshed every minute, withdrawn when the tab closes.
+  // refreshed every minute, withdrawn when the tab closes. This browser's live holds (all its tabs) also go to the cloud
+  // for the other device's flush, when they change and every 10 minutes (review wf_ec400a67-988 #6).
   useEffect(() => {
-    const publish = () => publishFormPaths([...pathsInUse([draftFormRef.current])]);
+    const publish = () => {
+      publishFormPaths([...pathsInUse([draftFormRef.current])]);
+      const now = Date.now(), mine = [...liveFormPaths(readFormPublications(), now)];
+      if (isSupabaseConfigured() && formPublishDue(cloudFormPubRef.current, mine, now)) {
+        syncSetting("form-inputs:" + browserId(), { at: now, paths: mine })
+          .then(() => { cloudFormPubRef.current = { at: now, paths: mine }; }).catch(() => {});
+      }
+    };
     publish();
     const id = setInterval(publish, 60000);
     const bye = (e) => { if (!e.persisted) forgetFormPaths(); };
