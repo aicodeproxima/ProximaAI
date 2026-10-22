@@ -46,8 +46,11 @@ in to the Chrome tab, then drive the app.
 | Batch position badge | `.task-batch-index` ("2/4") inside `.task-model` |
 
 ## Deleting (select mode)
-`.sel-launch` → click `.task-card` (Gallery) or `.log-row` (Logs) → `.sel-del`. Delete raises `confirm()`:
-override `window.confirm = () => true` for that click only and restore it. Selected state:
+`.sel-launch` → click `.task-card` (Gallery) or `.log-row` (Logs) → `.sel-del`. Delete raises `confirm()` more than
+once (measured 2026-10-22: a second native confirm came after the first was answered): keep the
+`window.confirm = () => true` override until the card count has dropped, then restore it. A native dialog freezes the
+page for Claude in Chrome (scripts and screenshots time out) and a pressed Enter does not reach it — the owner must
+click OK. Cards do not show the prompt text: find yours by `.task-model`, `.task-status` and the `img` src. Selected state:
 `.task-card.card-selected`, `.log-row.log-row-selected`; count in `.sel-count`; `.sel-cancel` exits.
 Always assert the selection is exactly your own rows before clicking delete.
 
@@ -88,11 +91,39 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   completed.
 - Network tracking in Claude in Chrome starts at its first `read_network_requests` call; call it before Generate.
 
+## Data access and security (per-session RLS, since 2026-10-22)
+- Every supabase-js call to `<SUPABASE_URL>/rest/v1/` and `/storage/v1/` carries `x-proxima-session: <token>`
+  (src/lib/session.js `withSessionHeader`); the row policies (migrations 20261022100000 + 20261022120000) verify it
+  per statement via `proxima_auth.session_scope()`. Signed out, the client answers table/Storage calls itself with 401
+  "session token missing". A raw `fetch` to those paths WITHOUT the header is refused — use the app's client, or the
+  service role for owner-run maintenance (scripts/tools/supabase-admin.mjs).
+- Outsider view (publishable key only), measured right after the apply: any table read/write/delete → 403
+  `session token missing`; forged token → 403 `invalid signature`; expired/revoked → 403 with that message; Storage
+  list → `200 []`; Storage upload/overwrite/remove → HTTP 500 `database error, code: 28000`; public image URL → 200.
+- Edge logs show which build a device runs: `x_client_info` ends in `proxima-rls/1 sess/1` (signed in) or `sess/0`
+  (RPCs before sign-in). CORS preflights (`OPTIONS`) never carry it — exclude them. Per-device gate query:
+  `node scripts/tools/sb-logs.mjs <start> <end> "select multiIf(log_attributes['request.headers.user_agent'] like
+  '%Windows NT%Chrome%','PC', log_attributes['request.headers.user_agent'] like '%Android%Chrome%','phone','other') as
+  dev, log_attributes['request.headers.x_client_info'] as xci, log_attributes['response.status_code'] as st, count(*)
+  as n from logs where source='edge_logs' and log_attributes['request.method'] != 'OPTIONS' and
+  log_attributes['request.path'] like '/rest/v1/%' group by dev, xci, st"`.
+- Live updates: no postgres_changes any more. Triggers on tasks/history send an empty Realtime broadcast on a secret
+  topic (`get_my_account` → `sync_topic`); a device reconciles ~0.4–1.4 s after a write elsewhere (measured on both
+  devices). Manual ping: `node scripts/tools/sb-query.mjs --write "select realtime.send('{}'::jsonb, 'changed',
+  proxima_auth.sync_topic(), false)"`.
+- SQL / logs without connector prompts: `scripts/tools/sb-query.mjs`, `scripts/tools/sb-logs.mjs` (Management API).
+  Database tests (each rolls back; run alone against live): scripts/test-rls-{tables,storage,triggers,plan,rpcs,
+  rename,phase0}.sql, rollback proof scripts/test-rls-rollback-before.sql + phase-2 file + rollback file +
+  scripts/test-rls-rollback.sql in one call. Rollback files: supabase/rollback/ (never in migrations/).
+- Opening the app on the phone: Chrome's `/json/new` is refused; use `adb shell am start -a android.intent.action.VIEW
+  -d https://proxima-ai-seven.vercel.app/ com.android.chrome` (new tab, other tabs untouched).
+
 ## Storage
 - IndexedDB `proximaai`: stores `settings` (key), `tasks` (id), `history` (id), `favorites`, `presets`.
 - localStorage: `proximaai-failed-syncs` (upload/delete retry queue), `proximaai-user` (username).
 - Cloud: Supabase `vhznmpxlcjbdzntmfvvy`, tables `tasks`, `history`, `sync_tombstones`; scope column
-  `device_id = "user:<username>"`. Sync design: `src/lib/syncReconcile.js`.
+  `device_id = "user:<username>"`. Sync design: `src/lib/syncReconcile.js`. Since 2026-10-22 every row is readable and
+  writable only with a valid session, and writes only into the session's own scope (see "Data access and security").
 
 ## Gotchas
 - The Claude in Chrome JS tool times out at 45 s: start long work without awaiting it, store the result on `window`,

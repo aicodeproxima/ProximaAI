@@ -65,6 +65,13 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   then deleted. A History entry with an item whose task this device lacks is rewritten, not removed, and the server
   strips items of deleted tasks from every History upload (`history_strip_deleted_items`).
 - **Back-button trap**: PWA must not exit on Android back gesture (kills in-flight polls).
+- **Only a valid session touches the data (2026-10-22)**: tasks, history, settings, favorites, presets, sync_tombstones and
+  bucket `generations` are closed by row policies that verify the `x-proxima-session` header on every statement
+  (migrations 20261022100000 + 20261022120000). Every data call goes through the supabase.js client, whose fetch adds
+  the header (`withSessionHeader`); never add a raw `fetch` to /rest/v1 or /storage/v1 from the browser. Rows are
+  written only into the session's own scope. Public image URLs stay open. Live updates come from a content-free ping
+  (`syncPing.js`), not postgres_changes. New SQL that browser roles run needs a rolled-back test as `anon` WITH a
+  minted token in `request.headers` (see scripts/test-rls-*.sql). Details and the outsider view: docs/page-map.md.
 
 ## Transparency + theming
 - CSS variables (`--bg-deep`, `--text-primary`, `--accent`, `--glass-border`, `--bg-card`)

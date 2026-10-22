@@ -13,3 +13,10 @@ Track record 2026-10-20: cut-over review 8/10 confirmed; fix-commit regression r
 4/5 (the password-manager exposure). Every security feature got at least one real finding — run one per feature.
 
 `leave-refresh-review.workflow.js`: the review of the leave/refresh generation fixes, fea3698..ba39483 (2026-10-20). It confirmed 8 of 8 findings, all fixed in 48d562c, cbbb695, 1e0ecf1 and 97bb6f0. It adds a SQL rule for reviewers: behavior tests run only `set local role anon` inside a `do $$ ... raise exception 'RESULT: %', r; end $$` block, so they roll back. That is how the anon-only 401 outage of 2026-10-20 would have been caught.
+
+`rls-review.workflow.js`: the review of the per-session RLS rollout (2026-10-22). It has 5 dimension finders
+(security, no-breakage, live updates, test integrity, rollout and rollback) and 2 refuters per finding (reproduce,
+impact), and keeps a finding only when both uphold it. Reviewers read docs/rls-review-context.md, which holds what is
+live, the accepted residuals and the read-only SQL rules. They may run rolled-back DO blocks through
+scripts/tools/sb-query.mjs. Rounds: 1 confirmed finding (in another tool), then 0. Run it again for any change to the
+policies, proxima_auth, session.js or syncPing.js. Pass `{round, prior, context}` as args.
