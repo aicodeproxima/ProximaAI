@@ -47,8 +47,11 @@ export function settleFileDelete(queue, path, outcome, now) {
 }
 
 // Review #3 (2026-10-22): an upload a Generate form still holds is not deleted with the generation that used it.
-// "owned": a kept generation uses it (drop, unsent). "form": a Generate form still holds it (held). null: delete it.
-export const classifyPath = (path, { owned, forms } = {}) => (owned?.has(path) ? "owned" : forms?.has(path) ? "form" : null);
+// "owned": a kept generation here uses it, or the server says a row of this account does (`remote`, review #7):
+// checked again later. "form": a Generate form still holds it (held). "unknown": the server did not answer (wait).
+// null: nobody uses it, delete it.
+export const classifyPath = (path, { owned, forms, remote } = {}) =>
+  owned?.has(path) ? "owned" : forms?.has(path) ? "form" : remote === null ? "unknown" : remote?.has(path) ? "owned" : null;
 // Paths held by the forms of live tabs (publications refreshed within TAB_ALIVE_MS).
 export function liveFormPaths(pubs, now) {
   const out = new Set();

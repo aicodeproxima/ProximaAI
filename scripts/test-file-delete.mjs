@@ -112,6 +112,16 @@ await test("#3: held files are counted apart from pending ones and named in the 
   assert.match(purgeNote({ files: 2 }), /2 files still/);
 });
 
+// Review wf_ec400a67-988 #7: the server's answer covers rows beyond this device's view; no answer means wait.
+await test("#7: a path the server says is in use is kept; no server answer means wait; local owned/form still win", () => {
+  const none = new Set();
+  assert.equal(classifyPath("p", { owned: none, forms: none, remote: new Set(["p"]) }), "owned");
+  assert.equal(classifyPath("p", { owned: none, forms: none, remote: null }), "unknown");
+  assert.equal(classifyPath("p", { owned: none, forms: none, remote: new Set() }), null, "nobody uses it: delete");
+  assert.equal(classifyPath("p", { owned: new Set(["p"]), forms: none, remote: null }), "owned");
+  assert.equal(classifyPath("p", { owned: none, forms: new Set(["p"]), remote: null }), "form");
+});
+
 // Review wf_ec400a67-988 #4: a delete reports every part still pending, not only files.
 await test("purgeNote names pending WaveSpeed copies and a pending History removal too; nothing pending -> empty", () => {
   assert.match(purgeNote({ ws: 1 }), /1 WaveSpeed copy still being deleted/);

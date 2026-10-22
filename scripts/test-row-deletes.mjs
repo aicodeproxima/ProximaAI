@@ -55,5 +55,18 @@ await test("pullAllForPurge: any failed page answers null, so nothing is cleared
   assert.equal(await sb.pullAllForPurge(), null);
 });
 
+// #7: before deleting a file, the server says which paths a row of this account (any device, any age) still uses.
+store.set("proximaai-session", JSON.stringify({ token: "tok", expires_at: Math.floor(Date.now() / 1000) + 3600, username: "owner" }));
+await test("pathsInUseRemote: the server's answer as a Set; a failed call answers null (the queue then waits)", async () => {
+  const c = fakeClient(); let seen;
+  c.rpc = async (fn, args) => { seen = { fn, args }; return { data: ["a"], error: null }; };
+  sb.__setClientForTests(c);
+  const r = await sb.pathsInUseRemote(["a", "b"]);
+  assert.deepEqual([...r], ["a"]);
+  assert.deepEqual(seen, { fn: "paths_in_use", args: { p_session_token: "tok", p_paths: ["a", "b"] } });
+  c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
+  assert.equal(await sb.pathsInUseRemote(["a"]), null);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);
