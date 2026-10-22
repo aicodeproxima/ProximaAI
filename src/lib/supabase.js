@@ -199,18 +199,18 @@ export async function pullTasks(limit = 500) {
   } catch (err) { warnOnce("pullTasks", err); return []; }
 }
 
-// Prediction ids of this account's tasks started in [after, before] (ms), on any device: the lost-submit lookup must
-// never adopt a prediction another device's task owns (its row may not have reached this device yet). null = the
-// read failed (the caller then decides nothing this pass).
-export async function pullTaskIdsInWindow(after, before) {
-  if (!supabase) return new Set();
+// This account's task rows started in [after, before] (ms), on any device, as {id, modelId, startTime, taskId}: the
+// lost-submit lookup never adopts a prediction another device's task owns (its row may not have reached this device
+// yet), and a deleted claimant's prediction is deleted only when no other row of its model started in its window, even
+// one still waiting for its id (review wf_ec400a67-988 #10). null = the read failed (the caller then decides nothing).
+export async function pullTaskStartsInWindow(after, before) {
+  if (!supabase) return [];
   try {
-    const { data, error } = await supabase.from("tasks").select("task_id")
-      .eq("device_id", getDeviceId()).not("task_id", "is", null)
-      .gte("start_time", after).lte("start_time", before).limit(1000);
+    const { data, error } = await supabase.from("tasks").select("id,model_id,start_time,task_id")
+      .eq("device_id", getDeviceId()).gte("start_time", after).lte("start_time", before).limit(1000);
     if (error) throw error;
-    return new Set((data || []).map(r => r.task_id));
-  } catch (err) { warnOnce("pullTaskIdsInWindow", err); return null; }
+    return (data || []).map(r => ({ id: r.id, modelId: r.model_id, startTime: r.start_time, taskId: r.task_id ?? null }));
+  } catch (err) { warnOnce("pullTaskStartsInWindow", err); return null; }
 }
 
 // Deletes this scope's rows of `table` (narrowed by `narrow`) and says whether the server confirmed it: { ok, error }.

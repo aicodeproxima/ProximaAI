@@ -1,6 +1,6 @@
 // Tests for src/lib/taskResume.js — what happens to in-flight tasks on load. Run: node scripts/test-task-resume.mjs
 import assert from "node:assert/strict";
-import { noteClaimants, claimantLookupNeeded, planClaimOutcomes, lookupStale, planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, rememberReleased, liveReleased, rememberClaimants, liveClaimants, dropClaimants, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
+import { noteClaimants, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, planResume, pollOutcome, mergeLoadedTasks, applyPoll, settlePoll, retryTask, pollTiming, nextPollDelay, pollErrorAction, planRepoll, REPOLL_THROTTLE_MS, isOrphan, orphanWindows, planOrphans, submitMayHaveLanded, isInFlight, keyStatusAfter, rememberReleased, liveReleased, rememberClaimants, liveClaimants, dropClaimants, LOOKUP_SKEW_MS, ORPHAN_GRACE_MS, RESUME_WINDOW_MS, GONE_ERROR } from "../src/lib/taskResume.js";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -525,6 +525,21 @@ test("only a waiting task or an earlier claimant is recorded; deleted never flip
   let d = noteClaimants({}, [{ id: "D", status: "pending", modelId: "m", startTime: NOW }], NOW, { deleted: true });
   d = noteClaimants(d, [{ id: "D", status: "pending", modelId: "m", startTime: NOW }], NOW + 1000);
   assert.equal(d.D.deleted, true);
+});
+
+// Review wf_ec400a67-988 #10: a deleted claimant's prediction is deleted only on an unambiguous match.
+test("a deleted claimant deletes only when its window holds one prediction of its model and no other row of it started", () => {
+  const C = { id: "C", modelId: "bytedance/seedream-v4", startTime: NOW - 60_000, deleted: true };
+  const at = (ms) => new Date(ms).toISOString();
+  const P = { id: "P", model: "bytedance/seedream-v4", status: "completed", created_at: at(NOW - 58_000) };
+  const claims = [{ claimantId: "C", predictionId: "P", deleted: true }];
+  assert.deepEqual(unambiguousDeletes(claims, [C], [P], []), ["P"]);
+  assert.deepEqual(unambiguousDeletes(claims, [C], [P], [{ id: "C", modelId: C.modelId, startTime: C.startTime, taskId: null }]), ["P"], "its own row does not count");
+  assert.deepEqual(unambiguousDeletes(claims, [C], [P], [{ id: "X", modelId: C.modelId, startTime: NOW - 50_000, taskId: null }]), [],
+    "another device started the same model in the window (its row has no id yet): release, never delete");
+  assert.deepEqual(unambiguousDeletes(claims, [C], [P, { ...P, id: "Q", created_at: at(NOW - 40_000) }], []), [], "two candidates: ambiguous");
+  assert.deepEqual(unambiguousDeletes([{ ...claims[0], deleted: false }], [C], [P], []), [], "a cancelled claimant never deletes");
+  assert.deepEqual(unambiguousDeletes(claims, [C], [P], [{ id: "Y", modelId: "other/model", startTime: NOW - 50_000, taskId: null }]), ["P"]);
 });
 
 // Review wf_ec400a67-988 #9: a cancel lost to a freeze, deleted more than an hour later, still gets its prediction

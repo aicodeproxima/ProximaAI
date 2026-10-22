@@ -81,5 +81,19 @@ await test("pullFormHolds: this account's form-inputs:* setting values; a failed
   assert.equal(await sb.pullFormHolds(), null);
 });
 
+// #10: the lost-submit lookup reads every row of the account started in the window (model, start, prediction id),
+// even one still waiting for its id, so a deleted claimant never takes another device's live prediction.
+await test("pullTaskStartsInWindow: rows of any device in the window, with or without a prediction id; failure -> null", async () => {
+  const c = fakeClient(() => ({ data: [{ id: "t1", model_id: "m", start_time: 5, task_id: null }, { id: "t2", model_id: "m", start_time: 6, task_id: "p2" }], error: null }));
+  sb.__setClientForTests(c);
+  assert.deepEqual(await sb.pullTaskStartsInWindow(1, 9), [
+    { id: "t1", modelId: "m", startTime: 5, taskId: null }, { id: "t2", modelId: "m", startTime: 6, taskId: "p2" }]);
+  const ops = c.calls[0].ops;
+  assert.ok(!ops.some(o => o[0] === "not"), "rows still waiting for their id count too");
+  assert.ok(ops.some(o => o[0] === "gte" && o[1] === "start_time" && o[2] === 1) && ops.some(o => o[0] === "lte" && o[1] === "start_time" && o[2] === 9));
+  sb.__setClientForTests(fakeClient(() => ({ data: null, error: { message: "403" } })));
+  assert.equal(await sb.pullTaskStartsInWindow(1, 9), null);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

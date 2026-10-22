@@ -214,6 +214,23 @@ export function planClaimOutcomes(claims, tasks) {
   }
   return { attach, del };
 }
+// Review wf_ec400a67-988 #10: a deleted claimant pairs by model and time, so its prediction is deleted only when that
+// pairing is unambiguous: its window holds exactly one prediction of its model, and no other cloud row of that model
+// (another device's, any status, even one still waiting for its id) started in that window. Otherwise it is only
+// released: never delete what may be another device's live generation. `cloudRows`: pullTaskStartsInWindow rows.
+export function unambiguousDeletes(claims, claimants, items, cloudRows) {
+  const byId = new Map((claimants || []).map(c => [c.id, c]));
+  const model = (m) => String(m || "").toLowerCase();
+  const at = (i) => Date.parse(String(i?.created_at || "").replace(/(\.\d{3})\d+/, "$1"));
+  return (claims || []).filter(c => {
+    const k = c.deleted && byId.get(c.claimantId);
+    if (!k) return false;
+    const lo = k.startTime - LOOKUP_SKEW_MS, hi = k.startTime + ORPHAN_GRACE_MS, m = model(k.modelId);
+    const same = (items || []).filter(i => i?.status !== "deleted" && model(i?.model) === m && at(i) >= lo && at(i) <= hi);
+    if (same.length !== 1) return false;
+    return !(cloudRows || []).some(r => r.id !== k.id && model(r.modelId) === m && r.startTime >= lo && r.startTime <= hi);
+  }).map(c => c.predictionId);
+}
 // A submit that started while the lookup awaited may own a prediction the listing showed while its task has no id
 // yet: such a pass decides nothing.
 export const lookupStale = (seqAtStart, seqNow, submitting) => seqNow !== seqAtStart || submitting > 0;

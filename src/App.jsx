@@ -12,7 +12,7 @@ import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
-import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
 import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, fileFlushReady, classifyPath, liveFormPaths, formPublishDue } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -20,7 +20,7 @@ import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted } from "./lib/batchLog.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // ─── LOGIN SCREEN ───
@@ -2258,22 +2258,26 @@ export default function ProximaApp() {
       const answeredFor = (t) => answeredWindows.some(w => w.after <= t.startTime - LOOKUP_SKEW_MS && t.startTime + ORPHAN_GRACE_MS <= w.before);
       // Owned = predictions any task holds: here, on another device (its row may not have reached this one yet), or
       // released by a delete or a cancel. Without the cloud's answer nothing is decided this pass.
-      const cloudOwned = [];
+      const cloudRows = [];
       for (const w of windows) {
-        const ids = await pullTaskIdsInWindow(w.after - ORPHAN_GRACE_MS, w.before);
-        if (!ids) return;
-        cloudOwned.push(...ids);
+        const rows = await pullTaskStartsInWindow(w.after - ORPHAN_GRACE_MS, w.before);
+        if (!rows) return;
+        cloudRows.push(...rows);
       }
+      const cloudOwned = cloudRows.map(r => r.taskId).filter(Boolean);
       // A submit that started during the awaits above may own a prediction listed here: decide nothing this pass.
       if (lookupStale(seq, submitSeq.current, submittingIds.current.size)) return;
       const owned = new Set([...tasksRef.current.map(t => t.taskId).filter(Boolean), ...releasedPredictions(), ...cloudOwned]);
       const { adopt, fail, claimed, resolved, claims } = planOrphans(orphans, items, owned, Date.now(), claimants, { answeredFor });
       releasePredictions(claimed);
       resolveClaimants(resolved);
-      // Deleted claimants: their prediction goes on WaveSpeed too. Cancelled ones: the id is linked to the task, so a
-      // later delete on any device reaches it (planClaimOutcomes).
+      // Deleted claimants: their prediction goes on WaveSpeed too, but only on an unambiguous match (taskResume.js
+      // unambiguousDeletes, review wf_ec400a67-988 #10); otherwise it is only released. Cancelled ones: the id is linked
+      // to the task, so a later delete on any device reaches it (planClaimOutcomes).
       const { attach, del } = planClaimOutcomes(claims, tasksRef.current);
-      if (del.length) deleteOnWaveSpeed(del.map(id => ({ taskId: id, status: "processing" })));
+      const sure = new Set(unambiguousDeletes(claims, claimants, items, cloudRows));
+      const delNow = del.filter(id => sure.has(id));
+      if (delNow.length) deleteOnWaveSpeed(delNow.map(id => ({ taskId: id, status: "processing" })));
       if (attach.length) {
         const link = new Map(attach.map(a => [a.id, a.predictionId]));
         for (const id of link.keys()) savedTaskIds.current.delete(id);   // the persist effect saves, queues and syncs it again
