@@ -17,7 +17,8 @@ const test = async (name, fn) => {
 const ids = (k) => Array.from({ length: k }, (_, i) => "t" + i);
 const inList = (q) => q.ops.find(o => o[0] === "in")?.[2];
 
-for (const [name, table] of [["deleteTasksRemote", "tasks"], ["deleteHistoryRemote", "history"]]) {
+// Task deletes go through delete_queued_rows (review round 6; tested below, with a session): History deletes stay plain.
+for (const [name, table] of [["deleteHistoryRemote", "history"]]) {
   await test(`${name}: 250 ids go in chunks of at most 100, all scoped to this account`, async () => {
     const c = fakeClient(); sb.__setClientForTests(c);
     assert.deepEqual(await sb[name](ids(250)), { ok: true });
@@ -175,6 +176,22 @@ await test("predictionsInUseRemote: prediction id -> holding row id, in chunks o
   sb.__setClientForTests(fakeClient(() => ({ data: null, error: { message: "403" } })));
   assert.equal(await sb.predictionsInUseRemote(["p"]), null);
   assert.deepEqual([...(await sb.predictionsInUseRemote([]))], []);
+});
+
+// Review round 6: fresh task deletes go through delete_queued_rows too (a user tombstone even for a History-only
+// generation), stamped with the current server time.
+await test("deleteTasksRemote: through delete_queued_rows, chunks of 100, stamped now; voided or refused -> not ok", async () => {
+  const c = fakeClient(); const seen = [];
+  c.rpc = async (fn, args) => { seen.push([fn, args.p_kind, args.p_ids.length, args.p_queued_at]); return { data: { ok: true, voided: false, deleted: args.p_ids.length }, error: null }; };
+  sb.__setClientForTests(c);
+  const before = Date.now() - 5000;
+  assert.deepEqual(await sb.deleteTasksRemote(ids(250)), { ok: true });
+  assert.deepEqual(seen.map(s => s.slice(0, 3)), [["delete_queued_rows", "task", 100], ["delete_queued_rows", "task", 100], ["delete_queued_rows", "task", 50]]);
+  assert.ok(seen.every(s => s[3] >= before), "stamped with the current (server) time");
+  c.rpc = async () => ({ data: { ok: true, voided: true, deleted: 0 }, error: null });
+  assert.equal((await sb.deleteTasksRemote(["a"])).ok, false, "voided: the rows were restored, not deleted");
+  c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
+  assert.equal((await sb.deleteTasksRemote(["a"])).ok, false);
 });
 
 // Review round 4: replayed delete intents go through delete_queued_rows, which refuses them when a restore committed

@@ -18,7 +18,7 @@ import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headSt
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
-import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, historyRemovals } from "./lib/syncReconcile.js";
+import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, historyRemovals, tombstonedItems } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
@@ -2013,6 +2013,11 @@ export default function ProximaApp() {
           await deleteTasks([...rmTasks]);
         }
       }
+      // History items of generations a user deleted elsewhere that this device holds no task of (History-only, e.g. after a
+      // restore) go too: their ids carry a user tombstone (syncReconcile.js tombstonedItems, review round 6).
+      const goneItems = tombstonedItems(logsRef.current, ids?.taskTombstones ?? null, ids?.taskRestoreRemoved ?? null,
+        new Set(tasksRef.current.map(t => t.id)));
+      if (goneItems.length) dropLogItemsFor(goneItems.map(id => ({ id })));
       // Local-only tasks the cloud never received (failed or evicted uploads, finished during load,
       // pre-sync rows): persist + queue them like a fresh result, then upload. Capped per pass so the
       // 200-entry failed-sync queue never evicts other pending writes.

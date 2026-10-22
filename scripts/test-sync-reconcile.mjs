@@ -1,6 +1,6 @@
 // Tests for src/lib/syncReconcile.js — the cross-device sync decisions. Run: node scripts/test-sync-reconcile.mjs
 import assert from "node:assert/strict";
-import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, historyRemovals, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
+import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, historyRemovals, tombstonedItems, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
 
 const NOW = 1_800_000_000_000;
 const OLD = NOW - 10 * 60_000;
@@ -191,6 +191,15 @@ test("releaseRestored: confirmed-earlier deletes the cloud holds again; never in
 test("historyRemovals: only tasks a user deleted take their History items with them", () => {
   assert.deepEqual(historyRemovals([{ id: "u" }, { id: "r" }, { id: "x" }], new Set(["r"])).map(t => t.id), ["u", "x"]);
   assert.deepEqual(historyRemovals([{ id: "u" }], null).map(t => t.id), ["u"], "restore removals unknown: as before");
+});
+
+// Review round 6: a generation a user deleted on another device whose task this device never held (History-only) still
+// leaves this device's History: its id has a user tombstone (not a restore's).
+test("tombstonedItems: History items whose generation a user deleted and this device holds no task of", () => {
+  const logs = [{ id: "E", tasks: [{ id: "gone" }, { id: "kept" }, { id: "restored" }, { id: "local" }, { outputs: ["x"] }] }];
+  const r = tombstonedItems(logs, new Set(["gone", "restored", "local"]), new Set(["restored"]), new Set(["local"]));
+  assert.deepEqual(r, ["gone"]);
+  assert.deepEqual(tombstonedItems(logs, null, null, new Set()), [], "tombstones unread: nothing");
 });
 
 console.log(`\n${n} passed`);

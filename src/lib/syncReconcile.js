@@ -80,6 +80,19 @@ export function applyCloudUpdate(task, u) {
   return takes ? { ...task, outputs: u.outputs, ...u.finish } : task;
 }
 
+// Ids of History items whose generation a user deleted (a task tombstone that is not a restore's) and that this device
+// holds no task of: a History-only generation deleted on another device (review round 6). The tasks this device holds
+// go through planTaskSync's removals instead. Unread tombstones: nothing.
+export function tombstonedItems(logs, taskTombstones, restoreRemoved, localTaskIds) {
+  if (!(taskTombstones instanceof Set)) return [];
+  const out = new Set();
+  for (const l of logs || []) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) {
+    const id = i?.id;
+    if (id && taskTombstones.has(id) && !restoreRemoved?.has(id) && !localTaskIds?.has(id)) out.add(id);
+  }
+  return [...out];
+}
+
 // Of the tasks this pass removes, those whose History items go with them: a user's delete. A task a restore removed
 // (tombstone by_restore, `restoreRemoved`) leaves this device, but the restore brought its History entry back with its
 // item, and stripping it would erase the generation from History and, with backups OFF, from every backup (review

@@ -9,7 +9,7 @@
 import { sessionToken, isSessionError, reportSessionExpired, isSuperseded, withSessionHeader } from "./session.js";
 import { removedPaths } from "./storageRemove.js";
 import { createSyncPing } from "./syncPing.js";
-import { withServerClock } from "./serverClock.js";
+import { withServerClock, serverNow } from "./serverClock.js";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -269,8 +269,14 @@ async function deleteByIds(site, table, ids) {
   } catch (err) { warnOnce(site, err); return { ok: false, error: err?.message }; }
 }
 
+// Through delete_queued_rows, stamped now (review round 6): the server records a user tombstone even for a generation
+// without a tasks row (History-only, e.g. after a restore), so other devices drop it from History too. Voided (a restore
+// landed first) counts as not deleted: the intents stay queued and the replay settles them.
 export async function deleteTasksRemote(ids) {
-  return deleteByIds("deleteTasksRemote", "tasks", ids);
+  const r = await deleteQueuedRemote("task", ids, serverNow());
+  if (!r.ok) return { ok: false, error: "delete_queued_rows failed" };
+  if (r.voided.length) return { ok: false, error: "voided by a restore" };
+  return { ok: true };
 }
 
 // A replayed delete intent (queued earlier, still pending): the server refuses it when a restore committed after

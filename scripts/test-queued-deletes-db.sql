@@ -84,6 +84,21 @@ begin
                        else format('FAIL recheck-after-lock %s; ', v_bad) end;
   exception when others then out := out || format('FAIL recheck-after-lock %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 8. Review round 6 (migration 20261022263000): a user delete of a generation without a tasks row (History-only, e.g.
+  --    after a restore) records a user tombstone, so other devices drop its History item and uploads are stripped of it.
+  --    A restore's tombstone becomes a user one; an id nothing holds gets no tombstone.
+  begin
+    insert into history (id, device_id, timestamp, tasks, total_cost) values
+      ('qd-HE', u, 1000, '[{"id":"qd-honly","status":"completed","cost":1,"outputs":[]},{"id":"qd-capped","status":"completed","cost":1,"outputs":[]}]', 2);
+    insert into sync_tombstones (id, kind, device_id, deleted_at, by_restore) values ('qd-capped', 'task', u, now() - interval '1 day', true);
+    r := delete_queued_rows(v_tok, 'task', array['qd-honly', 'qd-capped', 'qd-nothing'], 9e12::bigint);
+    out := out || case when exists (select 1 from sync_tombstones where id = 'qd-honly' and kind = 'task' and device_id = u and not by_restore)
+                        and exists (select 1 from sync_tombstones where id = 'qd-capped' and not by_restore)
+                        and not exists (select 1 from sync_tombstones where id = 'qd-nothing')
+      then 'ok user-tombstone-for-history-only; '
+      else format('FAIL user-tombstone-for-history-only %s; ', (select string_agg(id || ':' || by_restore, ',') from sync_tombstones where id like 'qd-%')) end;
+  exception when others then out := out || format('FAIL user-tombstone-for-history-only %s %s; ', sqlstate, sqlerrm); end;
+
   -- 7. Review round 6 (migration 20261022261000): the backup-scrub drain takes each account's restore marker before it
   --    touches the queue or the backups, like restore, rename and replayed deletes (a cron drain and a rename locked
   --    backup_scrub_queue / data_backups in opposite orders).
