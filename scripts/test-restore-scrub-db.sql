@@ -108,5 +108,24 @@ begin
                        else format('FAIL restored-history-only-kept ok=%s by_restore=%s kept=%s; ', r->>'ok', v_flag, v_kept) end;
   exception when others then out := out || format('FAIL restored-history-only-kept %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 6. Review round 6 (migration 20261022262000): while OFF, a restore whose History no longer holds a generation that
+  --    lived only in History (no tasks row) scrubs it from the other backups right away, like the rows it replaced.
+  declare v_b1 uuid; v_b3 uuid; v_left boolean;
+  begin
+    update app_secrets set value = '{"enabled": false}' where key = 'auto_backups';
+    -- B1 holds rs-Y as a tasks row; live, rs-Y is History-only (entry rs-HY, no tasks row)
+    insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot)
+      values (u, 'manual', 1, 0, '[{"id":"rs-Y","device_id":"user:__rs_test","status":"completed"}]', '[]') returning id into v_b1;
+    insert into history (id, device_id, timestamp, tasks, total_cost)
+      values ('rs-HY', u, 1, '[{"id":"rs-Y","status":"completed","cost":1,"outputs":[]}]', 1);
+    -- B3 holds neither: restoring it removes rs-HY, so rs-Y is no longer live anywhere
+    insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot)
+      values (u, 'manual', 0, 0, '[]', '[]') returning id into v_b3;
+    r := restore_my_backup_phase2(v_tok, v_b3);
+    select exists (select 1 from data_backups b, jsonb_array_elements(b.tasks_snapshot) e where b.id = v_b1 and e->>'id' = 'rs-Y') into v_left;
+    out := out || case when r->>'ok' = 'true' and not v_left then 'ok restore-scrubs-history-only; '
+                       else format('FAIL restore-scrubs-history-only ok=%s still-in-B1=%s; ', r->>'ok', v_left) end;
+  exception when others then out := out || format('FAIL restore-scrubs-history-only %s %s; ', sqlstate, sqlerrm); end;
+
   raise exception 'RESULT: %', out;
 end $t$;
