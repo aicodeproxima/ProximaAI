@@ -203,7 +203,9 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   - the storage policies check the account's folders;
   - tombstones are readable for the own scope only.
 - Definer audit:
-  - all 48 functions derive the account themselves and filter every statement;
+  - all 48 functions derive the account themselves and filter every statement, including existence checks: e.g.
+    `_clear_kind` checks `sync_tombstones` and "no tasks row" by id across every scope (fine with one account and
+    global UUIDs; scope it here);
   - internal helpers move to proxima_auth with EXECUTE revoked, and search_path is pinned.
 - Catalog gates fail if any of these is true:
   - a policy lacks the scope predicate;
