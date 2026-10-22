@@ -676,6 +676,20 @@ export async function pathsInUseRemote(paths) {
   } catch { return null; }
 }
 
+// The input URLs older rows lack (syncReconcile.js inputBackfill, review round 3): one narrow update per row, only those
+// columns, only in this account's scope. { ok: false } when any was refused; the next pass derives them again.
+export async function backfillTaskInputs(rows) {
+  if (!rows?.length || !requireClient()) return { ok: true };
+  let ok = true;
+  for (const { id, ...cols } of rows) {
+    try {
+      const r = await supabase.from("tasks").update(cols).eq("id", id).eq("device_id", getDeviceId());
+      if (r.error) { ok = false; warnOnce("backfillTaskInputs", r.error); }
+    } catch (err) { ok = false; warnOnce("backfillTaskInputs", err); }
+  }
+  return { ok };
+}
+
 export async function getAutoBackups() {
   try { return !!(await sessionRpc("get_auto_backups")); } catch { return null; }
 }

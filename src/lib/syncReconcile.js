@@ -80,6 +80,25 @@ export function applyCloudUpdate(task, u) {
   return takes ? { ...task, outputs: u.outputs, ...u.finish } : task;
 }
 
+// Rows saved before migration 20261022190000 carry no end frame / audio / driving video / reference video URL, so those
+// uploads were invisible to delete-everywhere and to paths_in_use (review round 3). The device that holds them fills in
+// only the columns its cloud row lacks (never overwriting a value); once written, the row no longer qualifies, so a
+// failed write simply comes back on the next pass. Returns [{ id, <column>: url, ... }].
+const INPUT_COLUMNS = [["endFrameUrl", "end_frame_url"], ["sourceAudioUrl", "source_audio_url"],
+  ["sourceVideoUrl", "source_video_url"], ["refVideoUrl", "ref_video_url"]];
+export function inputBackfill(local, cloud) {
+  const byId = new Map((cloud || []).map(c => [c.id, c]));
+  const out = [];
+  for (const t of local || []) {
+    const c = byId.get(t?.id);
+    if (!c) continue;
+    const row = { id: t.id };
+    for (const [field, column] of INPUT_COLUMNS) if (t[field] && !c[field]) row[column] = t[field];
+    if (Object.keys(row).length > 1) out.push(row);
+  }
+  return out;
+}
+
 export function planLogSync({ local, cloud, cloudIds, tombstones, pending, deleting, since, graceMs = SYNC_GRACE_MS }) {
   const localIds = new Set(local.map(l => l.id));
   const add = cloud.filter(l => !localIds.has(l.id) && !deleting.has(l.id));

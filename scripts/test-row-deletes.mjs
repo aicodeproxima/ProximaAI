@@ -119,6 +119,19 @@ await test("pullSettings: rows as a map; a refused or failed read answers null; 
   assert.equal((await sb.pullAllRemoteData()).settings, null);
 });
 
+// Review round 3: older rows get the input URLs this device holds, only those columns, only in this account's scope.
+await test("backfillTaskInputs: one narrow update per row, scoped to this account; any refusal answers not ok", async () => {
+  const c = fakeClient(); sb.__setClientForTests(c);
+  assert.deepEqual(await sb.backfillTaskInputs([{ id: "a", end_frame_url: "e" }, { id: "b", ref_video_url: "r", source_audio_url: "s" }]), { ok: true });
+  assert.deepEqual(c.calls.map(q => [q.table, q.ops.find(o => o[0] === "update")?.[1]]),
+    [["tasks", { end_frame_url: "e" }], ["tasks", { ref_video_url: "r", source_audio_url: "s" }]]);
+  assert.ok(c.calls.every(q => q.ops.some(o => o[0] === "eq" && o[1] === "device_id" && o[2] === "user:owner")));
+  assert.deepEqual(c.calls.map(q => q.ops.find(o => o[0] === "eq" && o[1] === "id")?.[2]), ["a", "b"]);
+  sb.__setClientForTests(fakeClient(() => ({ data: null, error: { message: "403" } })));
+  assert.deepEqual(await sb.backfillTaskInputs([{ id: "a", end_frame_url: "e" }]), { ok: false });
+  assert.deepEqual(await sb.backfillTaskInputs([]), { ok: true });
+});
+
 // Review round 3: on pagehide the browser's form-hold publication is a settings write that must outlive the page.
 await test("withExitKeepalive: only settings writes, only while the page is exiting, get keepalive", async () => {
   const seen = [];

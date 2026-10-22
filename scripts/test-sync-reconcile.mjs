@@ -1,6 +1,6 @@
 // Tests for src/lib/syncReconcile.js — the cross-device sync decisions. Run: node scripts/test-sync-reconcile.mjs
 import assert from "node:assert/strict";
-import { planTaskSync, planLogSync, applyCloudUpdate, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
+import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, SYNC_GRACE_MS } from "../src/lib/syncReconcile.js";
 
 const NOW = 1_800_000_000_000;
 const OLD = NOW - 10 * 60_000;
@@ -150,6 +150,26 @@ test("applying a cloud outcome: only to a task still running here; plain output 
   const failedThere = { ...u, outputs: [], finish: { ...u.finish, status: "failed", error: "Cancelled" } };
   assert.equal(applyCloudUpdate(failedHere, failedThere), failedHere, "a failure never replaces a failure here");
   assert.deepEqual(applyCloudUpdate(task("a"), { id: "a", outputs: ["https://supabase/a.png"] }).outputs, ["https://supabase/a.png"]);
+});
+
+// Review round 3: rows saved before migration 20261022190000 have null input URLs, so their uploads were invisible to
+// delete-everywhere and to paths_in_use. The device that holds the URLs fills in only the columns the cloud lacks.
+test("inputBackfill: the input URLs this device has and the cloud row lacks, per column", () => {
+  const local = [
+    task("a", { endFrameUrl: "e", sourceAudioUrl: "s" }),
+    task("b", { refVideoUrl: "r" }),
+    task("c", { sourceVideoUrl: "v" }),
+    task("d"),
+    task("e", { endFrameUrl: "x" }),
+  ];
+  const cloud = [
+    task("a", { endFrameUrl: null, sourceAudioUrl: "s", sourceVideoUrl: null, refVideoUrl: null }),
+    task("b", { endFrameUrl: null, sourceAudioUrl: null, sourceVideoUrl: null, refVideoUrl: "r" }),
+    task("d", { endFrameUrl: null }),
+    task("e", { endFrameUrl: "other" }),
+  ];
+  assert.deepEqual(inputBackfill(local, cloud), [{ id: "a", end_frame_url: "e" }],
+    "b already has it; c has no cloud row; d has nothing; e's cloud value is never overwritten");
 });
 
 console.log(`\n${n} passed`);
