@@ -9,9 +9,9 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, dropHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
-import { unconfirmedClears } from "./lib/clearOutcome.js";
+import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskIdsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge } from "./lib/supabase.js";
 import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, filesNote, fileFlushReady, classifyPath, liveFormPaths } from "./lib/fileDelete.js";
@@ -2321,17 +2321,19 @@ export default function ProximaApp() {
 
   // ─── DELETE MEANS DELETE (owner, 2026-10-21: "literally everything as far as can be reached should be deleted and
   // unrecoverable") ───
-  // After Clear Logs / Clear Outputs / Reset Everything: whatever the cloud still holds goes into the delete queue (replayed
-  // on Save and on load), so a clear that failed is retried instead of reported done (review wf_1945b758-923 #1). An
-  // unreadable cloud retries every removed id. True only when the cloud is confirmed empty of them.
-  const queueCloudLeftovers = async ({ tasks, history }) => {
-    const left = await pullCloudIds();
+  // Clear Logs / Clear Outputs / Reset Everything queue a delete intent for every removed id BEFORE the clear fires
+  // (queueDeleteIntents), so a tab killed mid-clear replays them on load and the reconcile never brings those rows back
+  // (review wf_ec400a67-988 #1). After the clear, the cloud is read again: the ids it no longer holds are settled, the
+  // rest stay queued (replayed on Save and on load), and an unreadable cloud settles nothing (clearOutcome.js
+  // clearSettlement). True only when the cloud is confirmed free of them.
+  const settleCloudClear = async ({ tasks, history }) => {
+    const cloud = await pullCloudIds();
     let clean = true;
     for (const [kind, table, ids] of [["task-delete", "tasks", tasks], ["history-delete", "history", history]]) {
       if (!ids) continue;
-      const rest = left?.[table] ? [...left[table]] : ids;
-      for (const id of rest) addFailedSync({ kind, id, data: id });
-      if (rest.length) clean = false;
+      const { done, left } = clearSettlement(ids, cloud?.[table] ?? null);
+      settleDeleteIntents(kind, done);
+      if (left.length) clean = false;
     }
     setFailedSyncCount(getFailedSyncs().length);
     return clean;
@@ -4426,10 +4428,13 @@ export default function ProximaApp() {
                       const removedLogIds = logsRef.current.map(l => l.id);
                       const { history: queuedLogIds } = dropQueuedUploads(["history"]);
                       for (const id of [...removedLogIds, ...queuedLogIds]) deletingLogIds.current.add(id);
+                      const clearedLogIds = [...removedLogIds, ...queuedLogIds];
+                      queueDeleteIntents("history-delete", clearedLogIds);   // before the clear fires (review wf_ec400a67-988 #1)
+                      setFailedSyncCount(getFailedSyncs().length);
                       setLogs([]); savedLogIds.current.clear();
                       await clearHistory();
                       await clearHistoryRemote();
-                      const logsGone = await queueCloudLeftovers({ history: removedLogIds });
+                      const logsGone = await settleCloudClear({ history: clearedLogIds });
                       getStorageStats().then(s => setStorageStats(s));
                       if (!logsGone) {
                         setSaveStatus("error");
@@ -4473,9 +4478,12 @@ export default function ProximaApp() {
                       for (const id of [...removed.map(t => t.id), ...queuedTaskIds]) deletingIds.current.add(id);
                       releasePredictions(removed.map(t => t.taskId)); recordClaimants(removed, { deleted: true });
                       const plan = stagePurge(removed, [], { all: true });   // queued before the clears; every generation goes, so no item is outstanding (review #4)
+                      const clearedTaskIds = [...removed.map(t => t.id), ...queuedTaskIds];
+                      queueDeleteIntents("task-delete", clearedTaskIds);   // before the clear fires (review wf_ec400a67-988 #1)
+                      setFailedSyncCount(getFailedSyncs().length);
                       setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
                       const { filesPending, filesHeld } = await purgeEverywhere(plan);
-                      const outputsGone = await queueCloudLeftovers({ tasks: removed.map(t => t.id) });
+                      const outputsGone = await settleCloudClear({ tasks: clearedTaskIds });
                       getStorageStats().then(s => setStorageStats(s));
                       if (!outputsGone) {
                         setSaveStatus("error");
@@ -4534,6 +4542,11 @@ export default function ProximaApp() {
                       for (const id of [...removedTasks.map(t => t.id), ...queuedTaskIds]) deletingIds.current.add(id);
                       for (const id of [...removedLogs.map(l => l.id), ...queuedLogIds]) deletingLogIds.current.add(id);
                       const plan = stagePurge(removedTasks, [], { history: false, alsoLogs: removedLogs });   // queued before the clears below fire
+                      const clearedTaskIds = [...removedTasks.map(t => t.id), ...queuedTaskIds];
+                      const clearedLogIds = [...removedLogs.map(l => l.id), ...queuedLogIds];
+                      queueDeleteIntents("task-delete", clearedTaskIds);      // before the clears fire (review wf_ec400a67-988 #1)
+                      queueDeleteIntents("history-delete", clearedLogIds);
+                      setFailedSyncCount(getFailedSyncs().length);
                       // Clear local IndexedDB
                       await clearHistory();
                       await clearTasksDB();
@@ -4544,12 +4557,12 @@ export default function ProximaApp() {
                         clearSettingsRemote(),
                         clearFavoritesRemote(),
                       ]);
-                      // Tasks and History are re-checked and retried below (queueCloudLeftovers); settings and favorites
+                      // Tasks and History are re-checked and retried below (settleCloudClear); settings and favorites
                       // have no retry, so a refused clear must be reported, or the cloud copy returns on the next load.
                       const prefsLeft = unconfirmedClears(cloudClears.slice(2), ["settings", "favorites"]);
                       // Everywhere else: WaveSpeed, all files, backup copies (History was cleared above).
                       const { filesPending, filesHeld } = await purgeEverywhere(plan);
-                      const resetGone = await queueCloudLeftovers({ tasks: removedTasks.map(t => t.id), history: removedLogs.map(l => l.id) });
+                      const resetGone = await settleCloudClear({ tasks: clearedTaskIds, history: clearedLogIds });
                       // Clear local settings
                       setBalance(null);
                       getStorageStats().then(s => setStorageStats(s));

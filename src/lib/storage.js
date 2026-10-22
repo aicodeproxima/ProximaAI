@@ -523,6 +523,28 @@ export function removeFailedSync(kind, id, onlyIf) {
   } catch {}
 }
 
+// Clear Outputs / Clear Logs / Reset Everything: every removed id's delete intent, written in one go BEFORE the clear
+// request fires (CLAUDE.md queue-first), so a tab killed mid-clear replays it and the mount replay keeps those ids
+// deleting (review wf_ec400a67-988 #1). Delete intents are never capped.
+export function queueDeleteIntents(kind, ids) {
+  try {
+    const want = new Set((ids || []).filter(Boolean));
+    if (!want.size) return;
+    const now = Date.now();
+    const list = getFailedSyncs().filter(e => !(e.kind === kind && want.has(e.id)));
+    for (const id of want) list.push({ kind, id, data: id, ts: now, attempts: 1 });
+    localStorage.setItem(FAILED_KEY, JSON.stringify(list));
+  } catch {}
+}
+// The intents a confirmed clear settled (clearOutcome.js clearSettlement), removed in one write.
+export function settleDeleteIntents(kind, ids) {
+  try {
+    const done = new Set(ids || []);
+    if (!done.size) return;
+    localStorage.setItem(FAILED_KEY, JSON.stringify(getFailedSyncs().filter(e => !(e.kind === kind && done.has(e.id)))));
+  } catch {}
+}
+
 // A rename moves every cloud row to the new account name; a favorites retry queued under the old name must follow it, or
 // it is never sent nor removed. One account per browser (the app has a single owner), so any other scope is an earlier
 // name of this account. When both names hold one, the newer snapshot wins.

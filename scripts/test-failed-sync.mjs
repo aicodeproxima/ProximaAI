@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k) };
-const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries } = await import("../src/lib/storage.js");
+const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -59,6 +59,19 @@ test("delete intents are never evicted by the cap; only uploads are", () => {
   assert.equal(q.filter(e => e.kind === "task").length, 0, "uploads are what the cap trims");
   addFailedSync({ kind: "task", id: "late", data: { id: "late" } });
   assert.ok(getFailedSyncs().some(e => e.id === "late"), "the newest upload is never the one dropped");
+});
+
+// Review wf_ec400a67-988 #1 (2026-10-22): a clear queues its delete intents in one write BEFORE the request fires, and
+// settles only the ones the cloud confirmed.
+test("a clear queues every delete intent in one write, and settles only the confirmed ones", () => {
+  addFailedSync({ kind: "task", id: "keep-upload", data: { id: "keep-upload" } });
+  addFailedSync({ kind: "task-delete", id: "a", data: "a" });
+  queueDeleteIntents("task-delete", ["a", "b", "c", "", null]);
+  assert.deepEqual(getFailedSyncs().filter(e => e.kind === "task-delete").map(e => e.id).sort(), ["a", "b", "c"], "deduped, empties skipped");
+  settleDeleteIntents("task-delete", ["a", "c"]);
+  assert.deepEqual(getFailedSyncs().map(e => `${e.kind}:${e.id}`), ["task:keep-upload", "task-delete:b"]);
+  queueDeleteIntents("history-delete", Array.from({ length: 600 }, (_, i) => "h" + i));
+  assert.equal(getFailedSyncs().filter(e => e.kind === "history-delete").length, 600, "a large clear is never capped");
 });
 
 // RLS design panel wf_89f53ef9-80f (2026-10-22): favorites retries are keyed by the account scope and replayed only for
