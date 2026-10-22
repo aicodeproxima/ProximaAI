@@ -62,5 +62,29 @@ begin
       then 'ok restore-marks-time; ' else format('FAIL restore-marks-time %s %s; ', r, (select value from settings where device_id = u and key = 'last_restore_at')) end;
   exception when others then out := out || format('FAIL restore-marks-time %s; ', sqlstate); end;
 
+  -- 4. Review round 3 (migration 20261022211000): the cloud Generate-form holds (settings form-inputs:<browser>) are
+  --    live state, not data. A restore keeps the live ones and brings none back; backups never carry them.
+  declare v_m3 uuid; v_hold jsonb; v_theme jsonb; v_snap uuid; v_snapset jsonb;
+  begin
+    insert into settings (device_id, key, value) values
+      (u, 'form-inputs:rs-phone', '{"at": 5, "paths": ["uploads/rs/live.png"]}'), (u, 'rs-theme', '"dark"');
+    insert into data_backups (username, backup_type, task_count, history_count, settings_snapshot, tasks_snapshot, history_snapshot)
+      values (u, 'manual', 0, 0, '{"form-inputs:rs-phone": {"at": 1, "paths": ["uploads/rs/old.png"]}, "form-inputs:rs-gone": {"at": 1, "paths": ["uploads/rs/x.png"]}, "rs-theme": "light"}', '[]', '[]')
+      returning id into v_m3;
+    r := restore_my_backup_phase2(v_tok, v_m3);
+    select value into v_hold from settings where device_id = u and key = 'form-inputs:rs-phone';
+    select value into v_theme from settings where device_id = u and key = 'rs-theme';
+    update app_secrets set value = '{"enabled": true}' where key = 'auto_backups';
+    v_snap := (snapshot_my_data_phase2(v_tok, 'manual', 'rs-test')->>'id')::uuid;
+    select settings_snapshot into v_snapset from data_backups where id = v_snap;
+    update app_secrets set value = '{"enabled": false}' where key = 'auto_backups';
+    out := out || case when r->>'ok' = 'true' and v_hold->'paths' = '["uploads/rs/live.png"]'
+                        and not exists (select 1 from settings where device_id = u and key = 'form-inputs:rs-gone')
+                        and v_theme = '"light"' and v_snapset ? 'rs-theme' and not (v_snapset ? 'form-inputs:rs-phone')
+      then 'ok form-holds-survive-restore; '
+      else format('FAIL form-holds-survive-restore hold=%s theme=%s snapkeys=%s; ', v_hold, v_theme,
+                  (select string_agg(k, ',') from jsonb_object_keys(coalesce(v_snapset, '{}')) k)) end;
+  exception when others then out := out || format('FAIL form-holds-survive-restore %s %s; ', sqlstate, sqlerrm); end;
+
   raise exception 'RESULT: %', out;
 end $t$;
