@@ -16,6 +16,10 @@ export function accessToken() {
   return t;
 }
 
+// A failed query's text is kept up to this length: a SQL test reports through its error (RESULT: ...), and 2000 cut off
+// the later cases of a long suite (found in review round 10).
+const ERROR_TEXT_MAX = 20000;
+
 // Runs SQL as the database owner; returns the parsed rows (throws on an HTTP error). `readOnly`: the database runs it in
 // a read-only transaction, so any write (a statement or a function that writes) fails with 25006.
 export async function sql(query, { readOnly = false } = {}) {
@@ -25,7 +29,7 @@ export async function sql(query, { readOnly = false } = {}) {
     body: JSON.stringify({ query, read_only: readOnly }),
   });
   const text = await r.text();
-  if (!r.ok) throw new Error(`SQL HTTP ${r.status}: ${text.slice(0, 2000)}`);
+  if (!r.ok) throw new Error(`SQL HTTP ${r.status}: ${text.slice(0, ERROR_TEXT_MAX)}`);
   return JSON.parse(text);
 }
 
