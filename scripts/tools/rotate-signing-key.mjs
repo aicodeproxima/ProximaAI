@@ -87,21 +87,36 @@ async function main() {
   const subject = "admin:" + acct.u, curKey = acct.k;
   secrets.push(curKey);
   const envs = (await retry(() => vercel("GET", `/v9/projects/${PROJECT}/env`))).envs || [];
-  const keyEnv = envs.find(e => e.key === ENV_KEY);
-  let prevEnv = envs.find(e => e.key === ENV_PREV);
-  if (!keyEnv) throw new Error(`Vercel: ${ENV_KEY} not found`);
-  const busy = (await retry(() => vercel("GET", `/v6/deployments?projectId=${PROJECT}&target=production&state=BUILDING,QUEUED,INITIALIZING&limit=5`))).deployments || [];
-  if (busy.length) throw new Error("a production build is in flight; wait for it and rerun");
+  // Every SESSION_SIGNING_KEY row (one per environment set) gets the new key, and exactly one of them must serve
+  // production: otherwise stop and list them (review round 2: editing the wrong row would break the proxy later).
+  const keyRows = envs.filter(e => e.key === ENV_KEY && !e.gitBranch);
+  const prodRows = keyRows.filter(e => (e.target || []).includes("production"));
+  if (prodRows.length !== 1) {
+    throw new Error(`Vercel: expected exactly one ${ENV_KEY} row for production, found ${prodRows.length}: ` +
+      (envs.filter(e => e.key === ENV_KEY).map(e => `${e.target}${e.gitBranch ? " @" + e.gitBranch : ""}`).join("; ") || "none"));
+  }
+  const keyEnv = prodRows[0];
+  let prevEnv = envs.find(e => e.key === ENV_PREV && !e.gitBranch);
+  const productionBusy = async () => ((await retry(() => vercel("GET", `/v6/deployments?projectId=${PROJECT}&target=production&state=BUILDING,QUEUED,INITIALIZING&limit=5`))).deployments || []).length > 0;
+  if (await productionBusy()) throw new Error("a production build is in flight; wait for it and rerun");
   const liveUid = await liveDeployment();
   if (!liveUid) throw new Error(`Vercel: ${ALIAS} has no deployment`);
+  const dbKeyWorks = async () => (await proxyBalance(tokenWith(curKey, subject))) === 200;
 
   if (mode === "finish") {
+    // Only clean-up: the live proxy must accept the database's key before and after (review round 2: a --finish after a
+    // database switch that never happened would otherwise leave Vercel with a key nobody holds).
+    if (!(await dbKeyWorks())) throw new Error("the live proxy refuses the database's key right now; not touching Vercel");
     console.log("Finish: removing SESSION_SIGNING_KEY_PREVIOUS and redeploying…");
     if (prevEnv) await vercel("DELETE", `/v9/projects/${PROJECT}/env/${prevEnv.id}`);
-    if (await findEnv(ENV_PREV)) throw new Error(`${ENV_PREV} is still there`);
-    await redeployProduction(liveUid);
-    console.log("Done: Vercel holds only the database's key.");
-    return 0;
+    const uid = await redeployProduction(liveUid);
+    if (await dbKeyWorks()) { console.log("Done: Vercel holds only the database's key."); return 0; }
+    console.error("    Without the previous key the proxy refuses the database's key: putting it back as previous…");
+    await vercel("POST", `/v10/projects/${PROJECT}/env`, { key: ENV_PREV, value: curKey, type: "sensitive", target: keyEnv.target });
+    await redeployProduction(uid);
+    console.error((await dbKeyWorks()) ? "    Restored: the app works. The database still holds the old key: run --rotate again, not --finish."
+      : "    Restore did not take: in Vercel, set SESSION_SIGNING_KEY_PREVIOUS to the database's key and redeploy.");
+    return 1;
   }
 
   const before = await proxyBalance(tokenWith(curKey, subject));
@@ -119,19 +134,20 @@ async function main() {
   // ── 1) Vercel accepts both ──
   const oldKey = curKey, newKey = randomBytes(32).toString("hex");
   secrets.push(newKey);
-  console.log("1/4 Vercel: new key, old key kept as previous; production redeploy…");
+  console.log(`1/4 Vercel: new key, old key kept as previous; production redeploy… (started ${new Date().toISOString()})`);
+  let dualUid;
   try {
-    await setEnv(keyEnv, newKey);
+    for (const r of keyRows) await setEnv(r, newKey);
     if (prevEnv) await setEnv(prevEnv, oldKey);
     else await vercel("POST", `/v10/projects/${PROJECT}/env`, { key: ENV_PREV, value: oldKey, type: "sensitive", target: keyEnv.target });
     if (!(await findEnv(ENV_PREV))) throw new Error(`${ENV_PREV} was not created`);
-    await redeployProduction(liveUid);
+    dualUid = await redeployProduction(liveUid);
     if ((await proxyBalance(tokenWith(oldKey, subject))) !== 200) throw new Error("after the redeploy the proxy no longer accepts the current key");
   } catch (e) {
     console.error("    step 1 failed:", clean(e));
     console.error("    The database is untouched, so the app keeps working on the old key. Putting the Vercel variables back…");
     try {
-      await setEnv(keyEnv, oldKey);
+      for (const r of keyRows) await setEnv(r, oldKey);
       const pe = await findEnv(ENV_PREV);
       if (pe) await vercel("DELETE", `/v9/projects/${PROJECT}/env/${pe.id}`);
       console.error(`    Restored: ${ENV_KEY} = old key, ${ENV_PREV} removed. Live deployment: ${(await liveDeployment())?.slice(0, 12)}… Nothing else changed.`);
@@ -142,7 +158,15 @@ async function main() {
   }
 
   // ── 2) Database switches ──
+  // Production must still be served by the dual-key deployment: a push or a promotion meanwhile could serve a build
+  // without the new key (review round 2). Otherwise stop: the database is untouched, and every deployment built from
+  // here on has both keys, so the app works.
+  if ((await liveDeployment()) !== dualUid || await productionBusy()) {
+    console.error("    Production changed since the redeploy (another deploy?). Database untouched, the app works. Rerun --rotate.");
+    return 1;
+  }
   console.log("2/4 Database: new key (the old one stops working everywhere)…");
+  const switchAt = new Date().toISOString();
   try {
     await sql(`update public.app_secrets set value = jsonb_set(value, '{key}', to_jsonb(${lit(newKey)}::text)), updated_at = now() where key = 'session_signing_key';
                delete from public.app_secrets where key = 'session_signing_key_previous';`);
@@ -151,7 +175,19 @@ async function main() {
   try { state = (await dbHas(newKey)) ? "new" : (await dbHas(oldKey)) ? "old" : "other"; } catch (e) { state = "unknown"; console.warn("    could not read it back:", clean(e)); }
   if (state !== "new") {
     console.error(`    Database key is ${state}. Vercel accepts both keys, so the app keeps working.` +
-      (state === "old" ? " Rerun --rotate later." : " Do NOT change Vercel; check app_secrets.session_signing_key, then rerun."));
+      (state === "old" ? " Rerun --rotate later." : ` Do NOT change Vercel. Check whether it switched: node scripts/tools/sb-query.mjs "select updated_at from public.app_secrets where key = 'session_signing_key'" (later than ${switchAt} = switched), then rerun --rotate.`));
+    return 1;
+  }
+  // The live proxy must accept the new key now; if it does not, the database goes straight back to the old key (Vercel
+  // still accepts it as previous), so there is never an outage.
+  const [probe] = await retry(() => sql(`select public._sign_session_token(${lit(subject)}, now() + interval '12 hours 2 minutes') as t`));
+  if ((await proxyBalance(probe.t)) !== 200) {
+    console.error("    The live proxy does not accept the new key: putting the database back to the old key…");
+    try { await sql(`update public.app_secrets set value = jsonb_set(value, '{key}', to_jsonb(${lit(oldKey)}::text)), updated_at = now() where key = 'session_signing_key';`); }
+    catch (e) { console.warn("    revert failed or its reply was lost:", clean(e)); }
+    const back = await dbHas(oldKey).catch(() => false);
+    console.error(back ? "    Database back on the old key; the app works (Vercel accepts it as previous). Nothing else changed."
+      : "    COULD NOT confirm the revert: sign-ins may fail until app_secrets.session_signing_key matches Vercel. Rerun --rotate.");
     return 1;
   }
 
