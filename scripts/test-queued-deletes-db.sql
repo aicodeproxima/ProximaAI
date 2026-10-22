@@ -64,5 +64,21 @@ begin
       then 'ok restore-voids-older; ' else format('FAIL restore-voids-older marker=%s %s; ', v_marker, r) end;
   exception when others then out := out || format('FAIL restore-voids-older %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 5. Review round 5 (migration 20261022250000): restore, delete_queued_rows and rename_my_account all take the account's
+  --    restore marker before they touch its tasks rows, so no two of them wait on each other in opposite orders (the
+  --    rename needs the owner's password, so its body is checked here rather than called).
+  declare v_bad text;
+  begin
+    select string_agg(p.proname, ',') into v_bad
+      from pg_proc p
+     where p.pronamespace = 'public'::regnamespace
+       and p.proname in ('restore_my_backup_phase2', 'delete_queued_rows', 'rename_my_account')
+       and not (position('last_restore_at'' for' in p.prosrc) > 0      -- the lock statement: "... 'last_restore_at' for update|share"
+                and position('last_restore_at'' for' in p.prosrc)
+                    < least(coalesce(nullif(position('delete from tasks' in p.prosrc), 0), 999999),
+                            coalesce(nullif(position('update tasks' in p.prosrc), 0), 999999)));
+    out := out || case when v_bad is null then 'ok marker-lock-first; ' else format('FAIL marker-lock-first %s; ', v_bad) end;
+  exception when others then out := out || format('FAIL marker-lock-first %s %s; ', sqlstate, sqlerrm); end;
+
   raise exception 'RESULT: %', out;
 end $t$;
