@@ -19,7 +19,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate } from "./lib/syncReconcile.js";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted } from "./lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -2404,14 +2404,16 @@ export default function ProximaApp() {
   // returns the plan; purgeEverywhere(plan) runs it once the caller's row delete has answered, so a rewritten History
   // entry is uploaded after the deleted tasks are tombstoned (review wf_1945b758-923 #5).
   // `history: false` + `alsoLogs`: the caller clears History itself (Reset Everything) and passes the entries it removed.
-  const stagePurge = useCallback((removed, kept, { history = true, alsoLogs = [], all = false } = {}) => {
-    const plan = planPurge(logsRef.current, removed, kept, { history, alsoLogs, all });
+  // `logs`: plan over these entries instead of this device's (Clear Outputs passes local + cloud, review round 2); only
+  // the local ones change here, the cloud-only ones are just deleted.
+  const stagePurge = useCallback((removed, kept, { history = true, alsoLogs = [], all = false, logs } = {}) => {
+    const plan = planPurge(logs || logsRef.current, removed, kept, { history, alsoLogs, all });
     const now = Date.now();
     writeWsDeletes(queueDeletes(readWsDeletes(), removed, now));
     writeFileDeletes(queueFileDeletes(readFileDeletes(), plan.paths, now));
     if (history && (plan.remove.length || plan.rewrite.length)) {
       const gone = new Set(plan.remove), byId = new Map(plan.rewrite.map(l => [l.id, l]));
-      logsRef.current = plan.keptLogs;
+      logsRef.current = logsRef.current.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l);
       setLogs(prev => prev.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l));
       for (const l of plan.rewrite) { savedLogIds.current.add(l.id); addHistoryEntry(l); addFailedSync({ kind: "history", id: l.id, data: l }); }
       for (const id of plan.remove) {
@@ -4508,7 +4510,9 @@ export default function ProximaApp() {
                       const { task: queuedTaskIds } = dropQueuedUploads(["task"]);
                       for (const id of [...removed.map(t => t.id), ...queuedTaskIds]) deletingIds.current.add(id);
                       releasePredictions(removed.map(t => t.taskId)); recordClaimants(removed, { deleted: true });
-                      const plan = stagePurge(removed, [], { all: true });   // queued before the clears; every generation goes, so no item is outstanding (review #4)
+                      // Queued before the clears; every generation goes, so no item is outstanding (review #4); planned over
+                      // the cloud's History too, so entries beyond the loaded ones go with their files (review round 2).
+                      const plan = stagePurge(removed, [], { all: true, logs: mergeLogs(logsRef.current, remote.history) });
                       const clearedTaskIds = [...removed.map(t => t.id), ...queuedTaskIds];
                       queueDeleteIntents("task-delete", clearedTaskIds);   // before the clear fires (review wf_ec400a67-988 #1)
                       setFailedSyncCount(getFailedSyncs().length);

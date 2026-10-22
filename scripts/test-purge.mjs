@@ -2,7 +2,7 @@
 // deleting generations removes their files and History everywhere it can reach. Run: node scripts/test-purge.mjs
 import assert from "node:assert/strict";
 import { storagePathOf, storagePathsToDelete, planPurge, pathsInUse, ownedPaths, publicUrlOf } from "../src/lib/purge.js";
-import { purgeLogsForDeleted } from "../src/lib/batchLog.js";
+import { purgeLogsForDeleted, mergeLogs } from "../src/lib/batchLog.js";
 
 const S = "https://vhznmpxlcjbdzntmfvvy.supabase.co/storage/v1/object/public/generations/";
 let n = 0, failed = 0;
@@ -127,6 +127,19 @@ test("#8: an entry whose last item another device deleted is removed, not kept e
   assert.deepEqual(purgeLogsForDeleted(E, [{ id: "a" }], [], { removeEntries: false }), { remove: ["E"], rewrite: [] });
   const F = [{ id: "F", tasks: [{ id: "a", status: "completed" }, { id: "b", status: "completed" }] }];
   assert.deepEqual(purgeLogsForDeleted(F, [{ id: "a" }], [], { removeEntries: false }).remove, [], "items left: rewritten as before");
+});
+
+// Review round 2: Clear Outputs plans over this device's History AND the cloud's (entries beyond the loaded ones), so
+// every hit entry goes and its files are no longer kept "in use" by a forgotten cloud copy.
+test("Clear Outputs: cloud-only History entries are planned too (mergeLogs; local copies win)", () => {
+  const local = [{ id: "L1", tasks: [{ id: "t1", status: "completed", outputs: [S + "u/a.png"] }] }];
+  const cloud = [{ id: "L1", tasks: [] }, { id: "C9", sourceImageUrl: S + "uploads/u/old.png", tasks: [{ id: "t9", status: "completed", outputs: [S + "u/z.png"] }] }];
+  const merged = mergeLogs(local, cloud);
+  assert.deepEqual(merged.map(l => l.id), ["L1", "C9"]);
+  assert.equal(merged[0], local[0], "the local copy wins");
+  const p = planPurge(merged, [{ id: "t1" }, { id: "t9", outputs: [S + "u/z.png"] }], [], { all: true });
+  assert.deepEqual(p.remove.sort(), ["C9", "L1"]);
+  assert.ok(p.paths.includes("u/z.png") && p.paths.includes("uploads/u/old.png"));
 });
 
 test("publicUrlOf round-trips through storagePathOf", () => {

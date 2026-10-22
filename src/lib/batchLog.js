@@ -79,6 +79,13 @@ export function purgeLogsForDeleted(logs, removedTasks, keptTasks, { removeEntri
   return { remove, rewrite };
 }
 
+// This device's History plus the cloud's entries it does not hold (beyond the loaded ones, or never synced here); the
+// local copy wins. Clear Outputs plans its purge over all of them (review round 2).
+export function mergeLogs(local, cloud) {
+  const have = new Set((local || []).map(l => l?.id));
+  return [...(local || []), ...(cloud || []).filter(c => c?.id && !have.has(c.id))];
+}
+
 // Entries still open here whose cloud copy another device already finished: that outcome wins (merged over the local
 // entry, which keeps fields the cloud row does not store, such as the source audio and video URLs replay uses). A
 // stale local copy would otherwise close or finish the entry from its own out-of-date tasks and overwrite the cloud.
