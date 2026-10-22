@@ -64,6 +64,26 @@ begin
       then 'ok restore-voids-older; ' else format('FAIL restore-voids-older marker=%s %s; ', v_marker, r) end;
   exception when others then out := out || format('FAIL restore-voids-older %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 6. Review round 6 (migration 20261022260000): a call that waited behind a rename must not run against the old, now
+  --    empty name (it reported deleted: 0 and the intent was settled). A concurrent wait cannot be staged in one
+  --    transaction, so: (a) both bodies check the session again AFTER taking the marker; (b) an old-name token is refused
+  --    and its row stays.
+  declare v_old_tok text := v_tok; v_bad text;
+  begin
+    select string_agg(p.proname, ',') into v_bad from pg_proc p
+     where p.pronamespace = 'public'::regnamespace and p.proname in ('restore_my_backup_phase2', 'delete_queued_rows')
+       and not (position('_verify_session_token(p_session_token)' in substr(p.prosrc, position('last_restore_at'' for' in p.prosrc))) > 0);
+    insert into tasks (id, device_id, status, start_time, outputs) values ('qd-6', u, 'completed', 1000, '[]');
+    update app_secrets set value = jsonb_set(value, '{username}', '"__qd_renamed"') where key = 'admin_username';
+    begin
+      r := delete_queued_rows(v_old_tok, 'task', array['qd-6'], 9e12::bigint);
+      v_bad := coalesce(v_bad || ',', '') || 'answered';
+    exception when others then null; end;
+    update app_secrets set value = jsonb_set(value, '{username}', '"__qd_test"') where key = 'admin_username';
+    out := out || case when v_bad is null and exists (select 1 from tasks where id = 'qd-6') then 'ok recheck-after-lock; '
+                       else format('FAIL recheck-after-lock %s; ', v_bad) end;
+  exception when others then out := out || format('FAIL recheck-after-lock %s %s; ', sqlstate, sqlerrm); end;
+
   -- 5. Review round 5 (migration 20261022250000): restore, delete_queued_rows and rename_my_account all take the account's
   --    restore marker before they touch its tasks rows, so no two of them wait on each other in opposite orders (the
   --    rename needs the owner's password, so its body is checked here rather than called).
