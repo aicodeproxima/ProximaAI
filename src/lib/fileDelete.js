@@ -91,7 +91,14 @@ export function purgeNote({ files = 0, held = 0, ws = 0, history = false } = {})
   return (files ? ` — ${files} file${s(files)} still being deleted (retried automatically)` : "")
     + (held ? ` — ${held} file${s(held)} kept while the Generate form uses ${held === 1 ? "it" : "them"}` : "")
     + (ws ? ` — ${ws} WaveSpeed cop${ws === 1 ? "y" : "ies"} still being deleted (retried automatically)` : "")
-    + (history ? " — History removal will finish on your next save or reload" : "");
+    + (history ? " — History cleanup will finish on your next save or reload" : "");
+}
+// Whether this delete's History work is still in the retry queue: an entry removal the cloud has not confirmed, or a
+// rewrite (an entry that keeps some items) not uploaded yet (review round 2). `failed`: getFailedSyncs().
+export function historyLeft(plan, failed) {
+  if (!plan?.history) return false;
+  const removed = new Set(plan.remove || []), rewritten = new Set((plan.rewrite || []).map(l => l?.id));
+  return (failed || []).some(e => (e?.kind === "history-delete" && removed.has(e.id)) || (e?.kind === "history" && rewritten.has(e.id)));
 }
 export async function headStatus(url, fetchImpl = fetch) {
   if (!url) return 0;

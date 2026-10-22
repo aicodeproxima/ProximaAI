@@ -14,7 +14,7 @@ import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
 import { planPurge, ownedPaths, publicUrlOf, pathsInUse } from "./lib/purge.js";
-import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, fileFlushReady, classifyPath, liveFormPaths, formPublishDue } from "./lib/fileDelete.js";
+import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
@@ -2000,12 +2000,13 @@ export default function ProximaApp() {
 
   // Stores a History entry locally and in the cloud, queued first like every cloud write. A confirmed upload clears
   // only the version it sent: a batch's open entry can resolve after its finished version replaced it in the queue.
+  // Returns the upload, settled either way (a delete's toast waits for its rewrites, review round 2).
   const persistLog = useCallback((entry) => {
     savedLogIds.current.add(entry.id);
     addHistoryEntry(entry);
     addFailedSync({ kind: "history", id: entry.id, data: entry });
     setFailedSyncCount(getFailedSyncs().length);
-    trackedSync(`history-${entry.id}${isOpenLog(entry) ? "-open" : ""}`, () => syncHistoryEntry(entry))
+    return trackedSync(`history-${entry.id}${isOpenLog(entry) ? "-open" : ""}`, () => syncHistoryEntry(entry))
       .then(() => { removeFailedSync("history", entry.id, e => sameLogContent(e.data, entry)); setFailedSyncCount(getFailedSyncs().length); })
       .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
   }, [trackedSync]);
@@ -2430,22 +2431,25 @@ export default function ProximaApp() {
     if (!plan) return { note: "" };
     await flushWsDeletes();
     if (plan.history) {
-      // The current version (finishLogs may have closed it meanwhile): uploaded now, queued already.
-      for (const l of plan.rewrite) persistLog(logsRef.current.find(x => x.id === l.id) || l);
+      // The current version (finishLogs may have closed it meanwhile): uploaded now, queued already. Awaited, so the
+      // toast below knows whether each rewrite landed.
+      const rewrites = Promise.all(plan.rewrite.map(l => persistLog(logsRef.current.find(x => x.id === l.id) || l)));
       if (plan.remove.length) {
         await deleteHistoryEntries(plan.remove);
         const hr = await deleteHistoryRemote(plan.remove);
         if (hr?.ok) settleDeleteIntents("history-delete", plan.remove);
       }
+      await rewrites;
     }
     await flushFileDeletes();
     setFailedSyncCount(getFailedSyncs().length);
-    // What is not finished yet goes in the toast (review wf_ec400a67-988 #4): files, WaveSpeed copies, History removal.
-    const q = readFileDeletes(), ws = readWsDeletes(), failed = getFailedSyncs();
+    // What is not finished yet goes in the toast (review wf_ec400a67-988 #4 and round 2): files, WaveSpeed copies,
+    // History removals and rewrites.
+    const q = readFileDeletes(), ws = readWsDeletes();
     return { note: purgeNote({
       files: pendingOf(q, plan.paths), held: heldOf(q, plan.paths),
       ws: (plan.predictionIds || []).filter(id => ws[id]).length,
-      history: plan.history && plan.remove.some(id => failed.some(e => e.kind === "history-delete" && e.id === id)),
+      history: historyLeft(plan, getFailedSyncs()),
     }) };
   }, [flushWsDeletes, persistLog, flushFileDeletes]);
   // Both delete queues also run every minute while visible. Return to the app and reconnecting run a cloud sync pass

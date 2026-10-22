@@ -4,7 +4,7 @@
 // Run: node scripts/test-file-delete.mjs
 import assert from "node:assert/strict";
 import { queueFileDeletes, dueFileDeletes, headOutcome, settleFileDelete, fileFlushReady, pendingOf, purgeNote, headStatus, FILE_DELETE_CHUNK,
-  classifyPath, liveFormPaths, heldOf, formPublishDue, FORM_CLOUD_HEARTBEAT_MS, FORM_HOLD_ALIVE_MS } from "../src/lib/fileDelete.js";
+  classifyPath, liveFormPaths, heldOf, formPublishDue, FORM_CLOUD_HEARTBEAT_MS, FORM_HOLD_ALIVE_MS, historyLeft } from "../src/lib/fileDelete.js";
 
 let n = 0, failed = 0;
 const test = async (name, fn) => {
@@ -148,10 +148,22 @@ await test("#6: when the other devices' form holds could not be read, an upload 
 await test("purgeNote names pending WaveSpeed copies and a pending History removal too; nothing pending -> empty", () => {
   assert.match(purgeNote({ ws: 1 }), /1 WaveSpeed copy still being deleted/);
   assert.match(purgeNote({ ws: 3 }), /3 WaveSpeed copies/);
-  assert.match(purgeNote({ history: true }), /History removal will finish/);
+  assert.match(purgeNote({ history: true }), /History cleanup will finish/);
   const all = purgeNote({ files: 1, held: 1, ws: 2, history: true });
-  for (const re of [/1 file still/, /kept while/, /2 WaveSpeed copies/, /History removal/]) assert.match(all, re);
+  for (const re of [/1 file still/, /kept while/, /2 WaveSpeed copies/, /History cleanup/]) assert.match(all, re);
   assert.equal(purgeNote({ files: 0, held: 0, ws: 0, history: false }), "");
+});
+
+// Review round 2: a History entry that keeps some items is rewritten, and that upload can be pending too (the toast
+// only ever looked at removals).
+await test("historyLeft: a pending removal or a pending rewrite of this delete's entries; nothing else", () => {
+  const plan = { history: true, remove: ["h1"], rewrite: [{ id: "h2" }] };
+  assert.equal(historyLeft(plan, []), false);
+  assert.equal(historyLeft(plan, [{ kind: "history-delete", id: "h1" }]), true, "removal not confirmed");
+  assert.equal(historyLeft(plan, [{ kind: "history", id: "h2" }]), true, "rewrite not uploaded");
+  assert.equal(historyLeft(plan, [{ kind: "history", id: "h9" }, { kind: "history-delete", id: "h8" }, { kind: "task", id: "h2" }]), false, "others' entries");
+  assert.equal(historyLeft({ ...plan, history: false }, [{ kind: "history", id: "h2" }]), false, "a delete that touches no History");
+  assert.equal(historyLeft(null, [{ kind: "history", id: "h2" }]), false);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);
