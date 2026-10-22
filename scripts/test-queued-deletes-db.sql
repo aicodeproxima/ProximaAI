@@ -119,6 +119,29 @@ begin
       then 'ok generations-live; ' else format('FAIL generations-live %s; ', v_live) end;
   exception when others then reset role; out := out || format('FAIL generations-live %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 10. Review round 8 (migration 20261022280000): the History half of a task delete happens in the same transaction as
+  --     the row delete, so a restore can never land between them. A deleted generation's item leaves its entries (cost
+  --     recomputed), an entry left empty is removed, and a voided delete leaves History untouched.
+  declare v_tasks jsonb; v_cost numeric;
+  begin
+    insert into tasks (id, device_id, status, start_time, outputs) values ('qd-s1', u, 'completed', 1000, '[]'), ('qd-s2', u, 'completed', 1000, '[]'),
+                                                                          ('qd-s3', u, 'completed', 1000, '[]');
+    insert into history (id, device_id, timestamp, tasks, total_cost) values
+      ('qd-SH', u, 1000, '[{"id":"qd-s1","status":"completed","cost":1,"outputs":[]},{"id":"qd-s2","status":"completed","cost":2,"outputs":[]}]', 3),
+      ('qd-SE', u, 1000, '[{"id":"qd-s1","status":"completed","cost":1,"outputs":[]}]', 1),
+      ('qd-SV', u, 1000, '[{"id":"qd-s3","status":"completed","cost":4,"outputs":[]}]', 4);
+    r := delete_queued_rows(v_tok, 'task', array['qd-s1'], 9e12::bigint);
+    select tasks, total_cost into v_tasks, v_cost from history where id = 'qd-SH';
+    insert into settings (device_id, key, value) values (u, 'last_restore_at', to_jsonb(9e12::bigint + 10))
+      on conflict (device_id, key) do update set value = excluded.value;
+    perform delete_queued_rows(v_tok, 'task', array['qd-s3'], 9e12::bigint);   -- voided: queued before that "restore"
+    out := out || case when v_tasks = '[{"id":"qd-s2","status":"completed","cost":2,"outputs":[]}]' and v_cost = 2
+                        and not exists (select 1 from history where id = 'qd-SE')
+                        and exists (select 1 from history where id = 'qd-SV' and jsonb_array_length(tasks) = 1)
+      then 'ok history-in-same-transaction; '
+      else format('FAIL history-in-same-transaction SH=%s cost=%s SE=%s; ', v_tasks, v_cost, exists (select 1 from history where id = 'qd-SE')) end;
+  exception when others then out := out || format('FAIL history-in-same-transaction %s %s; ', sqlstate, sqlerrm); end;
+
   -- 7. Review round 6 (migration 20261022261000): the backup-scrub drain takes each account's restore marker before it
   --    touches the queue or the backups, like restore, rename and replayed deletes (a cron drain and a rename locked
   --    backup_scrub_queue / data_backups in opposite orders).
