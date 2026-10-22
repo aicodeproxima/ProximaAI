@@ -66,5 +66,21 @@ begin
     out := out || case when cardinality(r) = 4 then 'ok input-urls; ' else format('FAIL input-urls %s; ', r) end;
   exception when others then out := out || format('FAIL input-urls %s; ', sqlstate); end;
 
+  -- 6. The browser's own path: as anon with the session header, an upload carrying the four columns inserts, an
+  --    upsert of the same id changes them, and the row reads back with them (row policies and grants allow them).
+  begin
+    set local role anon;
+    perform set_config('request.headers', json_build_object('x-proxima-session', v_tok)::text, true);
+    insert into tasks (id, device_id, status, start_time, outputs, end_frame_url, source_audio_url)
+      values ('pu-a1', u, 'completed', 1000, '[]', 'e1', 'a1');
+    insert into tasks (id, device_id, status, start_time, outputs, end_frame_url, source_audio_url, source_video_url, ref_video_url)
+      values ('pu-a1', u, 'completed', 1000, '[]', 'e2', 'a2', 'v2', 'r2')
+      on conflict (id) do update set end_frame_url = excluded.end_frame_url, source_audio_url = excluded.source_audio_url,
+        source_video_url = excluded.source_video_url, ref_video_url = excluded.ref_video_url;
+    out := out || case when (select array[end_frame_url, source_audio_url, source_video_url, ref_video_url] from tasks where id = 'pu-a1')
+                            = array['e2', 'a2', 'v2', 'r2'] then 'ok anon-upsert; ' else 'FAIL anon-upsert values; ' end;
+    reset role;
+  exception when others then reset role; out := out || format('FAIL anon-upsert %s %s; ', sqlstate, sqlerrm); end;
+
   raise exception 'RESULT: %', out;
 end $t$;
