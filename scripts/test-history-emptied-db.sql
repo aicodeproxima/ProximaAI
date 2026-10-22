@@ -54,5 +54,19 @@ begin
       then 'ok partial-kept; ' else 'FAIL partial-kept; ' end;
   exception when others then out := out || format('FAIL partial-kept %s; ', sqlstate); end;
 
+  -- 6. The app's upsert (PostgREST: INSERT ... ON CONFLICT DO UPDATE) of an existing entry with only deleted items:
+  --    the BEFORE INSERT strip must not tombstone the live row and skip the write (review round 2); the update runs
+  --    and the emptied row is deleted the normal way.
+  begin
+    insert into history (id, device_id, timestamp, tasks, total_cost) values
+      ('he-U', u, 1000, '[{"id":"he-c","status":"completed","cost":1}]', 1);
+    insert into history (id, device_id, timestamp, tasks, total_cost) values
+      ('he-U', u, 1000, '[{"id":"he-a","status":"completed","cost":1}]', 1)
+      on conflict (id) do update set tasks = excluded.tasks, total_cost = excluded.total_cost;
+    out := out || case when not exists (select 1 from history where id = 'he-U')
+      and exists (select 1 from sync_tombstones where id = 'he-U' and kind = 'history')
+      then 'ok upsert-emptied; ' else format('FAIL upsert-emptied live=%s; ', exists (select 1 from history where id = 'he-U')) end;
+  exception when others then out := out || format('FAIL upsert-emptied %s; ', sqlstate); end;
+
   raise exception 'RESULT: %', out;
 end $t$;
