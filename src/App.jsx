@@ -19,7 +19,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, releaseRestored, historyRemovals, tombstonedItems } from "./lib/syncReconcile.js";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions } from "./lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -4635,21 +4635,29 @@ export default function ProximaApp() {
                       }
                       const all = new Map(tasksRef.current.map(t => [t.id, t]));
                       for (const t of remote.tasks) if (!all.has(t.id)) all.set(t.id, t);
-                      const removed = [...all.values()];
+                      const realTasks = [...all.values()];
+                      // Generations History holds without a tasks row (a restore keeps 500 tasks rows but up to 1000
+                      // entries) go too, with their files (review round 7).
+                      const mergedLogs = mergeLogs(logsRef.current, remote.history);
+                      const historyOnly = historyOnlyGenerations(mergedLogs, new Set(all.keys()));
+                      const removed = [...realTasks, ...historyOnly];
                       // Nothing removed may be uploaded again: the debounced queue, queued uploads (a failed upload left no
                       // tombstone to stop it) and this session's later replays (review wf_1945b758-923 #1).
                       if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
                       taskSyncQueueRef.current = [];
                       const { task: queuedTaskIds } = dropQueuedUploads(["task"]);
                       for (const id of [...removed.map(t => t.id), ...queuedTaskIds]) deletingIds.current.add(id);
-                      releasePredictions(removed.map(t => t.taskId)); recordClaimants(removed, { deleted: true });
+                      releasePredictions(realTasks.map(t => t.taskId)); recordClaimants(realTasks, { deleted: true });
                       // Queued before the clears; every generation goes, so no item is outstanding (review #4); planned over
                       // the cloud's History too, so entries beyond the loaded ones go with their files (review round 2).
-                      const plan = stagePurge(removed, [], { all: true, logs: mergeLogs(logsRef.current, remote.history) });
+                      const plan = stagePurge(removed, [], { all: true, logs: mergedLogs });
                       const clearedTaskIds = [...removed.map(t => t.id), ...queuedTaskIds];
-                      queueDeleteIntents("task-delete", clearedTaskIds);   // before the clear fires (review wf_ec400a67-988 #1)
+                      const queuedAt = queueDeleteIntents("task-delete", clearedTaskIds);   // before the clear fires (review wf_ec400a67-988 #1)
                       setFailedSyncCount(getFailedSyncs().length);
                       setTasks([]); clearTasksDB(); await clearTasksRemote(); savedTaskIds.current.clear();
+                      // The History-only ones have no row to clear: the server-checked delete records their user
+                      // tombstones while History still holds them, so other devices drop them too (review round 7).
+                      if (historyOnly.length) await deleteTasksRemote(historyOnly.map(g => g.id), queuedAt);
                       const { note } = await purgeEverywhere(plan);
                       const outputsGone = await settleCloudClear({ tasks: clearedTaskIds });
                       getStorageStats().then(s => setStorageStats(s));

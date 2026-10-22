@@ -61,6 +61,9 @@ export function purgeLogsForDeleted(logs, removedTasks, keptTasks, { removeEntri
   const keptBatches = new Set(keptTasks.map(t => t.batchId).filter(Boolean));
   const remove = [], rewrite = [];
   for (const log of logs) {
+    // `all` (Clear Outputs: every generation goes, and their History): every entry, hit or not, including older ones
+    // whose items carry no id (review round 7).
+    if (all) { remove.push(log.id); continue; }
     const items = Array.isArray(log.tasks) ? log.tasks : [];
     const hit = removedBatches.has(log.id) || items.some(i => i?.id && removedIds.has(i.id));
     if (!hit) continue;
@@ -77,6 +80,18 @@ export function purgeLogsForDeleted(logs, removedTasks, keptTasks, { removeEntri
     if (left.length !== items.length) rewrite.push({ ...log, tasks: left, totalCost: totalOf(left) });
   }
   return { remove, rewrite };
+}
+
+// Generations History holds without a task among `taskIds` (History-only: a restore keeps 500 tasks rows but up to 1000
+// entries, or a task upload never landed), as generations a purge removes: id, entry, outputs, status. Clear Outputs
+// removes them too, files included (review round 7).
+export function historyOnlyGenerations(logs, taskIds) {
+  const have = taskIds instanceof Set ? taskIds : new Set(taskIds || []);
+  const out = new Map();
+  for (const l of logs || []) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) {
+    if (i?.id && !have.has(i.id) && !out.has(i.id)) out.set(i.id, { id: i.id, batchId: l.id, outputs: i.outputs || [], status: i.status });
+  }
+  return [...out.values()];
 }
 
 // This device's History plus the cloud's entries it does not hold (beyond the loaded ones, or never synced here); the

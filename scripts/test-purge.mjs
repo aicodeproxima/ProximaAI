@@ -2,7 +2,7 @@
 // deleting generations removes their files and History everywhere it can reach. Run: node scripts/test-purge.mjs
 import assert from "node:assert/strict";
 import { storagePathOf, storagePathsToDelete, planPurge, pathsInUse, ownedPaths, publicUrlOf } from "../src/lib/purge.js";
-import { purgeLogsForDeleted, mergeLogs } from "../src/lib/batchLog.js";
+import { purgeLogsForDeleted, mergeLogs, historyOnlyGenerations } from "../src/lib/batchLog.js";
 
 const S = "https://vhznmpxlcjbdzntmfvvy.supabase.co/storage/v1/object/public/generations/";
 let n = 0, failed = 0;
@@ -140,6 +140,22 @@ test("Clear Outputs: cloud-only History entries are planned too (mergeLogs; loca
   const p = planPurge(merged, [{ id: "t1" }, { id: "t9", outputs: [S + "u/z.png"] }], [], { all: true });
   assert.deepEqual(p.remove.sort(), ["C9", "L1"]);
   assert.ok(p.paths.includes("u/z.png") && p.paths.includes("uploads/u/old.png"));
+});
+
+// Review round 7: Clear Outputs ("Clear ALL generations ... and their History") reached only generations with a tasks
+// row; History-only ones (a restore keeps 500 tasks rows but up to 1000 entries) stayed with their files. They become
+// removed generations too, and with all:true every entry goes, hit or not (older entries carry no item ids).
+test("Clear Outputs: History-only generations are removed with their files; all:true removes every entry", () => {
+  const logs = [
+    { id: "E1", tasks: [{ id: "t1", status: "completed", outputs: [S + "u/a.png"] }, { id: "h1", status: "completed", outputs: [S + "u/h.png"] }] },
+    { id: "E2", tasks: [{ id: "h1", status: "completed", outputs: [S + "u/h.png"] }, { id: "h2", status: "failed", outputs: [] }] },
+    { id: "OLD", tasks: [{ status: "completed", outputs: [S + "u/old.png"] }] },
+  ];
+  const only = historyOnlyGenerations(logs, new Set(["t1"]));
+  assert.deepEqual(only.map(g => [g.id, g.outputs]), [["h1", [S + "u/h.png"]], ["h2", []]]);
+  const p = planPurge(logs, [{ id: "t1", outputs: [S + "u/a.png"] }, ...only], [], { all: true });
+  assert.deepEqual(p.remove.sort(), ["E1", "E2", "OLD"]);
+  assert.ok(["u/a.png", "u/h.png", "u/old.png"].every(x => p.paths.includes(x)), p.paths.join(","));
 });
 
 test("publicUrlOf round-trips through storagePathOf", () => {
