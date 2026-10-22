@@ -2,8 +2,10 @@
 import assert from "node:assert/strict";
 
 const mem = new Map();
-globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k) };
-const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore } = await import("../src/lib/storage.js");
+globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
+  get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
+const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
+  publishFormPaths, readFormPublications } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -119,6 +121,16 @@ test("when both names have a favorites retry, the newer snapshot wins and one en
   addFailedSync(fav("user:Old", 5));
   rekeyFavoriteRetries("user:New");
   assert.deepEqual(getFailedSyncs().map(e => [e.scope, e.data.updatedAt]), [["user:New", 7]]);
+});
+
+// Review round 2: a tab Chrome froze two days ago still holds its form's uploads, so another tab's publish keeps its
+// key; only a key past the hold's 7-day life is pruned (fileDelete.js FORM_HOLD_ALIVE_MS).
+test("publishFormPaths keeps a frozen tab's key for the hold's whole life, prunes it after", () => {
+  const NOW = 10_000_000_000, DAY = 24 * 3600_000;
+  mem.set("proximaai-form-inputs:frozen", JSON.stringify({ at: NOW - 2 * DAY, paths: ["uploads/u/a.png"] }));
+  mem.set("proximaai-form-inputs:dead", JSON.stringify({ at: NOW - 8 * DAY, paths: ["uploads/u/b.png"] }));
+  publishFormPaths(["uploads/u/c.png"], NOW);
+  assert.deepEqual(readFormPublications().flatMap(p => p.paths).sort(), ["uploads/u/a.png", "uploads/u/c.png"]);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

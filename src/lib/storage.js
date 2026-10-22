@@ -3,6 +3,7 @@
 // Falls back to localStorage if IndexedDB unavailable.
 
 import { planResume, rememberReleased, liveReleased, noteClaimants, liveClaimants, dropClaimants } from "./taskResume.js";
+import { FORM_HOLD_ALIVE_MS } from "./fileDelete.js";
 
 const DB_NAME = "proximaai";
 const DB_VERSION = 3;
@@ -449,7 +450,8 @@ export const writeFileDeletes = (q) => { try { localStorage.setItem(FILE_DELETES
 // uses (fileDelete.js liveFormPaths, review #3). One key per page load, so a duplicated tab never shares one.
 const FORM_KEY = "proximaai-form-inputs:";
 const TAB_ID = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const STALE_FORM_KEY_MS = 24 * 60 * 60 * 1000;
+// Another tab's key is pruned only once its hold has lapsed: a frozen tab's form still holds its uploads (review round 2).
+const STALE_FORM_KEY_MS = FORM_HOLD_ALIVE_MS;
 export function publishFormPaths(paths, now = Date.now()) {
   try {
     localStorage.setItem(FORM_KEY + TAB_ID, JSON.stringify({ at: now, paths: paths || [] }));

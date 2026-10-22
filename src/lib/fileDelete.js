@@ -9,7 +9,11 @@
 export const FILE_DELETE_CHUNK = 50;
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 export const FORM_HOLD_RETRY_MS = 60 * 1000;   // a form-held path is re-checked this often (review #3)
-export const TAB_ALIVE_MS = 30 * 60 * 1000;    // a tab's form publication counts this long after its last heartbeat
+// A form publication (a tab's, or a browser's in the cloud) counts this long after its last heartbeat. Chrome freezes a
+// background page (the phone) without a word, and a frozen page keeps its form's uploads for when it wakes, so silence
+// cannot mean "released"; only a closing tab (pagehide) or that browser's next publication releases a hold early. A
+// tab killed while frozen keeps its files at most this long (review round 2).
+export const FORM_HOLD_ALIVE_MS = 7 * 24 * 60 * 60 * 1000;
 const OWNED_MAX_MS = 48 * 60 * 60 * 1000;      // an "owned" path is re-checked this long before it leaves (review #5)
 
 // Adds paths, due now. An entry already queued keeps its attempts and is only pulled earlier.
@@ -57,7 +61,7 @@ export const classifyPath = (path, { owned, forms, remote, formsKnown = true } =
 
 // Review wf_ec400a67-988 #6: each browser also publishes its live form holds to the cloud (settings row
 // form-inputs:<browser>), so a delete on the other device keeps them too. Republished when they change and at least
-// every FORM_CLOUD_HEARTBEAT_MS, well inside TAB_ALIVE_MS, so a live hold never reads as lapsed elsewhere.
+// every FORM_CLOUD_HEARTBEAT_MS, well inside FORM_HOLD_ALIVE_MS, so a live hold never reads as lapsed elsewhere.
 export const FORM_CLOUD_HEARTBEAT_MS = 10 * 60 * 1000;
 export function formPublishDue(last, paths, now) {
   if (!last) return true;
@@ -65,11 +69,11 @@ export function formPublishDue(last, paths, now) {
   if (a.size !== b.size || [...b].some(p => !a.has(p))) return true;
   return now - last.at >= FORM_CLOUD_HEARTBEAT_MS;
 }
-// Paths held by the forms of live tabs (publications refreshed within TAB_ALIVE_MS).
+// Paths held by the forms of live (or frozen) tabs: publications refreshed within FORM_HOLD_ALIVE_MS.
 export function liveFormPaths(pubs, now) {
   const out = new Set();
   for (const p of pubs || []) {
-    if (!p || !Number.isFinite(p.at) || now - p.at > TAB_ALIVE_MS) continue;
+    if (!p || !Number.isFinite(p.at) || now - p.at > FORM_HOLD_ALIVE_MS) continue;
     for (const x of Array.isArray(p.paths) ? p.paths : []) if (typeof x === "string" && x) out.add(x);
   }
   return out;

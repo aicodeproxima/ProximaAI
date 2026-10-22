@@ -4,7 +4,7 @@
 // Run: node scripts/test-file-delete.mjs
 import assert from "node:assert/strict";
 import { queueFileDeletes, dueFileDeletes, headOutcome, settleFileDelete, fileFlushReady, pendingOf, purgeNote, headStatus, FILE_DELETE_CHUNK,
-  classifyPath, liveFormPaths, heldOf, formPublishDue, FORM_CLOUD_HEARTBEAT_MS, TAB_ALIVE_MS } from "../src/lib/fileDelete.js";
+  classifyPath, liveFormPaths, heldOf, formPublishDue, FORM_CLOUD_HEARTBEAT_MS, FORM_HOLD_ALIVE_MS } from "../src/lib/fileDelete.js";
 
 let n = 0, failed = 0;
 const test = async (name, fn) => {
@@ -97,11 +97,15 @@ await test("#3: a form hold never expires, is re-checked every minute, and clear
   assert.deepEqual(settleFileDelete(h, "p", "deleted", now), {});
 });
 
-await test("#3: only live tabs' form publications hold; malformed ones are ignored", () => {
-  const NOW = 10_000_000;
-  const pubs = [{ at: NOW - 60_000, paths: ["a"] }, { at: NOW - 31 * 60_000, paths: ["b"] }, { at: "x", paths: ["c"] }, null, { at: NOW, paths: ["d", 7] }];
-  assert.deepEqual([...liveFormPaths(pubs, NOW)].sort(), ["a", "d"]);
-  assert.equal(classifyPath("a", { owned: new Set(), forms: liveFormPaths(pubs, NOW) }), "form", "another live tab's form holds it");
+// Review round 2: Chrome freezes a background page (the phone), which then sends no heartbeat, yet its form still holds
+// the upload when it wakes. A hold counts FORM_HOLD_ALIVE_MS (7 days) after its last publication, not 30 minutes.
+await test("#3: form publications hold until FORM_HOLD_ALIVE_MS after their last heartbeat (a frozen page too); malformed ones are ignored", () => {
+  const NOW = 10_000_000_000;
+  const pubs = [{ at: NOW - 60_000, paths: ["a"] }, { at: NOW - 2 * 24 * 3600_000, paths: ["b"] }, { at: "x", paths: ["c"] }, null,
+    { at: NOW, paths: ["d", 7] }, { at: NOW - FORM_HOLD_ALIVE_MS - 1, paths: ["e"] }];
+  assert.deepEqual([...liveFormPaths(pubs, NOW)].sort(), ["a", "b", "d"]);
+  assert.equal(FORM_HOLD_ALIVE_MS, 7 * 24 * 3600_000);
+  assert.equal(classifyPath("b", { owned: new Set(), forms: liveFormPaths(pubs, NOW) }), "form", "a frozen phone's form still holds it");
 });
 
 await test("#3: held files are counted apart from pending ones and named in the toast", () => {
@@ -123,7 +127,7 @@ await test("#7: a path the server says is in use is kept; no server answer means
 });
 
 // Review wf_ec400a67-988 #6: a browser republishes its form holds to the cloud when they change, and at least every
-// 10 minutes (well inside TAB_ALIVE_MS, so the other device never sees a live hold as lapsed).
+// 10 minutes (well inside FORM_HOLD_ALIVE_MS, so the other device never sees a live hold as lapsed).
 await test("#6: cloud form publication: on a change, on a heartbeat, never otherwise", () => {
   const T = 1_000_000;
   assert.equal(formPublishDue(null, ["a"], T), true, "first publication");
@@ -131,7 +135,7 @@ await test("#6: cloud form publication: on a change, on a heartbeat, never other
   assert.equal(formPublishDue({ at: T, paths: ["a"] }, ["a", "c"], T + 1), true, "changed");
   assert.equal(formPublishDue({ at: T, paths: ["a"] }, [], T + 1), true, "released");
   assert.equal(formPublishDue({ at: T, paths: ["a"] }, ["a"], T + FORM_CLOUD_HEARTBEAT_MS), true, "heartbeat");
-  assert.ok(FORM_CLOUD_HEARTBEAT_MS * 2 < TAB_ALIVE_MS);
+  assert.ok(FORM_CLOUD_HEARTBEAT_MS * 2 < FORM_HOLD_ALIVE_MS);
 });
 await test("#6: when the other devices' form holds could not be read, an upload waits; an archive does not", () => {
   const none = new Set();

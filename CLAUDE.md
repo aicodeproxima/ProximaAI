@@ -61,9 +61,11 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   entries to their live items (owner rulings 2026-10-22). Files go through the durable queue `proximaai-file-deletes`
   (`fileDelete.js`): queued by `stagePurge` before any network call, settled only on a confirmed remove or a HEAD
   400/404, and a path a kept generation uses again is never deleted. Log deletes delete no files. A file a Generate
-  form still holds (any live tab, per-tab key `proximaai-form-inputs:<tab>`) is kept until every form lets go of it,
-  then deleted. A History entry with an item whose task this device lacks is rewritten, not removed, and the server
-  strips items of deleted tasks from every History upload (`history_strip_deleted_items`).
+  form still holds (any live tab, per-tab key `proximaai-form-inputs:<tab>`; the other device's via settings
+  `form-inputs:<browser>`) is kept until every form lets go of it, then deleted. A hold counts 7 days after its last
+  heartbeat (`FORM_HOLD_ALIVE_MS`): a page Chrome froze sends nothing but still holds its form. A History entry with
+  an item whose task this device lacks is rewritten, not removed, and the server strips items of deleted tasks from
+  every History upload (`history_strip_deleted_items`).
 - **Back-button trap**: PWA must not exit on Android back gesture (kills in-flight polls).
 - **Only a valid session touches the data (2026-10-22)**: tasks, history, settings, favorites, presets, sync_tombstones and
   bucket `generations` are closed by row policies that verify the `x-proxima-session` header on every statement
