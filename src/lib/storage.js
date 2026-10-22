@@ -547,6 +547,23 @@ export function queueDeleteIntents(kind, ids) {
     localStorage.setItem(FAILED_KEY, JSON.stringify(list));
   } catch {}
 }
+// A restore on any device (settings 'last_restore_at', epoch ms; migration 20261022180000) supersedes every delete
+// intent queued before it: replayed, a pending clear would delete what the restore brought back (review round 2).
+// Returns the dropped ids per kind, so the caller stops treating them as being deleted.
+export function dropDeleteIntentsBefore(ts) {
+  const dropped = { task: [], history: [] };
+  if (!(ts > 0)) return dropped;
+  try {
+    const keep = [];
+    for (const e of getFailedSyncs()) {
+      const kind = e.kind === "task-delete" ? "task" : e.kind === "history-delete" ? "history" : null;
+      if (kind && (e.ts || 0) < ts) dropped[kind].push(e.id); else keep.push(e);
+    }
+    if (dropped.task.length || dropped.history.length) localStorage.setItem(FAILED_KEY, JSON.stringify(keep));
+  } catch {}
+  return dropped;
+}
+
 // The intents a confirmed clear settled (clearOutcome.js clearSettlement), removed in one write.
 export function settleDeleteIntents(kind, ids) {
   try {

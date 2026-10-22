@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k) };
-const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents } = await import("../src/lib/storage.js");
+const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -79,6 +79,22 @@ test("a clear queues every delete intent in one write, and settles only the conf
   assert.deepEqual(getFailedSyncs().map(e => `${e.kind}:${e.id}`), ["task:keep-upload", "task-delete:b"]);
   queueDeleteIntents("history-delete", Array.from({ length: 600 }, (_, i) => "h" + i));
   assert.equal(getFailedSyncs().filter(e => e.kind === "history-delete").length, 600, "a large clear is never capped");
+});
+
+// Review round 2: a restore (any device) voids the delete intents queued before it, so a clear still pending here
+// cannot delete what the restore brought back. Newer intents and uploads stay.
+test("a restore drops the delete intents queued before it, and says which ids it dropped", () => {
+  const T = Date.now();
+  addFailedSync({ kind: "task", id: "up", data: { id: "up" } });
+  queueDeleteIntents("task-delete", ["old1", "old2"]);
+  queueDeleteIntents("history-delete", ["oldL"]);
+  const after = Date.now() + 5;
+  const all = getFailedSyncs();
+  for (const e of all) if (e.kind.endsWith("-delete")) e.ts = T - 1000;   // queued before the restore
+  localStorage.setItem("proximaai-failed-syncs", JSON.stringify([...all, { kind: "task-delete", id: "new1", data: "new1", ts: after + 1000 }]));
+  assert.deepEqual(dropDeleteIntentsBefore(after), { task: ["old1", "old2"], history: ["oldL"] });
+  assert.deepEqual(getFailedSyncs().map(e => `${e.kind}:${e.id}`), ["task:up", "task-delete:new1"]);
+  assert.deepEqual(dropDeleteIntentsBefore(0), { task: [], history: [] }, "no restore recorded: nothing dropped");
 });
 
 // RLS design panel wf_89f53ef9-80f (2026-10-22): favorites retries are keyed by the account scope and replayed only for

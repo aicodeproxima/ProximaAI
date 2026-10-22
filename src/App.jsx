@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { unconfirmedClears, clearSettlement } from "./lib/clearOutcome.js";
 import { initSupabase, isSupabaseConfigured, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTaskRemote, deleteTasksRemote, clearTasksRemote, deleteHistoryRemote, clearHistoryRemote, clearSettingsRemote, clearFavoritesRemote, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
@@ -1772,6 +1772,9 @@ export default function ProximaApp() {
         if (remote.settings) {
           if (!savedImgRes && remote.settings.defaultImageRes) { setDefaultImageRes(remote.settings.defaultImageRes); setSetting("defaultImageRes", remote.settings.defaultImageRes); }
           if (!savedVidDur && remote.settings.defaultVideoDur) { setDefaultVideoDur(Number(remote.settings.defaultVideoDur)); setSetting("defaultVideoDur", remote.settings.defaultVideoDur); }
+          // A restore on any device voids the delete intents queued here before it (review round 2), before the replay
+          // below can delete what it brought back.
+          dropDeleteIntentsBefore(Number(remote.settings.last_restore_at) || 0);
         }
       } catch {}
       // Bootstrap complete — allow persistence effect to schedule writes again
@@ -1873,6 +1876,11 @@ export default function ProximaApp() {
       const since = Date.now();
       const [remote, ids] = await Promise.all([pullAllRemoteData(), pullCloudIds()]);
       if (!remote) return;
+      // A restore on any device voids the delete intents queued here before it (review round 2): their ids are no
+      // longer being deleted, so the rows it brought back can return to this device.
+      const voided = dropDeleteIntentsBefore(Number(remote.settings?.last_restore_at) || 0);
+      for (const id of voided.task) deletingIds.current.delete(id);
+      for (const id of voided.history) deletingLogIds.current.delete(id);
       const failed = getFailedSyncs();
       const pendingTasks = new Set([...failed.filter(f => f.kind === "task").map(f => f.id), ...taskSyncQueueRef.current.map(t => t.id)]);
       const pendingLogs = new Set(failed.filter(f => f.kind === "history").map(f => f.id));

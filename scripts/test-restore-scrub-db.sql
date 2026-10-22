@@ -51,5 +51,16 @@ begin
       then 'ok on-keeps; ' else format('FAIL on-keeps %s; ', r) end;
   exception when others then out := out || format('FAIL on-keeps %s; ', sqlstate); end;
 
+  -- 3. A restore records when it happened (settings last_restore_at, epoch ms), and a stale value inside the backup's
+  --    own settings never wins (review round 2: devices drop delete intents queued before it).
+  begin
+    insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot, settings_snapshot)
+      values (u, 'manual', 0, 0, '[]', '[]', '{"last_restore_at": 1}') returning id into v_m1;
+    r := restore_my_backup_phase2(v_tok, v_m1);
+    out := out || case when r->>'ok' = 'true'
+      and (select (value)::text::bigint from settings where device_id = u and key = 'last_restore_at') >= (extract(epoch from now()) * 1000)::bigint - 60000
+      then 'ok restore-marks-time; ' else format('FAIL restore-marks-time %s %s; ', r, (select value from settings where device_id = u and key = 'last_restore_at')) end;
+  exception when others then out := out || format('FAIL restore-marks-time %s; ', sqlstate); end;
+
   raise exception 'RESULT: %', out;
 end $t$;
