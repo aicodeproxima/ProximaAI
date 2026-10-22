@@ -132,6 +132,21 @@ await test("backfillTaskInputs: one narrow update per row, scoped to this accoun
   assert.deepEqual(await sb.backfillTaskInputs([]), { ok: true });
 });
 
+// Review round 4: before a WaveSpeed prediction is deleted, the cloud says which ids a row of this account still holds
+// (another device's, or one a restore brought back): those wait. null when it could not answer (nothing is sent).
+await test("predictionsInUseRemote: task_ids rows of this account hold, in chunks of 100; failure -> null", async () => {
+  const c = fakeClient((q) => ({ data: (inList(q) || []).filter(id => id === "t5" || id === "t150").map(id => ({ task_id: id })), error: null }));
+  sb.__setClientForTests(c);
+  const r = await sb.predictionsInUseRemote(ids(160));
+  assert.deepEqual([...r].sort(), ["t150", "t5"]);
+  assert.deepEqual(c.calls.map(q => inList(q).length), [100, 60]);
+  assert.ok(c.calls.every(q => q.table === "tasks" && q.ops.some(o => o[0] === "eq" && o[1] === "device_id" && o[2] === "user:owner")
+    && q.ops.some(o => o[0] === "in" && o[1] === "task_id")));
+  sb.__setClientForTests(fakeClient(() => ({ data: null, error: { message: "403" } })));
+  assert.equal(await sb.predictionsInUseRemote(["p"]), null);
+  assert.deepEqual([...(await sb.predictionsInUseRemote([]))], []);
+});
+
 // Review round 4: replayed delete intents go through delete_queued_rows, which refuses them when a restore committed
 // after they were queued. Chunks of 100; each chunk's ids come back voided or deleted (a restore can land between two).
 await test("deleteQueuedRemote: chunks of 100 with the queue time; voided and deleted ids reported apart; failure -> not ok", async () => {
