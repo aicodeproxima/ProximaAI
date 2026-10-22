@@ -95,5 +95,16 @@ await test("pullTaskStartsInWindow: rows of any device in the window, with or wi
   assert.equal(await sb.pullTaskStartsInWindow(1, 9), null);
 });
 
+// Review round 2: a task's end frame / audio / driving video / reference video URLs travel with its cloud row.
+await test("taskToRow / pullTasks carry the four input URLs", async () => {
+  const t = { id: "t", endFrameUrl: "e", sourceAudioUrl: "a", sourceVideoUrl: "v", refVideoUrl: "r" };
+  const row = sb.taskToRow(t);
+  assert.deepEqual([row.end_frame_url, row.source_audio_url, row.source_video_url, row.ref_video_url], ["e", "a", "v", "r"]);
+  assert.deepEqual([sb.taskToRow({ id: "x" }).end_frame_url, sb.taskToRow({ id: "x" }).ref_video_url], [null, null]);
+  sb.__setClientForTests(fakeClient(() => ({ data: [{ id: "t", end_frame_url: "e", source_audio_url: "a", source_video_url: "v", ref_video_url: "r" }], error: null })));
+  const [back] = await sb.pullTasks(5);
+  assert.deepEqual([back.endFrameUrl, back.sourceAudioUrl, back.sourceVideoUrl, back.refVideoUrl], ["e", "a", "v", "r"]);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

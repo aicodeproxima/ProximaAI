@@ -53,5 +53,18 @@ begin
     end if;
   exception when others then out := out || format('FAIL limits %s; ', sqlstate); end;
 
+  -- 5. Review round 2: end frame, audio, driving video and reference video uploads travel with the row and count too.
+  begin
+    execute $q$insert into tasks (id, device_id, status, start_time, outputs, end_frame_url, source_audio_url, source_video_url, ref_video_url)
+      values ('pu-t2', 'user:__paths_test', 'completed', 1000, '[]',
+              'https://x.supabase.co/storage/v1/object/public/generations/uploads/user___paths_test/end.png',
+              'https://x.supabase.co/storage/v1/object/public/generations/uploads/user___paths_test/voice.mp3',
+              'https://x.supabase.co/storage/v1/object/public/generations/uploads/user___paths_test/drive.mp4',
+              'https://x.supabase.co/storage/v1/object/public/generations/uploads/user___paths_test/ref.mp4')$q$;
+    r := paths_in_use(v_tok, array['uploads/user___paths_test/end.png', 'uploads/user___paths_test/voice.mp3',
+                                   'uploads/user___paths_test/drive.mp4', 'uploads/user___paths_test/ref.mp4']);
+    out := out || case when cardinality(r) = 4 then 'ok input-urls; ' else format('FAIL input-urls %s; ', r) end;
+  exception when others then out := out || format('FAIL input-urls %s; ', sqlstate); end;
+
   raise exception 'RESULT: %', out;
 end $t$;
