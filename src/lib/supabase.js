@@ -9,6 +9,7 @@
 import { sessionToken, isSessionError, reportSessionExpired, isSuperseded, withSessionHeader } from "./session.js";
 import { removedPaths } from "./storageRemove.js";
 import { createSyncPing } from "./syncPing.js";
+import { withServerClock } from "./serverClock.js";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -72,7 +73,8 @@ export async function initSupabase() {
     supabase = mod.createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { persistSession: false },
       global: { headers: { "x-device-id": getDeviceId() },
-        fetch: withSessionHeader(globalThis.fetch.bind(globalThis), { baseUrl: SUPABASE_URL }) },
+        // withServerClock: each response's Date header keeps this device's estimate of the server clock (serverClock.js).
+        fetch: withServerClock(withSessionHeader(globalThis.fetch.bind(globalThis), { baseUrl: SUPABASE_URL })) },
     });
     return supabase;
   } catch {

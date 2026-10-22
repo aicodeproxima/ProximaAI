@@ -4,6 +4,7 @@
 
 import { planResume, rememberReleased, liveReleased, noteClaimants, liveClaimants, dropClaimants } from "./taskResume.js";
 import { FORM_HOLD_ALIVE_MS } from "./fileDelete.js";
+import { serverNow } from "./serverClock.js";
 
 const DB_NAME = "proximaai";
 const DB_VERSION = 3;
@@ -508,7 +509,7 @@ export function addFailedSync(entry) {
     const list = getFailedSyncs();
     // Dedupe by kind+id (don't pile up duplicates for the same task/log)
     const existingIdx = list.findIndex(e => e.kind === entry.kind && e.id === entry.id);
-    const withMeta = { ...entry, ts: Date.now(), attempts: (entry.attempts || 0) + 1 };
+    const withMeta = { ...entry, ts: serverNow(), attempts: (entry.attempts || 0) + 1 };
     if (existingIdx >= 0) list[existingIdx] = withMeta;
     else list.push(withMeta);
     // Cap the uploads at 200 entries to prevent unbounded growth. Delete intents are never dropped (a dropped one brings
@@ -543,7 +544,7 @@ export function queueDeleteIntents(kind, ids) {
   try {
     const want = new Set((ids || []).filter(Boolean));
     if (!want.size) return;
-    const now = Date.now();
+    const now = serverNow();   // server time: compared with a restore's (restoreGuard)
     const list = getFailedSyncs().filter(e => !(e.kind === kind && want.has(e.id)));
     for (const id of want) list.push({ kind, id, data: id, ts: now, attempts: 1 });
     localStorage.setItem(FAILED_KEY, JSON.stringify(list));
