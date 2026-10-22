@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k) };
-const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads } = await import("../src/lib/storage.js");
+const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -45,6 +45,30 @@ test("Clear drops every queued upload of the cleared kinds and says which ids th
     "deletes, History (Clear Outputs keeps it) and settings stay queued");
   assert.deepEqual(dropQueuedUploads(["task", "history"]), { task: [], history: ["b1"] });
   assert.deepEqual(getFailedSyncs().map(e => e.kind), ["task-delete", "setting"]);
+});
+
+// RLS design panel wf_89f53ef9-80f (2026-10-22): favorites retries are keyed by the account scope and replayed only for
+// the current one, so after a rename an entry queued under the old name was never sent nor removed (status "error" for
+// good, and that favorites change lost).
+const fav = (scope, updatedAt) => ({ kind: "model-favorites", id: scope, scope, data: { byType: { image: [String(updatedAt)] }, updatedAt } });
+test("after a rename, a favorites retry queued under the old name moves to the new name", () => {
+  addFailedSync(fav("user:Old", 5));
+  addFailedSync({ kind: "task", id: "t", data: { id: "t" } });
+  rekeyFavoriteRetries("user:New");
+  const q = getFailedSyncs();
+  assert.deepEqual(q.filter(e => e.kind === "model-favorites").map(e => [e.id, e.scope, e.data.updatedAt]), [["user:New", "user:New", 5]]);
+  assert.ok(q.some(e => e.kind === "task" && e.id === "t"), "other entries untouched");
+});
+test("when both names have a favorites retry, the newer snapshot wins and one entry remains", () => {
+  addFailedSync(fav("user:New", 7));
+  addFailedSync(fav("user:Old", 9));
+  rekeyFavoriteRetries("user:New");
+  assert.deepEqual(getFailedSyncs().map(e => [e.scope, e.data.updatedAt]), [["user:New", 9]]);
+  mem.clear();
+  addFailedSync(fav("user:New", 7));
+  addFailedSync(fav("user:Old", 5));
+  rekeyFavoriteRetries("user:New");
+  assert.deepEqual(getFailedSyncs().map(e => [e.scope, e.data.updatedAt]), [["user:New", 7]]);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

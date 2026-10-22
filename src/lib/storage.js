@@ -486,6 +486,20 @@ export function removeFailedSync(kind, id, onlyIf) {
   } catch {}
 }
 
+// A rename moves every cloud row to the new account name; a favorites retry queued under the old name must follow it, or
+// it is never sent nor removed. One account per browser (the app has a single owner), so any other scope is an earlier
+// name of this account. When both names hold one, the newer snapshot wins.
+export function rekeyFavoriteRetries(scope) {
+  try {
+    const list = getFailedSyncs();
+    const favs = list.filter(e => e.kind === "model-favorites");
+    if (!favs.some(e => e.scope !== scope)) return;
+    const newest = favs.reduce((a, b) => ((b.data?.updatedAt || 0) > (a.data?.updatedAt || 0) ? b : a));
+    const rest = list.filter(e => e.kind !== "model-favorites");
+    localStorage.setItem(FAILED_KEY, JSON.stringify([...rest, { ...newest, id: scope, scope }]));
+  } catch {}
+}
+
 // Clear Outputs / Reset Everything: a queued upload of a cleared row must never replay, or a generation whose upload had
 // failed (never in the cloud, so no tombstone stops it) comes back. Returns the dropped ids per kind.
 export function dropQueuedUploads(kinds) {
