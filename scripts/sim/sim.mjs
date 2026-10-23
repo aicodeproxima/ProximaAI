@@ -42,7 +42,7 @@
 //     legitimised it or removed it after, and nothing holds it any more: cloud, pages, IndexedDB) has its WaveSpeed
 //     result and every file only gone-for-good generations use either deleted or queued (a browser's
 //     proximaai-ws-deletes / proximaai-file-deletes), after quiescence (several flushes and restore-aware passes). Still
-//     held (proximaai-held-purges-v2) or nowhere is reported. "I7-info": a generation whose only delete attempts were
+//     held (proximaai-held-purges-v3, or an older key) or nowhere is reported. "I7-info": a generation whose only delete attempts were
 //     voided or dropped by a restore that then removed it (by_restore): its files stay by design (App.jsx 2382-2385: "a
 //     restore never deletes files, so neither does this").
 //  CRASH: a mirrored flow threw (a real code path that throws, or a mirror bug) - investigated like a violation.
@@ -160,7 +160,7 @@ export class Sim {
       const js = (k) => { try { return JSON.parse(b.ls.getItem(k) || "{}") || {}; } catch { return {}; } };
       for (const p of Object.keys(js("proximaai-ws-deletes"))) queued.ws.add(p);
       for (const p of Object.keys(js("proximaai-file-deletes"))) queued.file.add(p);
-      for (const key of ["proximaai-held-purges-v2", "proximaai-held-purges"]) for (const g of Object.values(js(key))) {
+      for (const key of ["proximaai-held-purges-v3", "proximaai-held-purges-v2", "proximaai-held-purges"]) for (const g of Object.values(js(key))) {
         for (const p of Object.keys(g?.files || {})) held.file.add(p);
         for (const p of Object.keys(g?.ws || {})) held.ws.add(p);
       }

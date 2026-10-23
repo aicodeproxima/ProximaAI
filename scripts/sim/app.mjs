@@ -68,6 +68,7 @@ export class Page {
     // Task B13c: the Generate form, modelled as holding the input of the last batch this page generated (a new input is
     // picked for each batch; a new page starts with an empty form), and the last cloud publication (cloudFormPubRef).
     this.formInput = null; this.cloudFormPub = null;
+    this.cloudUnsentPub = null; this.givingBack = new Set();   // task B14 (round 27 #5/#7, #3)
     this.macros = [];   // continuations waiting for a render (IndexedDB awaits)
   }
 
@@ -303,6 +304,7 @@ export class Page {
     const heldTasks = held.tasks || new Map(), heldLogs = held.logs || new Set();
     for (const s of S.readClearStashes()) {
       if (!which(s.at)) continue;
+      if (this.givingBack.has(s.at)) continue;   // task B14 (round 27 #3): its give-back is still being written
       const back = S.stashGiveBack(s);
       if (!back) continue;
       S.putBackQueuedUploads(back.uploads);
@@ -320,7 +322,9 @@ export class Page {
       if (backTasks.length || backLogs.length) this.sim.trace(`  ${this.label} stash ${s.at} gives back tasks [${ids(backTasks)}] logs [${ids(backLogs)}] uploads [${back.uploads.map(e => e.kind[0] + ":" + e.id)}]`);
       this.queueArchivedFileDeletes(back.goneArchivePaths);   // 1542 (reapplyArchives 1539: no archive records here)
       this.applyRelinks([...heldTasks.values(), ...backTasks]);   // task B13a (round 26 #6)
-      S.dropGivenBackStash(s);
+      // task B14 (round 27 #3): dropped once the give-back's IndexedDB writes settled (they complete at the next render)
+      this.givingBack.add(s.at);
+      this.macros.push(() => { S.dropGivenBackStash(s); this.givingBack.delete(s.at); });
     }
   }
   // App.jsx 1558-1566
@@ -660,9 +664,9 @@ export class Page {
         // task B13a (G): the restore's own removals are not present; task B13b (D): the ids the cloud says were deleted.
         const userTaskTombstones = cids.taskTombstones instanceof Set && restoreRemoved ? [...cids.taskTombstones].filter(id => !restoreRemoved.has(id)) : [];
         const evidence = { restoreKnownAt,
-          task: { present: [...(cids.tasks || []), ...(cloudItemIds || [])], local: keptTaskIds, deleted: userTaskTombstones,
+          task: { present: [...(cids.tasks || []), ...(cloudItemIds || [])], local: keptTaskIds, deleted: userTaskTombstones, tombstoned: [...tombT],
             complete: cids.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared },
-          history: { present: [...(cids.history || [])], local: keptLogIds, deleted: cids.historyTombstones instanceof Set ? [...cids.historyTombstones] : [],
+          history: { present: [...(cids.history || [])], local: keptLogIds, deleted: cids.historyTombstones instanceof Set ? [...cids.historyTombstones] : [], tombstoned: [...tombH],
             complete: cids.history instanceof Set && !!shared } };
         if (evidence.task.complete && (remote.history || []).length >= HISTORY_PULL_LIMIT) {
           const candidates = S.heldGoneCandidates(evidence);
@@ -891,6 +895,11 @@ export class Page {
         const live = tids.length ? await this.generationsLiveRemote(tids) : new Set();
         if (!live) return;
         for (const p of due) if (queue[p]?.tid && live.has(queue[p].tid)) held.push(p);
+        // task B14 (round 27 #7): nor one that rows not uploaded yet name (any browser's :unsent row, this browser's queue)
+        const pubs = await this.pullFormHolds();
+        if (pubs === null) return;
+        const unsent = F.liveUnsent([...pubs, { at: Date.now(), ...S.unsentGenerations() }], Date.now());
+        for (const p of due) if (unsent.predictions.has(p) || (queue[p]?.tid && unsent.ids.has(String(queue[p].tid)))) held.push(p);
         if (held.length) S.writeWsDeletes(W.holdHeldIds(S.readWsDeletes(), held, Date.now()));
       }
       const checked = new Set(due);   // task B13b: only ids the checks above saw are sent
@@ -914,13 +923,22 @@ export class Page {
   async publishForms() {
     const S = this.S;
     S.publishFormPaths([...P.pathsInUse([{ sourceImageUrl: this.formInput }])]);
-    const now = Date.now(), mine = [...new Set([...F.liveFormPaths(S.readFormPublications(), now), ...S.unsentUploadPaths()])];
-    if (!F.formPublishDue(this.cloudFormPub, mine, now)) return;
-    try {
-      const bid = S.browserId();   // read now: the server callback runs later, under another page's globals
-      await this.call("syncSetting", `form-inputs:${bid} [${mine}]`, () => this.srv.setFormHold(bid, { at: now, paths: mine }));
-      this.cloudFormPub = { at: now, paths: mine };
-    } catch {}
+    const now = Date.now(), mine = [...F.liveFormPaths(S.readFormPublications(), now)];
+    const bid = S.browserId();   // read now: the server callback runs later, under another page's globals
+    if (F.formPublishDue(this.cloudFormPub, mine, now)) {
+      try {
+        await this.call("syncSetting", `form-inputs:${bid} [${mine}]`, () => this.srv.setFormHold(bid, { at: now, paths: mine }));
+        this.cloudFormPub = { at: now, paths: mine };
+      } catch {}
+    }
+    // task B14 (round 27 #5/#7): the rows not uploaded yet, in their own row (form-inputs:<browser>:unsent)
+    const un = S.unsentGenerations(), unItems = [...un.paths, ...un.ids.map(i => `id:${i}`), ...un.predictions.map(p => `p:${p}`)];
+    if (F.formPublishDue(this.cloudUnsentPub, unItems, now)) {
+      try {
+        await this.call("syncSetting", `form-inputs:${bid}:unsent [${unItems}]`, () => this.srv.setFormHold(`${bid}:unsent`, { at: now, paths: un.paths, ids: un.ids, predictions: un.predictions }));
+        this.cloudUnsentPub = { at: now, paths: unItems };
+      } catch {}
+    }
   }
   // ─── App.jsx 3007-3037 flushFileDeletes (task B13c: with the forms' holds and the queued uploads' paths) ───
   async flushFileDeletes() {
@@ -1256,7 +1274,8 @@ export class Page {
       // 5703-5722 (task B13a #2): assumed only where a read right after the clear finds the row the server left in place;
       // (task B13b, class E) the others are named at the clear's time, then confirmed normally (final mark).
       if (cr.ok && unnamedHistoryOnly.length) {
-        const withRow = await this.taskRowsPresentRemote(unnamedHistoryOnly);
+        let withRow = null;   // task B14 (round 27 #2): retried before the all-assumed fallback
+        for (let i = 0; i < 3 && withRow === null; i++) withRow = await this.taskRowsPresentRemote(unnamedHistoryOnly);
         const assumedIds = withRow ? unnamedHistoryOnly.filter(id => withRow.has(id)) : unnamedHistoryOnly;
         const assumedSet = new Set(assumedIds);
         if (assumedIds.length) { S.markAssumedConfirms("task-delete", assumedIds, queuedAt); this.confirmIntents("task-delete", assumedIds, queuedAt, { assumed: true }); }
