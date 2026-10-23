@@ -64,19 +64,22 @@ test("#3: the rule's three answers agree between inlineVoidPutBack and stashGive
   S.queueDeleteIntents("task-delete", ["keep"], later);                // keep: pending at another time
   S.voidDeleteIntents("task-delete", ["back", "gone", "old"], at);
   const rule = S.giveBackRule(at);
-  assert.deepEqual(["back", "keep", "gone", "old"].map(id => rule("task", id)), ["back", "keep", "gone", "back"]);
+  // Task B9 (review round 22) rewrote the answer for "old" (was "back": confirmed before the clear's time, the B8b time
+  // comparison, removed): the void proves a restore after the clear, so old's confirm is superseded and kept until a pass
+  // decides it from the cloud (scripts/test-b9-superseded-flight.mjs).
+  assert.deepEqual(["back", "keep", "gone", "old"].map(id => rule("task", id)), ["back", "keep", "gone", "keep"]);
   const give = S.stashGiveBack(S.readClearStash(at));
   const inline = S.inlineVoidPutBack(at, { tasks: all, uploads: all.map(t => ({ kind: "task", id: t.id, data: t, ts: at - 1 })) });
-  assert.deepEqual(ids(give.tasks), ["back", "old"]);
+  assert.deepEqual(ids(give.tasks), ["back"]);
   assert.deepEqual(ids(inline.tasks), ids(give.tasks), "same tasks");
-  assert.deepEqual(ids(give.uploads), ["back", "old"], "the rule gives back the same ids' uploads");
+  assert.deepEqual(ids(give.uploads), ["back"], "the rule gives back the same ids' uploads");
   // The inline path also passes them through the shared upload filter (uploadable: any confirmed record blocks an upload
   // until a pass releases it); the stash path's put-back meets the same filter at the replay.
   assert.deepEqual(ids(inline.uploads), ids(S.uploadable("task", give.uploads)), "same uploads after the shared upload filter");
-  // The kept part (keep) stays in the stash for its later time; gone leaves.
+  // The kept part (keep, and the undecided old) stays in the stash; gone leaves.
   S.dropGivenBackStash(S.readClearStash(at));
   const s = S.readClearStash(at);
-  assert.deepEqual([ids(s.tasks), ids(s.uploads), s.movedTo], [["keep"], ["keep"], [later]]);
+  assert.deepEqual([ids(s.tasks), ids(s.uploads), s.movedTo], [["keep", "old"], ["keep", "old"], [later]]);
 });
 // Task B8c (round 21 #3 follow-up): a LATE confirm of an older group T1, handled after the same id was re-queued at a later
 // time T2 (a restore brought it back and it was cleared again), is skipped for that id entirely: no confirm record, no
@@ -94,28 +97,42 @@ const lateT1 = () => {
   S.confirmDeleteIntents("task-delete", ["x"], T1);                    // T1's answer handled only now
   return { T1, T2, X, taken };
 };
-test("B8c: a late T1 confirm of an id pending again at T2 leaves no record, no sequence, and touches neither stash nor queue", () => {
-  const { T2 } = lateT1();
-  assert.equal(S.confirmedDeletes("task-delete").has("x"), false, "no confirm record");
-  assert.equal(S.confirmSeqs("task-delete").has("x"), false, "no confirm sequence");
+// Task B9 (review round 22 #1) rewrote the B8c tests below into outcomes (B8c skipped the record of an id pending again
+// at a later time; the skip let a stale tab's voided clear give back a generation the server had already deleted). The
+// late confirm now records x with T1; T2's void proves a restore after T2, so that confirm is superseded: x waits until
+// a pass reads the cloud after the restore. In this scenario the restore brought x back, so x is released and T2's give-
+// back returns it (by both paths). Was: no record, no sequence; and both give-back paths returned x at once.
+test("B9 (was B8c): a late T1 confirm of an id pending again at T2 records it with T1, and touches neither T2's stash nor its intent", () => {
+  const { T1, T2 } = lateT1();
+  assert.ok(S.confirmedDeletes("task-delete").has("x"), "recorded");
+  assert.equal(S.confirmQueuedAt("task-delete").get("x"), T1, "with its group's queue time");
+  assert.ok(S.confirmSeqs("task-delete").get("x") > 0, "and a sequence");
   assert.deepEqual(S.intentGroups("task-delete"), [[T2, ["x"]]], "T2's intent still pending");
   const s = S.readClearStash(T2);
   // x is held through its taken upload (buildClearStash leaves out a local item whose upload it holds).
   assert.deepEqual([ids(s.tasks), ids(s.uploads)], [[], ["x"]], "T2's stash keeps x's taken upload");
   assert.equal(Object.prototype.hasOwnProperty.call(s, "spared"), false, "no spared field");
 });
-test("B8c (a): the inline voided path gives back x's taken upload after a late T1 confirm (uploadable no longer drops it)", () => {
+// The pass that reads the cloud after the restore T2's void proved: it holds x (the restore brought it back).
+const passSeesX = () => S.sharedDeleteState("task", { cloudIds: new Set(["x"]), sinceSeq: S.confirmSeqNow(), restoreKnownAt: S.knownRestoreAt(), evidence: { present: [], complete: true } });
+test("B9 (was B8c (a)): the inline voided path keeps x and its taken upload until the pass decides; then x comes back with it", () => {
   const { T2, X, taken } = lateT1();
   S.voidDeleteIntents("task-delete", ["x"], T2);
-  assert.equal(S.giveBackRule(T2)("task", "x"), "back");
+  assert.equal(S.giveBackRule(T2)("task", "x"), "keep", "superseded, undecided");
   const back = S.inlineVoidPutBack(T2, { tasks: [X], uploads: taken });
-  assert.deepEqual(ids(back.tasks), ["x"], "inline gives x back");
-  assert.deepEqual(ids(back.uploads), ["x"], "and its taken upload");
-  assert.deepEqual(ids(S.uploadable("task", [X])), ["x"], "x may upload again");
+  assert.deepEqual([ids(back.tasks), ids(back.uploads)], [[], []], "nothing put back yet");
+  assert.deepEqual(ids(S.uploadable("task", [X])), [], "nor uploaded");
+  assert.deepEqual(ids(S.readClearStash(T2).uploads), ["x"], "not lost: its upload waits in T2's stash");
+  assert.deepEqual(passSeesX().released, ["x"]);
+  const give = S.stashGiveBack(S.readClearStash(T2));
+  assert.deepEqual([ids(give.tasks), ids(give.uploads)], [["x"], ["x"]], "x and its taken upload come back");
+  assert.deepEqual(ids(S.uploadable("task", give.uploads)), ["x"], "x may upload again");
 });
-test("B8c (b): the stash path agrees for the same scenario, through the shared upload filter", () => {
+test("B9 (was B8c (b)): the stash path agrees for the same scenario, through the shared upload filter", () => {
   const { T2 } = lateT1();
   S.voidDeleteIntents("task-delete", ["x"], T2);
+  assert.deepEqual(ids(S.stashGiveBack(S.readClearStash(T2)).tasks), [], "undecided: kept");
+  passSeesX();
   const give = S.stashGiveBack(S.readClearStash(T2));
   assert.deepEqual(ids(give.tasks), ["x"], "the stash gives x back");
   assert.deepEqual(ids(S.uploadable("task", give.uploads)), ["x"], "and its upload passes the shared filter");
@@ -132,7 +149,7 @@ test("B8c: T2's own confirm then records x and cleans its stash and its queued u
   assert.equal(S.readClearStash(T2).tasks.some(t => t.id === "x"), false, "stripped from T2's stash");
   assert.deepEqual(S.getFailedSyncs().filter(e => e.kind === "task"), [], "its queued upload dropped");
 });
-test("B8c: History ids follow the same rule; ids of the group not pending later are confirmed exactly as before", () => {
+test("B9 (was B8c): History ids follow the same rule; every id of the group is confirmed", () => {
   const T1 = 1000, T2 = 3000;
   S.writeClearStash(T2, { uploads: [], tasks: [{ id: "k" }], logs: [{ id: "L" }] });
   S.queueDeleteIntents("history-delete", ["L", "M"], T1);
@@ -140,17 +157,20 @@ test("B8c: History ids follow the same rule; ids of the group not pending later 
   S.queueDeleteIntents("history-delete", ["L"], T2);
   S.confirmDeleteIntents("history-delete", ["L", "M"], T1);
   const rec = S.confirmedDeletes("history-delete");
-  assert.deepEqual([rec.has("L"), rec.has("M")], [false, true], "only M (not pending later) is recorded");
+  assert.deepEqual([rec.has("L"), rec.has("M")], [true, true], "both recorded (was: only M, B8c)");
   assert.deepEqual(S.readClearStash(T1).logs, [], "M leaves T1's stash");
   assert.deepEqual(ids(S.readClearStash(T2).logs), ["L"], "L stays in T2's stash");
   S.queueDeleteIntents("task-delete", ["k"], 9000);
   S.voidDeleteIntents("history-delete", ["L"], T2);
+  assert.deepEqual(ids(S.stashGiveBack(S.readClearStash(T2)).logs), [], "superseded: L waits for the pass");
+  const st = S.sharedDeleteState("history", { cloudIds: new Set(["L"]), sinceSeq: S.confirmSeqNow(), restoreKnownAt: S.knownRestoreAt() });
+  assert.deepEqual(st.released, ["L"], "the cloud holds L after the restore");
   assert.deepEqual(ids(S.stashGiveBack(S.readClearStash(T2)).logs), ["L"], "T2's void gives L back");
   S.dropGivenBackStash(S.readClearStash(T2));
   const s = S.readClearStash(T2);
   assert.deepEqual([ids(s.tasks), ids(s.logs), s.movedTo], [["k"], [], [9000]], "the part pending elsewhere is kept");
 });
-test("B8c: the spared mechanism is gone from storage.js", () => {
+test("B8c/B9: the spared mechanism is gone from storage.js", () => {
   assert.doesNotMatch(st, /spared|cleanSpared/i);
 });
 test("#3 wiring: every give-back path asks giveBackRule; App.jsx deletes the files of a gone archive record", () => {
@@ -158,12 +178,14 @@ test("#3 wiring: every give-back path asks giveBackRule; App.jsx deletes the fil
   assert.match(sec("export function stashGiveBack(", "export function giveBackRule("), /const decide = giveBackRule\(stash\.at\);/);
   assert.match(sec("export function inlineVoidPutBack(", "export function stashFollowers("), /const decide = giveBackRule\(ts\);/);
   assert.match(sec("export function dropGivenBackStash(", "export function inlineVoidPutBack("), /const decide = giveBackRule\(stash\.at\);/);
-  // Task B8c: the late-confirm skip lives in confirmDeleteIntents, before the record, the stash strip and the upload drop.
+  // Task B9 (review round 22 #1) rewrote this check (was: the B8c skip first in confirmDeleteIntents): there is no skip;
+  // the record (with the queue time) is written before the stash strip and the upload drop.
   const c = sec("export function confirmDeleteIntents(", "export function forgetConfirmed(");
-  const skip = c.indexOf("if (later.size) ids = (ids || []).filter(id => !later.has(id));");
-  assert.ok(skip > 0 && skip < c.indexOf("readConfirmed()") && skip < c.indexOf("forgetStashedIds(") && skip < c.indexOf("dropQueuedUploadsOf("), "skip first");
-  assert.match(c, /\(e\.ts \|\| 0\) > bound\) later\.add\(e\.id\)/);
-  assert.equal(st.match(/confirmedDeletes\("task-delete"\)/g)?.length >= 1, true);
+  assert.doesNotMatch(c, /later\.add\(|later\.has\(/, "no skip");
+  const rec = c.indexOf("localStorage.setItem(CONFIRMED_KEY");
+  assert.ok(rec > 0 && rec < c.indexOf("forgetStashedIds(") && rec < c.indexOf("dropQueuedUploadsOf("), "record first");
+  assert.match(c, /qs\[kind\]\[id\] = \{ q: queuedAt, c: now \}/);
+  assert.equal(st.match(/confirmStates\("task-delete"\)/g)?.length >= 1, true);
   const apply = between("const applyClearStashes = (which, held = {}) => {", "const settleClearStashes = () =>");
   assert.ok(apply.indexOf("queueArchivedFileDeletes(back.goneArchivePaths);") > apply.indexOf("reapplyArchives(back.archives"));
 });

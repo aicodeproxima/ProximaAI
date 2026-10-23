@@ -205,11 +205,23 @@ for (const order of ["before", "after"]) {
     assert.deepEqual(reloadUploads().tasks, ["y"], "after a reload only y uploads");
   });
 }
-test("inlineVoidPutBack: a confirm recorded BEFORE the clear's queue time does not hold an item back (only later ones do)", () => {
+// Task B9 (review round 22) rewrote this test (was: "a confirm recorded BEFORE the clear's queue time does not hold an
+// item back", the B8b time comparison, removed): a void proves a restore after the clear, so a confirm queued before it
+// is superseded. Its item is kept (neither put back nor lost) until a pass reads the cloud after the restore: present ->
+// released and given back; a confirm queued after the restore stays final ("only later ones" hold an item back).
+test("inlineVoidPutBack: a confirm queued BEFORE the clear's void is kept until the cloud decides it; a later one holds the item back", () => {
   const at = C.serverNow() + 60_000;   // the clear's queue time, after the old confirm
-  S.confirmDeleteIntents("task-delete", ["old"]);
-  const back = S.inlineVoidPutBack(at, { tasks: [{ id: "old" }, { id: "k" }] });
-  assert.deepEqual(back.tasks.map(t => t.id), ["old", "k"]);
+  const q = S.queueDeleteIntents("task-delete", ["old"]);
+  S.confirmDeleteIntents("task-delete", ["old"], q);
+  S.queueDeleteIntents("task-delete", ["old", "k"], at);
+  S.voidDeleteIntents("task-delete", ["old", "k"], at);
+  S.confirmDeleteIntents("task-delete", ["later"], at + 10);         // queued after the restore the void proved
+  const back = S.inlineVoidPutBack(at, { tasks: [{ id: "old" }, { id: "k" }, { id: "later" }] });
+  assert.deepEqual(back.tasks.map(t => t.id), ["k"], "old waits, later stays gone");
+  assert.deepEqual(S.readClearStash(at).tasks.map(t => t.id), ["old"], "old is not lost: it waits in the clear's stash");
+  const st = S.sharedDeleteState("task", { cloudIds: new Set(["old"]), sinceSeq: S.confirmSeqNow(), restoreKnownAt: S.knownRestoreAt(), evidence: { present: [], complete: true } });
+  assert.deepEqual(st.released, ["old"], "the cloud holds it after the restore");
+  assert.deepEqual(S.stashGiveBack(S.readClearStash(at)).tasks.map(t => t.id), ["old"], "then it comes back");
 });
 
 // ─── #7: a confirm settles only up to its group's queue time (r20 p2-confirm-all-times) ───
@@ -222,12 +234,11 @@ test("#7: T1's late 'deleted' answer leaves x's intent at T2 (re-queued after a 
   S.confirmDeleteIntents("task-delete", ["x"], T1);                  // A handles T1's answer only now
   assert.deepEqual(S.intentGroups("task-delete"), [[T2, ["x", "y"]]], "T2's group keeps x");
   assert.ok(S.pendingDeleteIds("task-delete").has("x"), "x still pending at T2");
-  // Task B8c rewrote this assertion (was: "the confirm still drops x's queued upload (stamped before T1)"): x is pending
-  // again at T2, so T1's late confirm skips it entirely. The upload stays queued but cannot be sent while T2 is pending
-  // (uploadable); T2's own confirm drops it below.
-  assert.deepEqual(queued("task"), ["x"], "T1's late confirm leaves x's queued upload to T2's answer");
-  assert.deepEqual(S.uploadable("task", ["x"]), [], "and it is not sent while T2 is pending");
-  assert.equal(S.confirmedDeletes("task-delete").has("x"), false, "no confirm record from T1's late answer");
+  // Task B9 (review round 22 #1) restored the original assertion (B8c had rewritten it): the confirm still drops x's
+  // queued upload stamped before T1, and records x with T1 (the B8c skip is gone).
+  assert.deepEqual(queued("task"), [], "the confirm still drops x's queued upload (stamped before T1)");
+  assert.deepEqual(S.uploadable("task", ["x"]), [], "and x is not sent while T2 is pending");
+  assert.equal(S.confirmQueuedAt("task-delete").get("x"), 1000, "T1's late answer records x with T1");
   // Task B8a (review round 21 #8): T2's later stash keeps x; T2's own void gives it back, its confirm drops it.
   assert.deepEqual(S.readClearStash(T2)?.tasks.map(t => t.id), ["x", "y"], "T2's later stash keeps x");
   // The next replay (App.jsx replayDeleteIntents) sends T2's group, x included.
@@ -239,7 +250,7 @@ test("#7: T1's late 'deleted' answer leaves x's intent at T2 (re-queued after a 
   assert.ok(S.confirmedDeletes("task-delete").has("x"), "and records x");
   // releaseRestored never frees x while its T2 delete is pending (checked before that replay above).
 });
-test("#7: releaseRestored does not free x while T2 is pending (T1's late confirm leaves no record since B8c)", () => {
+test("#7: releaseRestored does not free x while T2 is pending (whatever T1's late confirm recorded)", () => {
   S.queueDeleteIntents("task-delete", ["x"], 1000);
   S.queueDeleteIntents("task-delete", ["x"], 3000);
   const sinceSeq = S.confirmSeqNow() + 1;

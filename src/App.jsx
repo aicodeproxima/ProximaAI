@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
@@ -21,7 +21,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, historyRemovals, tombstonedItems } from "./lib/syncReconcile.js";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations, clientHistoryWork, withoutDeleting } from "./lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations, clientHistoryWork } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -60,10 +60,12 @@ async function sendTask(task) {
   if (send.length) await rawSyncTask(send[0]);
   return send;
 }
-// Task B8a (review round 21 #1/#5): no History upload carries an item of a task the shared record blocks (pending in any
-// tab, or confirmed and not released): such items are stripped here, centrally, and an entry left with no item is not
-// sent (storage.js withoutBlockedItems). A stripped entry's queued copy stays queued (sentVersion no longer matches) until
-// replayHistoryUploads, which strips the same ids, sends or drops it.
+// Task B8a (review round 21 #1/#5): no History upload carries an item of a deleted task: such items are stripped here,
+// centrally, and an entry left with no item is not sent (storage.js withoutBlockedItems). Task B9 (review round 22 #5/#7):
+// only items of FINAL confirmed deletes are stripped (a pending delete's own transaction strips its items on the server,
+// and a void keeps them); an entry holding an item of a superseded confirm or of a delete call in flight waits (not sent).
+// A stripped or held entry's queued copy stays queued (sentVersion no longer matches) until replayHistoryUploads, which
+// plans the same way, sends or drops it.
 async function sendHistory(entries) {
   const send = uploadable("history", withoutBlockedItems(entries));
   if (send.length) await rawSyncHistoryBatch(send);
@@ -1556,6 +1558,10 @@ export default function ProximaApp() {
   const replayDeleteIntents = async (kind) => {
     const isTask = kind === "task-delete";
     for (const [ts, ids] of intentGroups(kind)) {
+      // Task B9 (review round 22 #2): in flight for every tab until its answer is handled (its confirm or void lands the
+      // ids it answers; the finally the rest).
+      const flight = beginDeleteFlight({ [kind]: ids }, ts);
+      try {
       const r = await deleteQueuedRemote(isTask ? "task" : "history", ids, ts);
       if (r.voided.length) {
         voidDeleteIntents(kind, r.voided, ts);   // settled and recorded (round 18 #3)
@@ -1578,19 +1584,21 @@ export default function ProximaApp() {
       // (round 15 S1: stashGiveBack waits while any intent at this queue time is pending, in either kind), and so does
       // every stash whose ids moved to it (round 17 #6: read now, before settleClearStashes could drop them as confirmed).
       if (r.voided.length) applyClearStashes(voidedClearStashes(ts));
+      } finally { endDeleteFlight(flight); }
     }
   };
 
   // Queued History uploads (forceSaveAll, the mount replay). A delete's rewrite (queued with its queuedAt) goes through
   // upsert_queued_history, restore-checked like the delete (review round 9). None carries an item of a generation this
-  // device is deleting (withoutDeleting); an entry left with no item is dropped instead of sent.
+  // device deleted for good (storage.js historyUploadPlan); an entry left with no item is dropped instead of sent.
   const replayHistoryUploads = async (queued) => {
     // Round 19 #2: an entry whose delete was confirmed is never sent (withoutConfirmedUploads removes a stale one). Task
     // B7a: nor one of an entry another tab is deleting or deleted (uploadable, the shared delete state).
     const byId = new Map(uploadable("history", withoutConfirmedUploads(queued)).filter(f => f.data).map(f => [f.id, f]));
-    // Task B8a (review round 21 #1): every task id the shared record blocks, pending AND confirmed. A confirmed id a
-    // restore brought back is released by the reconcile pass (sharedDeleteState), so it is blocked only until then.
-    const { upload, skip } = withoutDeleting([...byId.values()].map(f => f.data), uploadBlockedIds("task"));
+    // Task B9 (review round 22 #5/#7): the items of FINAL confirmed task deletes are stripped (an entry left with none is
+    // dropped from the queue); an entry holding an item of a superseded confirm or of a call in flight stays queued for a
+    // later replay (storage.js historyUploadPlan). A pending delete's items stay: its own transaction strips them.
+    const { upload, skip } = historyUploadPlan([...byId.values()].map(f => f.data));
     for (const id of skip) removeFailedSync("history", id, sentVersion(byId.get(id).data));
     for (const entry of upload) {
       const f = byId.get(entry.id);
@@ -2111,6 +2119,9 @@ export default function ProximaApp() {
       // Task B7a (round 20 #4): "confirmed before this pass" is decided by the shared confirm sequence, not by a clock
       // whose offset may move during the pass: a delete confirmed after this point is never released by this pass.
       const sinceSeq = confirmSeqNow();
+      // Task B9 (review round 22 #4/#6): the restore this browser knows of before the reads below, so they show the cloud
+      // after it: the confirms it superseded are decided by them (sharedDeleteState).
+      const restoreKnownAt = knownRestoreAt();
       const [remote, ids] = await Promise.all([pullAllRemoteData(), pullCloudIds()]);
       if (!remote) return;
       // A restore on any device voids the delete intents queued here before it (review round 2): their ids are no
@@ -2130,8 +2141,14 @@ export default function ProximaApp() {
       // may have deleted a row this stale tab still holds). Deletes confirmed (in any tab) before this pass began whose
       // rows the cloud holds again came back by a restore: released for every tab (releaseRestored, review round 5).
       // Every other confirmed id, and every id with a delete intent pending in any tab, is being deleted for the plans.
-      const taskDel = sharedDeleteState("task", { deleting: deletingIds.current, cloudIds: ids?.tasks ?? null, sinceSeq });
-      const logDel = sharedDeleteState("history", { deleting: deletingLogIds.current, cloudIds: ids?.history ?? null, sinceSeq });
+      // Task B9 (review round 22 #4/#6): a confirm queued before a restore this browser knew of is decided by the cloud
+      // after that restore: a generation it holds as a task row, as an item of a History entry, or as the restore's own
+      // removal (by_restore tombstone, History-only) came back and is released; one absent from all of them stays deleted.
+      const cloudItemIds = remote.historyOk ? (remote.history || []).flatMap(l => (Array.isArray(l?.tasks) ? l.tasks : [])).map(i => i?.id).filter(Boolean) : null;
+      const restoreRemoved = ids?.taskRestoreRemoved instanceof Set ? ids.taskRestoreRemoved : null;
+      const taskDel = sharedDeleteState("task", { deleting: deletingIds.current, cloudIds: ids?.tasks ?? null, sinceSeq, restoreKnownAt,
+        evidence: { present: [...(cloudItemIds || []), ...(restoreRemoved || [])], complete: !!cloudItemIds && !!restoreRemoved } });
+      const logDel = sharedDeleteState("history", { deleting: deletingLogIds.current, cloudIds: ids?.history ?? null, sinceSeq, restoreKnownAt });
       for (const id of taskDel.released) deletingIds.current.delete(id);
       for (const id of logDel.released) deletingLogIds.current.delete(id);
       // Delete means delete in every tab: this tab's copy of a row whose delete was confirmed and that the cloud lacks goes
@@ -2278,11 +2295,10 @@ export default function ProximaApp() {
           await deleteHistoryEntries([...rmLogs]);
         }
       }
-      // None carries a generation being deleted (review round 9 guard): such an entry goes without it. Task B8a (review
-      // round 21 #1/#5): every task id the shared record blocks, pending in any tab AND confirmed (this pass already
-      // released those a restore brought back, sharedDeleteState above); an entry left with no item is not uploaded.
-      // Task B7a: entries another tab is deleting or deleted are left out first (uploadable).
-      const logUploads = withoutDeleting(uploadable("history", logPlan.upload.slice(0, 100)), uploadBlockedIds("task")).upload;
+      // None carries a generation whose delete is final (review round 9 guard, task B9): such an entry goes without it, and
+      // one left with no item is not uploaded; one holding an item of a superseded confirm or of a call in flight waits
+      // (storage.js historyUploadPlan). Task B7a: entries another tab is deleting or deleted are left out first (uploadable).
+      const logUploads = historyUploadPlan(uploadable("history", logPlan.upload.slice(0, 100))).upload;
       if (logUploads.length) {
         for (const l of logUploads) { savedLogIds.current.add(l.id); addHistoryEntry(l); addFailedSync({ kind: "history", id: l.id, data: l }); }
         try { for (const l of await sendHistory(logUploads)) removeFailedSync("history", l.id, sentVersion(l)); } catch {}
@@ -2322,17 +2338,20 @@ export default function ProximaApp() {
   const persistLog = useCallback((entry) => {
     // Task B7a: an entry another tab is deleting or deleted is neither stored back here nor uploaded (a stale copy).
     if (uploadBlockedIds("history").has(entry?.id)) return Promise.resolve();
-    // Task B8a (review round 21 #1): nor an item of a task the shared record blocks. Stored here as given (a pending
-    // delete may still be voided), queued and sent without those items; an entry left with no item is only stored, and
-    // stays unsaved, so it is persisted again once that delete is voided, or leaves with it (the reconcile's stale step).
-    const send = withoutBlockedItems([entry])[0];
+    // Task B8a (review round 21 #1): nor an item of a task whose delete is FINAL. Stored here as given, queued and sent
+    // without those items; an entry left with no item is only stored, and stays unsaved (it leaves with them: the
+    // reconcile's stale step). Task B9 (review round 22 #5/#7): an item that is only PENDING deletion stays in the queued
+    // copy and the upload (that delete's transaction strips it on the server; a void keeps it). An entry holding an item
+    // of a superseded confirm or of a call in flight is queued as given and waits (sendHistoryEntry sends nothing): the
+    // queue entry is cleared only by an upload that was sent.
+    const send = historyUploadPlan([entry]).defer.length ? entry : withoutBlockedItems([entry])[0];
     addHistoryEntry(entry);
     if (!send) return Promise.resolve();
     savedLogIds.current.add(entry.id);
     addFailedSync({ kind: "history", id: send.id, data: send });
     setFailedSyncCount(getFailedSyncs().length);
     return trackedSync(`history-${send.id}${isOpenLog(send) ? "-open" : ""}`, () => sendHistoryEntry(send))
-      .then(() => { removeFailedSync("history", send.id, e => sameLogContent(e.data, send)); setFailedSyncCount(getFailedSyncs().length); })
+      .then((sent) => { if (sent?.length) removeFailedSync("history", send.id, e => sameLogContent(e.data, send)); setFailedSyncCount(getFailedSyncs().length); })
       .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
   }, [trackedSync]);
 
@@ -2365,7 +2384,8 @@ export default function ProximaApp() {
       for (const id of emptied) { deletingLogIds.current.add(id); savedLogIds.current.delete(id); removeFailedSync("history", id); }
       const emptiedAt = queueDeleteIntents("history-delete", emptied);
       deleteHistoryEntries(emptied);
-      // Restore-checked at its queue time (review round 8).
+      // Restore-checked at its queue time (review round 8). In flight for every tab until answered (task B9).
+      const flight = beginDeleteFlight({ "history-delete": emptied }, emptiedAt);
       deleteHistoryRemote(emptied, emptiedAt).then(r => {
         if (r.deleted.length) confirmIntents("history-delete", r.deleted, emptiedAt);
         if (r.voided.length) {
@@ -2374,7 +2394,7 @@ export default function ProximaApp() {
           giveBackVoided(emptiedAt);   // round 18 #3: stashes whose ids moved to this delete
         }
         setFailedSyncCount(getFailedSyncs().length);
-      });
+      }).finally(() => endDeleteFlight(flight));
     }
     const dropped = new Set(emptied), byId = new Map(changed.map(l => [l.id, l]));
     logsRef.current = logsRef.current.filter(l => !dropped.has(l.id)).map(l => byId.get(l.id) || l);
@@ -2842,14 +2862,18 @@ export default function ProximaApp() {
         ? sendHistoryRewrites(plan.rewrite.map(l => logsRef.current.find(x => x.id === l.id) || l), plan.historyQueuedAt)
         : null;
       if (plan.remove.length) {
-        // Restore-checked at the action's queue time (review round 8): entries a later restore brought back stay.
-        const hr = await deleteHistoryRemote(plan.remove, plan.historyQueuedAt ?? undefined);
-        if (hr.deleted.length) confirmIntents("history-delete", hr.deleted, plan.historyQueuedAt);
-        if (hr.voided.length) {
-          voidDeleteIntents("history-delete", hr.voided, plan.historyQueuedAt);
-          releaseVoided(deletingLogIds, "history-delete", hr.voided);
-          giveBackVoided(plan.historyQueuedAt);   // round 18 #3
-        }
+        // Restore-checked at the action's queue time (review round 8): entries a later restore brought back stay. In
+        // flight for every tab until answered (task B9).
+        const flight = beginDeleteFlight({ "history-delete": plan.remove }, plan.historyQueuedAt);
+        try {
+          const hr = await deleteHistoryRemote(plan.remove, plan.historyQueuedAt ?? undefined);
+          if (hr.deleted.length) confirmIntents("history-delete", hr.deleted, plan.historyQueuedAt);
+          if (hr.voided.length) {
+            voidDeleteIntents("history-delete", hr.voided, plan.historyQueuedAt);
+            releaseVoided(deletingLogIds, "history-delete", hr.voided);
+            giveBackVoided(plan.historyQueuedAt);   // round 18 #3
+          }
+        } finally { endDeleteFlight(flight); }
       }
       await rewrites;
     }
@@ -3553,7 +3577,7 @@ export default function ProximaApp() {
     // after the safety backup), released in the finally; from then on the shared queue and confirmed record decide.
     const callHold = {};
     holdDeleting("task-delete", ids, callHold);
-    let heldLogIds = [];
+    let heldLogIds = [], taskFlight = null;
     try {
       // 1. Safety snapshot while Automatic backups is on (the server skips it when off: ok without an id). If an
       //    expected backup can't be confirmed, abort: never destroy data without the recovery point the owner chose.
@@ -3598,6 +3622,8 @@ export default function ProximaApp() {
       // 5. Local IndexedDB delete (single transaction, awaited).
       await deleteTasks(ids);
       // 6. Cloud delete (server-checked, stamped with the action's queue time). On success, clear the replay intents.
+      //    In flight for every tab until its answer is handled (task B9, review round 22 #2; the finally ends it).
+      taskFlight = beginDeleteFlight({ "task-delete": ids }, queuedAt);
       const r = await deleteTasksRemote(ids, queuedAt);
       if (r.ok) confirmIntents("task-delete", ids, queuedAt);
       else if (r.deleted?.length) confirmIntents("task-delete", r.deleted, queuedAt);
@@ -3638,6 +3664,7 @@ export default function ProximaApp() {
       setTimeout(() => setAccountToast(""), 5000);
     } finally {
       unholdDeleting("task-delete", ids, callHold); unholdDeleting("history-delete", heldLogIds, callHold);
+      endDeleteFlight(taskFlight);
     }
   };
 
@@ -3715,6 +3742,7 @@ export default function ProximaApp() {
     // Task B7a (review round 20 #8): held in this tab while this call runs (intents queued after the safety backup).
     const callHold = {};
     holdDeleting("history-delete", ids, callHold);
+    let logFlight = null;
     try {
       // 1. Pre-destructive snapshot (HARD RULE) — abort if it can't be confirmed.
       const bk = await createBackup("pre-bulk-delete-logs", `Before deleting ${noun}`);
@@ -3735,7 +3763,9 @@ export default function ProximaApp() {
       setLogs(prev => prev.filter(l => !idSet.has(l.id)));
       // 5. Local IndexedDB delete (awaited).
       await deleteHistoryEntries(ids);
-      // 6. Cloud delete (restore-checked at the action's queue time, review round 8).
+      // 6. Cloud delete (restore-checked at the action's queue time, review round 8). In flight for every tab until its
+      //    answer is handled (task B9; the finally ends it).
+      logFlight = beginDeleteFlight({ "history-delete": ids }, queuedAt);
       const r = await deleteHistoryRemote(ids, queuedAt);
       if (r.ok) confirmIntents("history-delete", ids, queuedAt);
       else if (r.deleted.length) confirmIntents("history-delete", r.deleted, queuedAt);
@@ -3763,6 +3793,7 @@ export default function ProximaApp() {
       setTimeout(() => setAccountToast(""), 5000);
     } finally {
       unholdDeleting("history-delete", ids, callHold);
+      endDeleteFlight(logFlight);
     }
   };
 
@@ -5016,7 +5047,10 @@ export default function ProximaApp() {
                       // Only the planned ids leave IndexedDB (review round 14): an entry that arrived after the copy stays
                       // there, untouched.
                       await deleteHistoryEntries(clearedLogIds);
-                      // Restore-checked at its queue time (review round 8): a restore that landed meanwhile wins.
+                      // Restore-checked at its queue time (review round 8): a restore that landed meanwhile wins. In
+                      // flight for every tab until its answer is handled (task B9, review round 22 #2; the finally ends it).
+                      const logsFlight = beginDeleteFlight({ "history-delete": clearedLogIds }, snap);
+                      try {
                       const cr = await clearQueuedRemote("history", snap, clearedLogIds);   // named: entries created later elsewhere stay (round 9)
                       if (cr.ok) dropClearStash(snap);   // confirmed: its stash goes (a void gives it back below, round 17)
                       if (cr.voided) {
@@ -5055,6 +5089,7 @@ export default function ProximaApp() {
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
                       setAccountToast(bk.id ? "Logs cleared — safety backup saved" : "Logs cleared permanently");
                       setTimeout(() => setAccountToast(""), 5000);
+                      } finally { endDeleteFlight(logsFlight); }
                     }}>Clear Logs</button>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
                       const ab = await readAutoBackups();
@@ -5186,6 +5221,10 @@ export default function ProximaApp() {
                       // that existed then plus every row id this device knew (a row created later on another device
                       // stays). The server gives every generation without a row that History entries existing by then hold
                       // a user tombstone, and strips their History items in the same transaction (review rounds 7, 9, 10).
+                      // In flight for every tab until its answer is handled (task B9, review round 22 #2; the finally
+                      // ends it): the clear's task ids and the History entries it removes at its time.
+                      const outputsFlight = beginDeleteFlight({ "task-delete": clearedTaskIds, "history-delete": plan.remove || [] }, clearAt);
+                      try {
                       const cr = await clearQueuedRemote("task", queuedAt, namedIds);
                       // Archives that finished while this clear held their tasks (round 15 S5): re-applied if voided, their
                       // files deleted if confirmed.
@@ -5248,6 +5287,7 @@ export default function ProximaApp() {
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
                       setAccountToast(bk.id ? `Generations cleared — safety backup saved${note}` : note ? `Generations cleared${note}` : "Generations cleared permanently, everywhere");
                       setTimeout(() => setAccountToast(""), 5000);
+                      } finally { endDeleteFlight(outputsFlight); }
                     }}>Clear Outputs</button>
                     <button className="api-test-btn" style={{ background: "var(--error)" }} onClick={async () => {
                       const ab = await readAutoBackups();
@@ -5391,6 +5431,9 @@ export default function ProximaApp() {
                       // restore landing between them). The server keeps the restore marker and the form holds. Settings and
                       // favorites are bounded by the exact snapshot (review round 11): nothing else purges them, so no
                       // slack, and this device's own last writes go too.
+                      // In flight for every tab until its answer is handled (task B9, review round 22 #2; the finally ends it).
+                      const resetFlight = beginDeleteFlight({ "task-delete": clearedTaskIds, "history-delete": clearedLogIds }, resetAt);
+                      try {
                       const rr = await resetQueuedRemote(resetAt, clearedTaskIds, clearedLogIds, snap);
                       // Archives that finished while this reset held their tasks (round 15 S5): re-applied if voided, their
                       // files deleted if confirmed.
@@ -5466,6 +5509,7 @@ export default function ProximaApp() {
                       setSaveStatus("saved"); setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
                       setAccountToast(bk.id ? `Everything cleared — safety backup saved${note}` : note ? `Everything cleared${note}` : "Everything cleared permanently, everywhere");
                       setTimeout(() => setAccountToast(""), 5000);
+                      } finally { endDeleteFlight(resetFlight); }
                     }}>Reset Everything</button>
                   </div>
                 </div>

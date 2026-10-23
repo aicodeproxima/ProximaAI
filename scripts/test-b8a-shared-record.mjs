@@ -74,7 +74,7 @@ function tabBPass({ tasks, logs, ids = NONE() }) {
   const failedQ = S.getFailedSyncs();
   const pendingLogs = new Set(failedQ.filter(f => f.kind === "history").map(f => f.id));
   const logPlan = R.planLogSync({ local: logs, cloud: [], cloudIds: ids.history, tombstones: ids.historyTombstones, pending: pendingLogs, deleting: logDel.deleting, since });
-  const logUploads = B.withoutDeleting(S.uploadable("history", logPlan.upload.slice(0, 100)), S.uploadBlockedIds("task")).upload;
+  const logUploads = S.historyUploadPlan(S.uploadable("history", logPlan.upload.slice(0, 100))).upload;   // task B9
   for (const l of logUploads) S.addFailedSync({ kind: "history", id: l.id, data: l });
   // sendHistory: the central guard
   const sent = S.uploadable("history", S.withoutBlockedItems(logUploads));
@@ -103,21 +103,26 @@ test("#5 variant: B holds L1 but not task x (History-only): item x leaves L1, an
   assert.deepEqual(itemsOf(p.logs), [{ id: "L2", items: ["y"] }], "L2 keeps y only");
   assert.deepEqual(itemsOf(p.sent), [{ id: "L2", items: ["y"] }], "the upload carries no item x");
 });
-test("#1 guard: every History sender strips items of blocked task ids (pending AND confirmed); an emptied entry is not sent", () => {
+// Task B9 (review round 22 #5/#7) rewrote this test (was: pending items stripped too): a pending delete's item stays in
+// the upload (its own transaction strips it on the server, and a void keeps it); a confirmed one's goes.
+test("#1 guard: every History sender strips items of confirmed (final) task ids, not pending ones; an emptied entry is not sent", () => {
   S.queueDeleteIntents("task-delete", ["p"]);                    // pending in another tab
   const at = S.queueDeleteIntents("task-delete", ["c"]);
   S.confirmDeleteIntents("task-delete", ["c"], at);               // confirmed, not released
   const E = (id, items) => ({ id, timestamp: OLD, tasks: items.map(i => ({ id: i, status: "completed", outputs: [] })) });
-  const out = S.withoutBlockedItems([E("a", ["c"]), E("b", ["p", "k"]), E("e", []), E("d", ["k"])]);
-  assert.deepEqual(itemsOf(out), [{ id: "b", items: ["k"] }, { id: "e", items: [] }, { id: "d", items: ["k"] }]);
+  const out = S.withoutBlockedItems([E("a", ["c"]), E("b", ["p", "k"]), E("e", []), E("d", ["k", "c"])]);
+  assert.deepEqual(itemsOf(out), [{ id: "b", items: ["p", "k"] }, { id: "e", items: [] }, { id: "d", items: ["k"] }]);
 });
 test("#1 wiring: the senders, the reconcile, replayHistoryUploads and persistLog strip blocked task items; the stale step drops their History", () => {
   for (const name of ["sendHistory", "sendHistoryEntry", "sendQueuedHistory"])
     assert.match(between(`async function ${name}(`, "\n}\n"), /const send = uploadable\("history", withoutBlockedItems\(/, name);
-  assert.match(between("const logUploads =", "setFailedSyncCount"), /withoutDeleting\(uploadable\("history", logPlan\.upload\.slice\(0, 100\)\), uploadBlockedIds\("task"\)\)/);
-  assert.match(between("const replayHistoryUploads = async", "\n  };"), /withoutDeleting\([^;]*uploadBlockedIds\("task"\)\)/);
-  assert.doesNotMatch(src, /withoutDeleting\([^;]*pendingDeleteIds\("task-delete"\)\)/, "no upload strips only pending ids");
-  assert.match(between("const persistLog = useCallback(", "}, [trackedSync]);"), /const send = withoutBlockedItems\(\[entry\]\)\[0\];[\s\S]*addFailedSync\(\{ kind: "history", id: send\.id, data: send \}\)[\s\S]*sendHistoryEntry\(send\)/);
+  // Task B9 (review round 22 #5/#7) rewrote these checks (were: withoutDeleting by uploadBlockedIds, pending included):
+  // the reconcile and the replay plan through historyUploadPlan (final confirms only), and persistLog queues and sends
+  // the entry as planned (held back as given while an item is superseded or in flight).
+  assert.match(between("const logUploads =", "setFailedSyncCount"), /historyUploadPlan\(uploadable\("history", logPlan\.upload\.slice\(0, 100\)\)\)\.upload/);
+  assert.match(between("const replayHistoryUploads = async", "\n  };"), /historyUploadPlan\(\[\.\.\.byId\.values\(\)\]\.map\(f => f\.data\)\)/);
+  assert.doesNotMatch(src, /withoutDeleting\([^;]*(pendingDeleteIds|uploadBlockedIds)\(/, "no upload strips pending ids");
+  assert.match(between("const persistLog = useCallback(", "}, [trackedSync]);"), /const send = historyUploadPlan\(\[entry\]\)\.defer\.length \? entry : withoutBlockedItems\(\[entry\]\)\[0\];[\s\S]*addFailedSync\(\{ kind: "history", id: send\.id, data: send \}\)[\s\S]*sendHistoryEntry\(send\)/);
   const rc = between("const reconcileWithCloud = useCallback(", "\n  }, []);");
   const stale = rc.indexOf("taskDel.stale(tasksRef.current)"), drop = rc.indexOf("dropLogItemsFor(staleGone)"), plan = rc.indexOf("const logPlan = planLogSync(");
   assert.ok(stale >= 0 && drop > stale && plan > drop, "the stale step runs dropLogItemsFor before History is planned");
@@ -219,11 +224,18 @@ test("#8: a late confirm of T1 keeps the T2 clear's stash and a later queued upl
   assert.deepEqual([s.uploads.map(e => e.id), Object.keys(s.archives || {})], [["x"], ["x"]], "T2's stash keeps x's upload and archive");
   const q = S.getFailedSyncs().filter(e => e.kind === "task").map(e => e.id);
   assert.deepEqual(q, ["z"], "the upload queued after T1 stays, the one before it goes");
-  // Task B8c rewrote this assertion (was: "the confirm record is still written"): x is pending again at T2, so T1's late
-  // confirm skips it entirely and only T2's own answer decides it (scripts/test-b8b-giveback-submit.mjs B8c tests).
-  assert.equal(S.confirmedDeletes("task-delete").has("x"), false, "no confirm record for x (pending at T2)");
+  // Task B9 (review round 22 #1) restored the original assertion (B8c had rewritten it to "no record"): the late confirm
+  // records x with T1, its group's queue time; T2's pending intent still decides x's uploads.
+  assert.ok(S.confirmedDeletes("task-delete").has("x"), "the confirm record is still written");
+  assert.equal(S.confirmQueuedAt("task-delete").get("x"), T1);
   assert.ok(S.confirmedDeletes("task-delete").has("z") && S.confirmedDeletes("task-delete").has("w"), "the group's other ids are recorded");
   S.voidDeleteIntents("task-delete", ["x"], T2);
+  // Task B9 rewrote the rest into the outcome: T2's void proves a restore after T2, so T1's confirm is superseded and x is
+  // kept (not lost, not given back) until a pass reads the cloud after that restore; it holds x (the restore brought it
+  // back): x is released and T2's stash gives x back.
+  assert.equal(S.stashGiveBack(S.readClearStash(T2)).uploads.length, 0, "undecided: kept in the stash");
+  const st = S.sharedDeleteState("task", { cloudIds: new Set(["x"]), sinceSeq: S.confirmSeqNow(), restoreKnownAt: S.knownRestoreAt(), evidence: { present: [], complete: true } });
+  assert.deepEqual(st.released, ["x"]);
   const back = S.stashGiveBack(S.readClearStash(T2));
   assert.deepEqual([back.uploads.map(e => e.id), Object.keys(back.archives)], [["x"], ["x"]], "T2's void gives x back");
 });
