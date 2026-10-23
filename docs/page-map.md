@@ -122,6 +122,12 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   topic (`get_my_account` → `sync_topic`); a device reconciles ~0.4–1.4 s after a write elsewhere (measured on both
   devices). Manual ping: `node scripts/tools/sb-query.mjs --write "select realtime.send('{}'::jsonb, 'changed',
   proxima_auth.sync_topic(), false)"`.
+- Server key (rotated 2026-10-23 03:46–03:48 UTC with `scripts/tools/rotate-service-key.mjs`): Vercel
+  `SUPABASE_SERVICE_ROLE_KEY` holds the secret key `server_20261023_034629`; the legacy JWT keys (anon + service_role) are
+  disabled and the old `default` secret is deleted. Re-check anytime: `node scripts/tools/rotate-service-key.mjs --verify`
+  (read-only). Which key a server sends, without reading Vercel's Sensitive value: edge logs
+  `request.sb.apikey.apikey.prefix` equals the Management API's key `prefix` (user agent `Vercel Edge Functions`). A
+  row-policy probe must scan rows (HEAD + `Prefer: count=exact`): `limit=0` never evaluates the policy (200 `[]`).
 - Vercel function logs: this folder is NOT linked (`vercel env ls` fails), so use the Vercel MCP `get_runtime_logs` with
   projectId `prj_sF9ANOmJleWmAN9EBRIXqY5ZA9GM`, teamId `team_vILmEnHlW1iEzWxhM3UJhzim`, environment production and a
   `query` (e.g. "rate limiting DISABLED": the proxy's limiter was off in production, measured 2026-10-22 22:12 UTC).
