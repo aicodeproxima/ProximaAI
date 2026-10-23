@@ -63,7 +63,7 @@ test("Reset clears History, generations, settings and favorites in ONE restore-c
 });
 test("clears name the ids their device knew (Clear Outputs: rows plus this device's History-only ones)", () => {
   assert.match(outputs(), /clearQueuedRemote\("task", queuedAt, namedIds\)/);
-  assert.match(src, /clearQueuedRemote\("history", queuedAt, clearedLogIds\)/, "Clear Logs");
+  assert.match(src, /clearQueuedRemote\("history", snap, clearedLogIds\)/, "Clear Logs");
   assert.match(outputs(), /settleCloudClear\(\{ tasks: namedIds \}\)/);
   assert.match(outputs(), /const namedIds = \[\.\.\.rowIds, \.\.\.namedHistoryOnly\]/);
   assert.match(outputs(), /namedHistoryOnly = historyOnly\.filter\(g => localLogIds\.has\(g\.batchId\)\)/);
@@ -89,12 +89,42 @@ test("Clear Outputs and Reset take their snapshot from the SERVER's time BEFORE 
 // their History-only items survived. Only cloud entries can be late; the cloud list alone is filtered.
 test("Clear Outputs: only cloud-only entries created after the snapshot are late; its own entries stay in the plan", () => {
   const h = outputs();
-  const local = h.indexOf("const localLogIds = new Set(logsRef.current.map(l => l.id))"), snap = h.indexOf("const snap = ");
+  const local = h.indexOf("const localLogIds = new Set(localLogs.map(l => l.id))"), snap = h.indexOf("const snap = ");
   assert.ok(local >= 0 && snap > local, "this device's entries are taken right before the snapshot");
   assert.match(h, /const late = new Set\(remote\.history\.filter\(l => !localLogIds\.has\(l\.id\) && Date\.parse\(l\.createdAt\) > clearAt\)/);
-  assert.match(h, /mergeLogs\(logsRef\.current, remote\.history\.filter\(l => !late\.has\(l\.id\)\)\)/);
+  assert.match(h, /mergeLogs\(localLogs, remote\.history\.filter\(l => !late\.has\(l\.id\)\)\)/);
   assert.doesNotMatch(h, /mergeLogs\([^;]*\)\.filter\(l => !late/, "the merged list (local entries included) is not filtered");
   assert.match(h, /settleDeleteIntents\("task-delete", historyOnly\.filter\(g => !localLogIds\.has\(g\.batchId\)\)/);
+});
+// Review round 12 (F1): Clear Outputs and Reset planned over tasksRef / logsRef read AFTER the snapshot, so an entry or
+// task another device synced in during the awaits (created after the snapshot) was planned, named or given an intent.
+test("Clear Outputs and Reset plan over this device's state captured BEFORE the snapshot, plus cloud rows existing by it", () => {
+  for (const [name, h, v] of [["Clear Outputs", outputs(), "clearAt"], ["Reset", reset(), "resetAt"]]) {
+    const snap = h.indexOf("await serverTimeRemote()");
+    const lt = h.indexOf("const localTasks = tasksRef.current.slice()"), ll = h.indexOf("const localLogs = logsRef.current.slice()");
+    assert.ok(lt >= 0 && ll >= 0 && lt < snap && ll < snap, `${name}: local state captured before the snapshot`);
+    assert.match(h, /new Map\(localTasks\.map\(t => \[t\.id, t\]\)\)/, `${name}: tasks planned from the capture`);
+    assert.match(h, new RegExp(`remote\\.tasks[\\s\\S]{0,160}Date\\.parse\\(t\\.createdAt\\) > ${v}`), `${name}: later rows skipped`);
+  }
+  const h = outputs();
+  assert.match(h, /mergeLogs\(localLogs, /);
+  const snap = h.indexOf("await serverTimeRemote()"), staged = h.indexOf("stagePurge(");
+  assert.ok(staged > snap);
+  assert.doesNotMatch(h.slice(snap, staged), /tasksRef\.current|logsRef\.current/, "Clear Outputs: no live read after the snapshot");
+  assert.match(h, /historyOnlyGenerations\(mergedLogs, new Set\(\[\.\.\.all\.keys\(\), \.\.\.remote\.tasks\.map\(t => t\.id\)\]\)\)/,
+    "a generation with any row in the read is not History-only");
+  assert.doesNotMatch(h, /clearTasksDB\(/, "Clear Outputs removes only the planned ids here");
+  assert.match(h, /deleteTasks\(/);
+  assert.match(reset(), /new Map\(localLogs\.map\(l => \[l\.id, l\]\)\)/);
+});
+// Review round 12 (F5): Clear Logs stamped its clear with the device's estimate of the server time.
+test("Clear Logs takes the server's time before anything changes and clears / queues at it", () => {
+  const h = between('createBackup("pre-clear-logs"', ">Clear Logs</button>");
+  const snap = h.indexOf("const snap = isSupabaseConfigured() ? await serverTimeRemote() : Date.now()"), drop = h.indexOf("dropQueuedUploads(");
+  assert.ok(snap >= 0 && drop > snap, "snapshot before dropQueuedUploads");
+  assert.match(h.slice(snap, drop), /if \(snap == null\)[\s\S]*return;/, "no server time -> nothing done");
+  assert.match(h, /queueDeleteIntents\("history-delete", clearedLogIds, snap\)/);
+  assert.match(h, /clearQueuedRemote\("history", snap, clearedLogIds\)/);
 });
 // Review round 10 (F2): a confirmed delete kept in deletingIds stripped a generation a later restore brought back.
 test("History uploads leave out only generations whose delete is still in flight", () => {

@@ -547,9 +547,9 @@ export async function pullAllForPurge() {
     }
   };
   try {
-    const tasks = await all("tasks", rowToTask);
-    // History entries carry their row's created_at: Clear Outputs / Reset skip the ones created after their snapshot
-    // time (review round 10).
+    // Tasks rows and History entries carry their row's created_at: Clear Outputs / Reset skip the ones created after
+    // their snapshot time (review rounds 10 and 12).
+    const tasks = await all("tasks", (row) => ({ ...rowToTask(row), createdAt: row.created_at }));
     const history = tasks && await all("history", (row) => ({ ...rowToLog(row), createdAt: row.created_at }));
     return tasks && history ? { tasks, history } : null;
   } catch (err) { warnOnce("pullAllForPurge", err); return null; }

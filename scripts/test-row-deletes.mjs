@@ -223,13 +223,16 @@ await test("clearQueuedRemote: one clear_queued_rows call; voided and failures r
 });
 
 // Review round 10: Clear Outputs / Reset skip History entries created after their snapshot time.
-await test("pullAllForPurge: History entries carry the row's created_at as createdAt; tasks unchanged", async () => {
-  sb.__setClientForTests(fakeClient((q) => (q.table === "tasks" ? { data: rows(1), error: null }
+// Review round 12 (F1): tasks rows carry it too, so a row another device created after the snapshot is not planned.
+await test("pullAllForPurge: History entries and tasks rows carry the row's created_at as createdAt", async () => {
+  sb.__setClientForTests(fakeClient((q) => (q.table === "tasks" ? { data: rows(1).map(r => ({ ...r, created_at: "2026-10-22T09:00:00Z" })), error: null }
     : { data: [{ id: "h1", device_id: "user:owner", tasks: [], created_at: "2026-10-22T10:00:00Z" }], error: null })));
   const r = await sb.pullAllForPurge();
   assert.equal(r.history[0].createdAt, "2026-10-22T10:00:00Z");
   assert.equal(r.history[0].id, "h1");
   assert.equal(r.tasks[0].id, "r00000");
+  assert.equal(r.tasks[0].createdAt, "2026-10-22T09:00:00Z");
+  assert.equal(r.tasks[0].status, "pending", "still mapped like pullTasks");
 });
 // Review round 10 (F6): Reset is one reset_queued_rows call, one transaction under one restore check.
 await test("resetQueuedRemote: one reset_queued_rows call with the snapshot time and de-duplicated ids; voided / failure reported", async () => {

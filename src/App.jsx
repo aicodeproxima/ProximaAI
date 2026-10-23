@@ -4664,17 +4664,28 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
+                      // The clear's bound is the SERVER's time, read before anything changes (review round 12: the
+                      // device's estimate, serverNow(), could sit past the server's time). No slack, unlike Clear
+                      // Outputs / Reset: Clear Logs deletes no files and no WaveSpeed copies, so an entry created just
+                      // before the snapshot that this device has not read yet may go with the rest.
+                      const snap = isSupabaseConfigured() ? await serverTimeRemote() : Date.now();
+                      if (snap == null) {
+                        setSaveStatus("error");
+                        setAccountToast("Couldn't read the server's time — nothing was cleared. Try again.");
+                        setTimeout(() => setAccountToast(""), 6000);
+                        return;
+                      }
                       // No cleared entry may be uploaded again: queued uploads and this session's replays (review wf_1945b758-923 #1).
                       const removedLogIds = logsRef.current.map(l => l.id);
                       const { history: queuedLogIds } = dropQueuedUploads(["history"]);
                       for (const id of [...removedLogIds, ...queuedLogIds]) deletingLogIds.current.add(id);
                       const clearedLogIds = [...removedLogIds, ...queuedLogIds];
-                      const queuedAt = queueDeleteIntents("history-delete", clearedLogIds);   // before the clear fires (review wf_ec400a67-988 #1)
+                      queueDeleteIntents("history-delete", clearedLogIds, snap);   // before the clear fires (review wf_ec400a67-988 #1)
                       setFailedSyncCount(getFailedSyncs().length);
                       setLogs([]); savedLogIds.current.clear();
                       await clearHistory();
                       // Restore-checked at its queue time (review round 8): a restore that landed meanwhile wins.
-                      const cr = await clearQueuedRemote("history", queuedAt, clearedLogIds);   // named: entries created later elsewhere stay (round 9)
+                      const cr = await clearQueuedRemote("history", snap, clearedLogIds);   // named: entries created later elsewhere stay (round 9)
                       if (cr.voided) {
                         settleDeleteIntents("history-delete", clearedLogIds);
                         for (const id of clearedLogIds) deletingLogIds.current.delete(id);
@@ -4707,9 +4718,14 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
-                      // This device's History entries when the clear began: never "late" below (they are what the owner
-                      // sees and is clearing), so their History-only generations are planned and named (review round 11).
-                      const localLogIds = new Set(logsRef.current.map(l => l.id));
+                      // This device's tasks and History entries when the clear began, taken BEFORE the snapshot: the clear
+                      // plans over them and the cloud rows existing by the snapshot only (review round 12: an entry or
+                      // task another device synced in during the awaits below was created after the snapshot and must
+                      // survive, rule g). This device's entries are never "late" below (they are what the owner sees and
+                      // is clearing), so their History-only generations are planned and named (review round 11).
+                      const localTasks = tasksRef.current.slice();
+                      const localLogs = logsRef.current.slice();
+                      const localLogIds = new Set(localLogs.map(l => l.id));
                       // The clear covers the rows that existed before this read (review round 10): its bound is the
                       // SERVER's time now (review round 11: a stale device clock offset could put it after the server's
                       // time), less the slack second for rows whose write began just before and is not visible to the
@@ -4722,8 +4738,9 @@ export default function ProximaApp() {
                         return;
                       }
                       const clearAt = snap - SNAPSHOT_SLACK_MS;
-                      // Every generation this account has: here and every cloud row (all pages, any status), so the purge
-                      // reaches rows beyond the 500 loaded. A failed read clears nothing (review wf_ec400a67-988 #3).
+                      // Every generation this account had at the snapshot: this device's state captured above and every
+                      // cloud row existing by it (all pages, any status), so the purge reaches rows beyond the 500 loaded.
+                      // A failed read clears nothing (review wf_ec400a67-988 #3).
                       const remote = isSupabaseConfigured() ? await pullAllForPurge() : { tasks: [], history: [] };
                       if (!remote) {
                         setSaveStatus("error");
@@ -4731,8 +4748,10 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
-                      const all = new Map(tasksRef.current.map(t => [t.id, t]));
-                      for (const t of remote.tasks) if (!all.has(t.id)) all.set(t.id, t);
+                      // Rows created after the snapshot belong to generations another device started after it: left
+                      // alone here and in the cloud (review round 12).
+                      const all = new Map(localTasks.map(t => [t.id, t]));
+                      for (const t of remote.tasks) if (!all.has(t.id) && !(Date.parse(t.createdAt) > clearAt)) all.set(t.id, t);
                       const realTasks = [...all.values()];
                       // Generations History holds without a tasks row (a restore keeps 500 tasks rows but up to 1000
                       // entries) go too, with their files (review round 7). Cloud-only entries created after the snapshot
@@ -4740,8 +4759,10 @@ export default function ProximaApp() {
                       // cloud list is filtered: this device's own entries are never late (review round 11), or they
                       // stayed here and their History-only items survived.
                       const late = new Set(remote.history.filter(l => !localLogIds.has(l.id) && Date.parse(l.createdAt) > clearAt).map(l => l.id));
-                      const mergedLogs = mergeLogs(logsRef.current, remote.history.filter(l => !late.has(l.id)));
-                      const historyOnly = historyOnlyGenerations(mergedLogs, new Set(all.keys()));
+                      const mergedLogs = mergeLogs(localLogs, remote.history.filter(l => !late.has(l.id)));
+                      // A generation with any row in the read (a late one included) is not History-only: a post-snapshot
+                      // row must not get a History-only intent that a replay would turn into a delete (review round 12).
+                      const historyOnly = historyOnlyGenerations(mergedLogs, new Set([...all.keys(), ...remote.tasks.map(t => t.id)]));
                       const removed = [...realTasks, ...historyOnly];
                       // Nothing removed may be uploaded again: the debounced queue, queued uploads (a failed upload left no
                       // tombstone to stop it) and this session's later replays (review wf_1945b758-923 #1).
@@ -4765,7 +4786,12 @@ export default function ProximaApp() {
                       const namedIds = [...rowIds, ...namedHistoryOnly];
                       const queuedAt = queueDeleteIntents("task-delete", clearedTaskIds, clearAt);   // before the clear fires (review wf_ec400a67-988 #1)
                       setFailedSyncCount(getFailedSyncs().length);
-                      setTasks([]); clearTasksDB(); savedTaskIds.current.clear();
+                      // Only the planned ids leave this device (review round 12): a task that arrived after the snapshot
+                      // stays here, as it does in the cloud.
+                      const plannedTaskIds = new Set(clearedTaskIds);
+                      setTasks(prev => prev.filter(t => !plannedTaskIds.has(t.id)));
+                      deleteTasks([...plannedTaskIds]);
+                      for (const id of plannedTaskIds) savedTaskIds.current.delete(id);
                       // Restore-checked at the clear's snapshot time (review rounds 8 and 10), in one transaction: the rows
                       // that existed then plus every row id this device knew (a row created later on another device
                       // stays). The server gives every generation without a row that History entries existing by then hold
@@ -4819,7 +4845,11 @@ export default function ProximaApp() {
                       // SERVER's time now (review round 11: a stale device clock offset could put it after the server's
                       // time), less the slack second for rows whose write began just before and is not visible to the
                       // read yet. Every row inside it is read and purged; later ones stay. Settings and favorites are
-                      // bounded by the exact snapshot (below).
+                      // bounded by the exact snapshot (below). This device's tasks and History are taken BEFORE the
+                      // snapshot (review round 12): the reset plans, names and queues intents only for what existed by
+                      // it; one another device synced in during the awaits below is not deleted in the cloud.
+                      const localTasks = tasksRef.current.slice();
+                      const localLogs = logsRef.current.slice();
                       const snap = isSupabaseConfigured() ? await serverTimeRemote() : Date.now();
                       if (snap == null) {
                         setSaveStatus("error");
@@ -4837,13 +4867,15 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
-                      const allTasks = new Map(tasksRef.current.map(t => [t.id, t]));
-                      for (const t of remote.tasks) if (!allTasks.has(t.id)) allTasks.set(t.id, t);
-                      // Cloud History created after the snapshot belongs to generations started after it: left alone.
-                      const allLogs = new Map(logsRef.current.map(l => [l.id, l]));
+                      // Cloud rows and History created after the snapshot belong to generations started after it: left
+                      // alone (review rounds 10 and 12).
+                      const allTasks = new Map(localTasks.map(t => [t.id, t]));
+                      for (const t of remote.tasks) if (!allTasks.has(t.id) && !(Date.parse(t.createdAt) > resetAt)) allTasks.set(t.id, t);
+                      const allLogs = new Map(localLogs.map(l => [l.id, l]));
                       for (const l of remote.history) if (!allLogs.has(l.id) && !(Date.parse(l.createdAt) > resetAt)) allLogs.set(l.id, l);
                       const removedTasks = [...allTasks.values()], removedLogs = [...allLogs.values()];
-                      // Clear local state
+                      // Clear local state. Reset is "Clear ALL data": this device is wiped entirely, a post-snapshot
+                      // generation included; that one stays in the cloud and comes back on the next pass (review round 12).
                       const favoriteScope = getDeviceId();
                       const emptyFavorites = emptyModelFavorites();
                       favoriteModelsRef.current = emptyFavorites;
