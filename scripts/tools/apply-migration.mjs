@@ -3,10 +3,12 @@
 //
 //   node scripts/tools/apply-migration.mjs supabase/migrations/<14 digits>_<name>.sql ... [--dry-run] [--allow-old]
 //
-// A file counts as already recorded when its version OR its name is in schema_migrations: the first migrations were
-// recorded by an older tool under other versions with the same names (round 11 R1), so a version-only check would
-// re-apply them. A file that is not recorded but older than the newest recorded version is refused unless
-// --allow-old is given. Any other flag (a typo such as --dryrun) is refused before the database is touched (R2).
+// A file counts as already recorded when its version is recorded with the same name, or, for a file older than the
+// newest recorded version, when its name is recorded under another version: the first migrations were recorded by an
+// older tool under other versions with the same names (round 11 R1). A recorded version with another name, or a
+// recorded name on a file not older than the newest recorded version, is a clash and refused (round 12 F3). A file
+// that is not recorded but older than the newest recorded version is refused unless --allow-old is given. Any refusal
+// exits 2 before anything is applied, dry run included. Any other flag (a typo such as --dryrun) is refused before the database is touched (R2).
 // Also refuses a file not named <14 digits>_<name>.sql. Its recorded text is dollar-quoted with a tag the file does not
 // use (buildApplyScript). Stops at the first failure.
 import fs from "node:fs";
@@ -39,8 +41,16 @@ export function parseArgs(argv) {
 }
 
 // files: [{ version, name, ... }]; recordedRows: [{ version, name }] from schema_migrations.
-// Returns the files in version order, each with action "apply" | "recorded" (by "version" | "name", as { version,
-// name }) | "refused-old" (newest = the newest recorded version).
+// Returns the files in version order, each with an action (round 12 F3: a new file reusing a recorded version or name
+// is refused, not skipped):
+//   "recorded" by "version": the version is recorded with the same name;
+//   "version-clash": the version is recorded with a different name;
+//   "recorded" by "name": the version is not recorded, the name is, and the file is older than the newest recorded
+//     version (the first migrations were recorded under other versions);
+//   "name-clash": the same, but the file is not older than the newest recorded version;
+//   "refused-old": not recorded and older than the newest recorded version (unless allowOld);
+//   "apply": otherwise.
+// Refusals carry reason; recorded entries carry as = { version, name }; refused-old carries newest.
 export function planApply(files, recordedRows, { allowOld = false } = {}) {
   const byVersion = new Map(), byName = new Map();
   let newest = "";
@@ -51,12 +61,27 @@ export function planApply(files, recordedRows, { allowOld = false } = {}) {
     if (v > newest) newest = v;
   }
   return [...files].sort((a, b) => (a.version < b.version ? -1 : a.version > b.version ? 1 : 0)).map(f => {
-    if (byVersion.has(f.version)) return { ...f, action: "recorded", by: "version", as: byVersion.get(f.version) };
-    if (byName.has(f.name)) return { ...f, action: "recorded", by: "name", as: byName.get(f.name) };
-    if (newest && f.version < newest && !allowOld) return { ...f, action: "refused-old", newest };
+    const v = byVersion.get(f.version);
+    if (v) {
+      if (v.name === f.name) return { ...f, action: "recorded", by: "version", as: v };
+      return { ...f, action: "version-clash", as: v,
+        reason: `version-clash: ${f.version} is already recorded as ${v.name}; renumber the file` };
+    }
+    const n = byName.get(f.name);
+    if (n) {
+      if (f.version < newest) return { ...f, action: "recorded", by: "name", as: n };
+      return { ...f, action: "name-clash", as: n,
+        reason: `name-clash: ${f.name} is already recorded as ${n.version}; rename the file` };
+    }
+    if (newest && f.version < newest && !allowOld) {
+      return { ...f, action: "refused-old", newest,
+        reason: `refused-old: ${f.version} is older than the newest recorded version ${newest} (--allow-old to apply anyway)` };
+    }
     return { ...f, action: "apply" };
   });
 }
+
+export const isRefusal = p => p.action === "refused-old" || p.action === "version-clash" || p.action === "name-clash";
 
 export function buildApplyScript(sql, { version, name }) {
   if (!/^\d{14}$/.test(version) || !/^[A-Za-z0-9_]+$/.test(name)) throw new Error("bad version or name");
@@ -99,13 +124,13 @@ async function main(argv) {
   let rows;
   try { rows = await recordedRows(); } catch (e) { console.error(e.message); return 1; }
   const plan = planApply(files, rows, { allowOld: args.allowOld });
-  const refused = plan.filter(p => p.action === "refused-old");
+  const refused = plan.filter(isRefusal);
   for (const p of plan) {
     if (p.action === "recorded") console.log(`${p.version} ${p.name} -- already recorded as ${p.as.version} ${p.as.name} (by ${p.by})`);
-    else if (p.action === "refused-old") console.log(`${p.version} ${p.name} -- REFUSED: ${p.f} is older than the newest recorded version ${p.newest} (--allow-old to apply anyway)`);
+    else if (isRefusal(p)) console.log(`${p.version} ${p.name} -- REFUSED (${p.f}): ${p.reason}`);
     else console.log(`${p.version} ${p.name} ${Buffer.byteLength(p.sql)} bytes -- not recorded (${args.dryRun ? "would apply" : "applying"})`);
   }
-  if (refused.length) { console.error(`refused: ${refused.length} file(s) older than the newest recorded version; nothing applied`); return 2; }
+  if (refused.length) { console.error(`refused: ${refused.length} file(s) (${[...new Set(refused.map(p => p.action))].join(", ")}); nothing applied`); return 2; }
   if (args.dryRun) return 0;
   for (const p of plan) {
     if (p.action !== "apply") continue;

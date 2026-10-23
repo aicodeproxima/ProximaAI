@@ -85,7 +85,7 @@ test("buildApplyScript: quotes the recorded text with a tag the file does not us
 });
 
 // Round 11 R1: a file counts as recorded by version OR name; older unrecorded files are refused unless --allow-old.
-const { planApply, parseArgs: parseApplyArgs } = await import("./tools/apply-migration.mjs");
+const { planApply, isRefusal, parseArgs: parseApplyArgs } = await import("./tools/apply-migration.mjs");
 const { transactionControl, parseArgs: parseTxArgs } = await import("./tools/sql-tx.mjs");
 const rows = [
   { version: "20261020145422", name: "sync_tombstones" },
@@ -99,9 +99,30 @@ test("planApply: recorded by name under another version (old tool's versions)", 
   assert.deepEqual(p.as, { version: "20261020145422", name: "sync_tombstones" });
 });
 
-test("planApply: recorded by version", () => {
-  const [p] = planApply([f("20261022300000", "renamed_file")], rows);
+test("planApply: recorded by version (same version, same name)", () => {
+  const [p] = planApply([f("20261022300000", "newest_one")], rows);
   assert.equal(p.action, "recorded"); assert.equal(p.by, "version");
+});
+
+// Round 12 F3: a NEW file reusing a recorded version or a recorded name was counted as recorded and skipped (exit 0).
+test("planApply: a recorded version with a different name is a version-clash", () => {
+  const [p] = planApply([f("20261022300000", "renamed_file")], rows);
+  assert.equal(p.action, "version-clash");
+  assert.equal(p.reason, "version-clash: 20261022300000 is already recorded as newest_one; renumber the file");
+});
+
+test("planApply: a recorded name under a newer unrecorded version is a name-clash", () => {
+  const [p] = planApply([f("20261023000000", "sync_tombstones")], rows);
+  assert.equal(p.action, "name-clash");
+  assert.equal(p.reason, "name-clash: sync_tombstones is already recorded as 20261020145422; rename the file");
+  assert.equal(planApply([f("20261022300000", "sync_tombstones")], rows)[0].action, "version-clash");
+});
+
+test("planApply: isRefusal marks every refusal; recorded and apply are not refusals", () => {
+  const plan = planApply([f("20261022300000", "x"), f("20261023000000", "sync_tombstones"), f("20261021000000", "y"),
+    f("20261022300000", "newest_one"), f("20261023100000", "z")], rows);
+  assert.deepEqual(plan.map(x => x.action), ["refused-old", "version-clash", "recorded", "name-clash", "apply"]);
+  assert.deepEqual(plan.map(x => isRefusal(x)), [true, true, false, true, false]);
 });
 
 test("planApply: an unrecorded file older than the newest recorded version is refused", () => {
@@ -149,11 +170,27 @@ test("transactionControl: savepoint, release and rollback to savepoint are allow
   assert.equal(transactionControl("do $$ begin null; end $$;"), null);
 });
 
-test("transactionControl: commit/rollback inside a DO or function body refused", () => {
-  assert.match(transactionControl("do $$ begin update t set x = 1; commit; end $$;"), /^commit \(in a DO/);
-  assert.match(transactionControl("create procedure p() language plpgsql as $f$ begin rollback; end $f$;"), /^rollback \(in a DO/);
-  assert.match(transactionControl("do $a$ begin execute $q$ commit $q$; end $a$;"), /^commit/);
+// Round 12 F2/F6: dollar-quoted bodies are not scanned. Inside sql-tx's "begin;" a body COMMIT fails with "invalid
+// transaction termination", so it cannot commit; scanning bodies only refused valid SQL.
+test("transactionControl: dollar-quoted bodies and literals are not transaction control", () => {
+  assert.equal(transactionControl("do $$ begin update t set x = 1; commit; end $$;"), null);
+  assert.equal(transactionControl("create procedure p() language plpgsql as $f$ begin rollback; end $f$;"), null);
+  assert.equal(transactionControl("comment on table t is $c$Never rollback here$c$;"), null);
+  assert.equal(transactionControl("do $d$ begin raise notice $m$ commit pending $m$; end $d$;"), null);
   assert.equal(transactionControl("do $$ begin raise notice 'commit'; end $$;"), null);
+});
+
+test("transactionControl: a SQL-standard begin atomic ... end body is part of its CREATE", () => {
+  const sql = "create function public.add(a int, b int) returns int language sql\nbegin atomic\n  select a + b;\nend;\nselect 1;";
+  assert.equal(transactionControl(sql), null);
+  assert.equal(transactionControl("create procedure p() language sql begin atomic insert into t values (1); insert into t values (2); end; end;"), "end");
+  assert.equal(transactionControl(sql + "\ncommit;"), "commit");
+});
+
+test("transactionControl: top-level commit, end and begin..commit stay refused", () => {
+  assert.equal(transactionControl("select 1;\ncommit;"), "commit");
+  assert.equal(transactionControl("select 1;\nend;"), "end");
+  assert.equal(transactionControl("begin; select 1; commit;"), "begin");
 });
 
 test("transactionControl: a normal migration with $$ bodies and case..end is allowed", () => {

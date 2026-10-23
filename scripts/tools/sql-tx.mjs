@@ -57,21 +57,23 @@ export function splitSql(sql) {
 // Statements that would end sql-tx's always-abort transaction early and so commit what came before (round 11 R2).
 // SAVEPOINT, RELEASE and ROLLBACK TO keep the transaction open and are allowed.
 const TOP_TX = /^(begin|start\s+transaction|commit|end|rollback(?!\s+(work\s+|transaction\s+)?to\b)|abort)\b/;
-const BODY_TX = /\b(commit|rollback(?!\s+(work\s+|transaction\s+)?to\b))\b/;
 
-// Returns the first transaction-control statement in sql ("commit", "rollback (in a DO/function body)", ...) or null.
+// Returns the first top-level transaction-control statement in sql ("commit", "end", ...) or null.
+// Dollar-quoted bodies are not scanned (round 12 F2/F6): PostgreSQL refuses transaction control inside DO blocks and
+// procedures when they run inside a transaction block ("invalid transaction termination"), and sql-tx always opens one
+// with "begin;", so a body COMMIT cannot commit. Scanning them only refused valid SQL (commit/rollback words inside
+// dollar-quoted literals such as comment on ... is $c$...$c$).
+// A SQL-standard function body "begin atomic ... end" is part of its CREATE statement: the top-level "end" that closes
+// a preceding "begin atomic" is not transaction control.
 export function transactionControl(sql) {
-  const { code, bodies } = splitSql(String(sql || "").toLowerCase());
+  const { code } = splitSql(String(sql || "").toLowerCase());
+  let atomic = false;
   for (const s of code.split(";")) {
-    const m = s.trim().match(TOP_TX);
+    const t = s.trim();
+    if (atomic && /^end\b/.test(t)) { atomic = false; continue; }
+    const m = t.match(TOP_TX);
     if (m) return m[0].replace(/\s+/g, " ");
-  }
-  const queue = [...bodies];
-  while (queue.length) {
-    const inner = splitSql(queue.shift());
-    const m = inner.code.match(BODY_TX);
-    if (m) return `${m[0]} (in a DO/function body)`;
-    queue.push(...inner.bodies);
+    if (/\bbegin\s+atomic\b/.test(t)) atomic = true;
   }
   return null;
 }
