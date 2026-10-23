@@ -3,7 +3,8 @@
 // Falls back to localStorage if IndexedDB unavailable.
 
 import { planResume, rememberReleased, liveReleased, noteClaimants, liveClaimants, dropClaimants, putBackClaimantRecords } from "./taskResume.js";
-import { FORM_HOLD_ALIVE_MS } from "./fileDelete.js";
+import { FORM_HOLD_ALIVE_MS, queueFileDeletes } from "./fileDelete.js";
+import { pathsInUse } from "./purge.js";
 import { serverNow } from "./serverClock.js";
 import { releaseRestored } from "./syncReconcile.js";
 import { withoutDeleting } from "./batchLog.js";
@@ -521,7 +522,9 @@ export function tabPresence({ id, prevId = null, open = () => new BroadcastChann
   return ch;
 }
 if (typeof window !== "undefined" && typeof BroadcastChannel !== "undefined") {
-  tabPresence({ id: TAB_ID, prevId: PREV_TAB_ID, release: (p) => { try { localStorage.removeItem(FORM_KEY + p); } catch {} } });
+  // Review round 23 #1 (guard): a dead page's form key goes, and so do its delete calls in flight (a previous build
+  // wrote this tab id as their `tab`).
+  tabPresence({ id: TAB_ID, prevId: PREV_TAB_ID, release: (p) => { try { localStorage.removeItem(FORM_KEY + p); } catch {} dropFlightsOfTab(p); } });
 }
 // Another tab's key is pruned only once its hold has lapsed: a frozen tab's form still holds its uploads (review round 2).
 const STALE_FORM_KEY_MS = FORM_HOLD_ALIVE_MS;
@@ -847,15 +850,41 @@ export function noteRestoreKnown(ts) {
 // clear re-queued them at its own time and that time was voided), so every OTHER call's give-back keeps them and no tab
 // uploads them. A tab killed mid-call leaves its entry; it lapses after FLIGHT_FOR_MS. Layout: call -> { tab, at, until
 // (device ms), ids: { "task-delete": [...], "history-delete": [...] } }.
+// Review round 23 #1: a dead page's entry held the ids for 30 minutes (a restore's result stayed missing on that device).
+// Fields added to the same layout (a previous build still reads tab / at / until / ids, and lapses entries by `until`):
+// `tab` is now the writing tab's flight id (FLIGHT_TAB: kept in sessionStorage, generated once, so a reload keeps it and
+// removes its own leftovers at load: its calls died with the page), `t` the device ms the call began and `max` the
+// longest such a call can run. Another tab's entry lapses `max` after `t`: the delete RPCs have no client-side timeout,
+// and the server ends each statement within the anon role's 3 s statement_timeout, so FLIGHT_CALL_MS (3 s + a network
+// margin) per request of 100 ids (deleteQueuedRemote's chunks) bounds the server work of a call that reached it. This
+// tab's own entries stay until its call's `finally` (or `until`, as before).
 const FLIGHT_KEY = "proximaai-deletes-in-flight";
 const FLIGHT_FOR_MS = 30 * 60 * 1000;
+export const FLIGHT_CALL_MS = 60 * 1000;
+const FLIGHT_TAB_KEY = "proximaai-flight-tab";
+const PAGE_LOADED_AT = Date.now();
+const newFlightTab = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+let FLIGHT_TAB = (() => {
+  try {
+    const s = globalThis.sessionStorage?.getItem(FLIGHT_TAB_KEY);
+    if (s) return s;
+    const id = newFlightTab();
+    globalThis.sessionStorage?.setItem(FLIGHT_TAB_KEY, id);
+    return id;
+  } catch { return newFlightTab(); }
+})();
+export const flightTabId = () => FLIGHT_TAB;
 const readFlights = () => {
   try { const v = JSON.parse(localStorage.getItem(FLIGHT_KEY) || "{}"); return plainObject(v) ? v : {}; } catch { return {}; }
 };
 const writeFlights = (m) => {
   if (Object.keys(m).length) localStorage.setItem(FLIGHT_KEY, JSON.stringify(m)); else localStorage.removeItem(FLIGHT_KEY);
 };
-const liveFlight = (f, now) => plainObject(f) && Number(f.until) > now && plainObject(f.ids);
+// When the call began: `t`, or for a previous build's entry (no `t`) its `until` less the 30 minutes it added.
+const flightBegan = (f) => (Number(f.t) > 0 ? Number(f.t) : Number(f.until) - FLIGHT_FOR_MS);
+const flightMax = (f) => (Number(f.max) > 0 ? Number(f.max) : FLIGHT_CALL_MS);
+const liveFlight = (f, now) => plainObject(f) && Number(f.until) > now && plainObject(f.ids)
+  && (f.tab === FLIGHT_TAB || now - flightBegan(f) < flightMax(f));
 // `parts`: { "task-delete": ids, "history-delete": ids }; `at`: the call's queue time. Returns the call's key (null: nothing).
 export function beginDeleteFlight(parts, at) {
   const ids = {};
@@ -865,14 +894,50 @@ export function beginDeleteFlight(parts, at) {
     if (l.length) ids[kind] = l;
   }
   if (!Object.keys(ids).length) return null;
-  const call = `${TAB_ID}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const call = `${FLIGHT_TAB}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   try {
     const m = readFlights(), now = Date.now();
     for (const k of Object.keys(m)) if (!liveFlight(m[k], now)) delete m[k];
-    m[call] = { tab: TAB_ID, at: Number(at) || 0, until: now + FLIGHT_FOR_MS, ids };
+    const requests = Math.max(1, ...Object.values(ids).map(l => Math.ceil(l.length / 100)));
+    m[call] = { tab: FLIGHT_TAB, at: Number(at) || 0, until: now + FLIGHT_FOR_MS, ids, t: now, max: requests * FLIGHT_CALL_MS };
     localStorage.setItem(FLIGHT_KEY, JSON.stringify(m));
   } catch {}
   return call;
+}
+// The entries of tab `tab` that began before `before` (device ms) go: that page's calls died with it.
+export function dropFlightsOfTab(tab, before = Infinity) {
+  if (!tab) return;
+  try {
+    const m = readFlights();
+    let changed = false;
+    for (const [call, f] of Object.entries(m)) if (plainObject(f) && f.tab === tab && !(Number(f.t) >= before)) { delete m[call]; changed = true; }
+    if (changed) writeFlights(m);
+  } catch {}
+}
+// At load (review round 23 #1): a duplicated tab copies sessionStorage, so the page first asks this browser's other pages
+// whether its flight id is live (as tabPresence does for the form key). An answer: this page is the copy and takes a new
+// id (the original's calls keep their entries). No answer within waitMs: the id's earlier entries were left by this tab's
+// previous page and go.
+export function flightPresence({ id, open, waitMs = TAB_PING_MS, onTaken, onFree, current = () => id }) {
+  let ch;
+  try { ch = open(); } catch { onFree?.(); return null; }
+  let pending = true;
+  ch.onmessage = (e) => {
+    const m = e?.data || {};
+    if (!pending && m.flightAsk && m.flightAsk === current()) ch.postMessage({ flightHave: m.flightAsk });
+    if (pending && m.flightHave === id) { pending = false; onTaken?.(); }
+  };
+  ch.postMessage({ flightAsk: id });
+  setTimeout(() => { if (pending) { pending = false; onFree?.(); } }, waitMs);
+  return ch;
+}
+if (typeof window !== "undefined" && typeof BroadcastChannel !== "undefined") {
+  const asked = FLIGHT_TAB;
+  flightPresence({ id: asked, open: () => new BroadcastChannel("proximaai-flights"), current: () => FLIGHT_TAB,
+    onTaken: () => { FLIGHT_TAB = newFlightTab(); try { globalThis.sessionStorage?.setItem(FLIGHT_TAB_KEY, FLIGHT_TAB); } catch {} },
+    onFree: () => dropFlightsOfTab(asked, PAGE_LOADED_AT) });
+} else {
+  dropFlightsOfTab(FLIGHT_TAB, PAGE_LOADED_AT);
 }
 // The call's `finally`: whatever of it is left goes.
 export function endDeleteFlight(call) {
@@ -888,7 +953,7 @@ function landFlightIds(kind, ids, at) {
     const m = readFlights();
     let changed = false;
     for (const [call, f] of Object.entries(m)) {
-      if (!plainObject(f) || f.tab !== TAB_ID || Number(f.at) !== ts || !plainObject(f.ids) || !Array.isArray(f.ids[kind])) continue;
+      if (!plainObject(f) || f.tab !== FLIGHT_TAB || Number(f.at) !== ts || !plainObject(f.ids) || !Array.isArray(f.ids[kind])) continue;
       const left = f.ids[kind].filter(id => !gone.has(id));
       if (left.length === f.ids[kind].length) continue;
       changed = true;
@@ -903,6 +968,144 @@ export function inFlightIds(kind) {
   const out = new Set(), now = Date.now();
   for (const f of Object.values(readFlights())) if (liveFlight(f, now) && Array.isArray(f.ids[kind])) for (const id of f.ids[kind]) if (id) out.add(id);
   return out;
+}
+
+// ─── Review round 23 #3: a delete's file and WaveSpeed deletes follow its outcome ───
+// A delete (bulk delete, Clear Outputs, Reset) used to put its files and WaveSpeed ids straight into the shared queues
+// before its call (App.jsx stagePurge), so any flush (the reconcile's, the 60 s interval, another tab's) deleted them
+// while the delete was unanswered, and a restore that voided it later gave back generations whose outputs were gone. Now
+// they are queued HELD for that delete's queue time, in their own key (the two queues keep their exact layout; a previous
+// build never sees a held item), still before any network call. Each held item names its owners: the generations (task
+// ids) or History entries ("history:<id>") it belongs to. It goes to its queue once every owner's delete is confirmed for
+// good (a FINAL confirm queued at or after the hold), is cancelled as soon as one owner's delete ended without one (voided
+// by the server or a restore, or confirmed only before this delete: the given-back generation keeps its files and its
+// WaveSpeed result), and waits while an owner is pending (any queue time), in a call in flight, or superseded (the next
+// pass decides). No answer: it stays held, and the durable intent's replay decides. Layout: queue time -> { files: {
+// path: [owners] }, ws: { predictionId: its wsDelete.js queue entry (tid = generation id) }, h: the History intents'
+// queue time when it differs }.
+const HELD_PURGE_KEY = "proximaai-held-purges";
+const HISTORY_OWNER = "history:";
+const readHeldPurges = () => {
+  try { const v = JSON.parse(localStorage.getItem(HELD_PURGE_KEY) || "{}"); return plainObject(v) ? v : {}; } catch { return {}; }
+};
+const writeHeldPurges = (m) => {
+  if (Object.keys(m).length) localStorage.setItem(HELD_PURGE_KEY, JSON.stringify(m)); else localStorage.removeItem(HELD_PURGE_KEY);
+};
+// Holds `files` (path -> owner ids) and `ws` (prediction id -> wsDelete.js queue entry) for the delete queued at `at`;
+// `historyAt`: the queue time of its History intents (bulk delete: their own). Says whether it was stored (false: the
+// caller queues them directly, as before; a full localStorage must not lose a delete's files).
+export function holdPurgeDeletes(at, { files = {}, ws = {}, historyAt = null } = {}) {
+  const ts = Number(at);
+  if (!Number.isFinite(ts)) return false;
+  try {
+    const m = readHeldPurges();
+    const g = plainObject(m[ts]) ? m[ts] : {};
+    const gf = plainObject(g.files) ? { ...g.files } : {}, gw = plainObject(g.ws) ? { ...g.ws } : {};
+    for (const [p, owners] of Object.entries(files || {})) {
+      if (!p) continue;
+      gf[p] = [...new Set([...(Array.isArray(gf[p]) ? gf[p] : []), ...(Array.isArray(owners) ? owners : []).filter(Boolean).map(String)])];
+    }
+    for (const [pid, e] of Object.entries(ws || {})) if (pid && plainObject(e) && !gw[pid]) gw[pid] = e;
+    const h = Number(historyAt);
+    m[ts] = { files: gf, ws: gw, ...(Number.isFinite(h) && h !== ts ? { h } : Number.isFinite(Number(g.h)) ? { h: Number(g.h) } : {}) };
+    localStorage.setItem(HELD_PURGE_KEY, JSON.stringify(m));
+    return true;
+  } catch { return false; }
+}
+// One held item's fate: "go" (every owner's delete is final), "cancel" (one owner's delete ended without one) or "wait".
+function heldPurgeRule() {
+  const kinds = {};
+  for (const kind of ["task-delete", "history-delete"]) {
+    const { final, superseded } = confirmStates(kind);
+    kinds[kind] = { final, superseded, q: confirmQueuedAt(kind), pending: pendingDeleteIds(kind), flying: inFlightIds(kind) };
+  }
+  const voided = voidedTimes();
+  const owner = (o, at, hAt) => {
+    const isLog = o.startsWith(HISTORY_OWNER), k = kinds[isLog ? "history-delete" : "task-delete"];
+    const id = isLog ? o.slice(HISTORY_OWNER.length) : o, since = isLog ? hAt : at;
+    if (k.pending.has(id) || k.flying.has(id)) return "wait";
+    const q = k.q.get(id);
+    if (q != null && q >= since) return k.final.has(id) ? "go" : "wait";   // superseded: the next pass decides
+    return "cancel";
+  };
+  // An item without owners follows its delete as a whole (none is written so: App.jsx names every owner).
+  const group = (at) => (intentsPendingAt(at) || [...Object.values(readFlights())].some(f => liveFlight(f, Date.now()) && Number(f.at) === at)
+    ? "wait" : voided.has(at) ? "cancel" : "go");
+  return (owners, at, hAt) => {
+    const list = Array.isArray(owners) ? owners.filter(o => typeof o === "string" && o) : [];
+    if (!list.length) return group(at);
+    const d = list.map(o => owner(o, at, hAt));
+    return d.includes("cancel") ? "cancel" : d.includes("wait") ? "wait" : "go";
+  };
+}
+// Decides every held item (App.jsx runs it before each flush; confirmDeleteIntents and voidDeleteIntents after their
+// answer): "go" items are queued (files: fileDelete.js queueFileDeletes; WaveSpeed: the stored entry, due now), then
+// leave the hold; "cancel" items leave it unqueued; "wait" items stay. Returns { files, ws, cancelled }.
+export function releaseHeldPurges(now = Date.now()) {
+  const out = { files: [], ws: [], cancelled: 0 };
+  try {
+    const m = readHeldPurges(), keys = Object.keys(m);
+    if (!keys.length) return out;
+    const rule = heldPurgeRule(), wsGo = {};
+    let changed = false;
+    for (const k of keys) {
+      const at = Number(k), g = m[k];
+      if (!Number.isFinite(at) || !plainObject(g)) { delete m[k]; changed = true; continue; }
+      const hAt = Number.isFinite(Number(g.h)) ? Number(g.h) : at;
+      const files = plainObject(g.files) ? { ...g.files } : {}, ws = plainObject(g.ws) ? { ...g.ws } : {};
+      for (const [p, owners] of Object.entries(files)) {
+        const d = rule(owners, at, hAt);
+        if (d === "wait") continue;
+        if (d === "go") out.files.push(p); else out.cancelled++;
+        delete files[p]; changed = true;
+      }
+      for (const [pid, e] of Object.entries(ws)) {
+        const d = plainObject(e) ? rule(e.tid ? [String(e.tid)] : [], at, hAt) : "cancel";
+        if (d === "wait") continue;
+        if (d === "go") { wsGo[pid] = e; out.ws.push(pid); } else out.cancelled++;
+        delete ws[pid]; changed = true;
+      }
+      if (Object.keys(files).length || Object.keys(ws).length) m[k] = { ...g, files, ws };
+      else delete m[k];
+    }
+    // The queues first, then the hold: a page killed in between leaves the item in both (queued twice is harmless).
+    if (out.files.length) writeFileDeletes(queueFileDeletes(readFileDeletes(), out.files, now));
+    if (out.ws.length) {
+      const q = readWsDeletes();
+      for (const [pid, e] of Object.entries(wsGo)) if (!q[pid]) q[pid] = { ...e, at: now, attempts: 0, next: now };
+      writeWsDeletes(q);
+    }
+    if (changed) writeHeldPurges(m);
+  } catch {}
+  return out;
+}
+// What of these paths / prediction ids is still held (the toast's note: not deleted yet).
+export function heldPurgeLeft(paths = [], predictionIds = []) {
+  const files = new Set(), ws = new Set();
+  for (const g of Object.values(readHeldPurges())) {
+    if (!plainObject(g)) continue;
+    for (const p of Object.keys(plainObject(g.files) ? g.files : {})) files.add(p);
+    for (const pid of Object.keys(plainObject(g.ws) ? g.ws : {})) ws.add(pid);
+  }
+  return { files: (paths || []).filter(p => files.has(p)).length, ws: (predictionIds || []).filter(id => ws.has(id)).length };
+}
+// The defensive guard of both flushes (review round 23 #3): a path or prediction id a hold still covers, or that a stored
+// clear stash holds (its tasks, its History entries, the data of its taken uploads, its archive records: a voided clear
+// gives them back), is not deleted through the queues meanwhile, whoever else queued it.
+export function heldDeleteRefs() {
+  const paths = new Set(), predictions = new Set();
+  for (const g of Object.values(readHeldPurges())) {
+    if (!plainObject(g)) continue;
+    for (const p of Object.keys(plainObject(g.files) ? g.files : {})) paths.add(p);
+    for (const pid of Object.keys(plainObject(g.ws) ? g.ws : {})) predictions.add(pid);
+  }
+  for (const s of readClearStashes()) {
+    const items = [...s.tasks, ...s.logs, ...s.uploads.map(e => e?.data), ...Object.values(s.archives || {}).map(a => a?.task)].filter(x => x && typeof x === "object");
+    for (const p of pathsInUse(items)) paths.add(p);
+    for (const p of stashArchivePaths(s)) paths.add(p);
+    for (const x of items) if (typeof x.taskId === "string" && x.taskId) predictions.add(x.taskId);
+  }
+  return { paths, predictions };
 }
 
 // Returns the archived file paths of confirmed tasks that a clear's stash held (forgetStashedIds): the caller queues
@@ -976,6 +1179,7 @@ export function confirmDeleteIntents(kind, ids, at) {
   // Nor uploaded again (review round 19 #2): a queued upload of a confirmed id (one a give-back put back while its delete
   // was pending, or a stale tab's) would re-insert a row the server holds no tombstone for. Up to its time (round 21 #8).
   dropQueuedUploadsOf(kind === "task-delete" ? "task" : "history", ids, at);
+  releaseHeldPurges();   // review round 23 #3: the files and WaveSpeed copies this confirm decided go to their queues
   return paths;
 }
 // A new delete of these ids starts: their older confirmations no longer say anything (a restore brought them back and
@@ -1088,21 +1292,26 @@ export function uploadBlockedIds(kind) {
 // An entry holding an item of a SUPERSEDED confirm (not decided yet) or of a delete call in flight is held back
 // (`defer`: neither sent nor dropped, its queued copy stays): sent now, it could be the very cloud copy a pass takes as
 // proof that the restore brought the generation back. Returns { upload, skip, defer }.
-export function historyUploadPlan(entries) {
+// Review round 23 #4: `strip: false` is for the immediate senders that run without a fresh restore read (persistLog and
+// its sendHistoryEntry): "final" there rests on restore knowledge that can lag the cloud (a restore made elsewhere that
+// no tab here has read yet brought the item back), so they never strip on their own. An entry holding a FINAL item is
+// deferred too (queued as given, not sent); the reconcile pass and the replays, which run restoreGuard first, strip it.
+export function historyUploadPlan(entries, { strip = true } = {}) {
   const { final, superseded } = confirmStates("task-delete");
   const hold = new Set([...superseded, ...inFlightIds("task-delete")]);
   const ready = [], defer = [];
   for (const l of entries || []) {
     const items = Array.isArray(l?.tasks) ? l.tasks : [];
-    (items.some(i => i?.id && hold.has(i.id) && !final.has(i.id)) ? defer : ready).push(l);
+    const held = items.some(i => i?.id && hold.has(i.id) && !final.has(i.id)) || (!strip && items.some(i => i?.id && final.has(i.id)));
+    (held ? defer : ready).push(l);
   }
   const { upload, skip } = withoutDeleting(ready, final);
   return { upload, skip, defer: defer.map(l => l?.id) };
 }
 // Every History sender passes its entries through this before uploadable (task B8a, review round 21 #1/#5): the entries
-// to send now (historyUploadPlan).
-export function withoutBlockedItems(entries) {
-  return historyUploadPlan(entries).upload;
+// to send now (historyUploadPlan; `opts.strip` as there).
+export function withoutBlockedItems(entries, opts) {
+  return historyUploadPlan(entries, opts).upload;
 }
 // The one upload filter (App.jsx sends every task / History upload through it): `items` (rows, queue entries or ids)
 // without the blocked ones. A FINAL confirmed id's queued uploads leave the queue (none can ever be sent: addFailedSync
@@ -1649,9 +1858,13 @@ export function voidDeleteIntents(kind, ids, at) {
     recordVoidedAt(at);
     // Task B9 (review round 22): a void answer proves a restore newer than `at`: every confirm queued before `at` is
     // superseded by it. And this call's answer is handled for these ids (in flight no more).
-    noteRestoreKnown(at);
+    // Review round 23 #2/#5: what it proves is R > at, and the server compares floor(queued_at) < last_restore_at with
+    // whole-ms markers, so R >= floor(at) + 1: a confirm queued at exactly `at` (another chunk or call of the same group,
+    // answered "deleted" before R) is superseded at once too, not only at the next restore read.
+    if (Number.isFinite(Number(at))) noteRestoreKnown(Math.floor(Number(at)) + 1);
     landFlightIds(kind, ids, at);
   }
+  releaseHeldPurges();   // review round 23 #3: what a voided id held is cancelled
   const still = pendingDeleteIds(kind);
   return (ids || []).filter(id => id && !still.has(id));
 }

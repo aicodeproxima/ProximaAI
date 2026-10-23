@@ -94,13 +94,14 @@ function pass(local, cloud) {
   const logUploads = historyUploadPlan(S.uploadable("history", local.logs.filter(l => !cloudIds.history.has(l.id)))).upload;
   return { guard, released: taskDel.released, staleTasks: [...staleTasks], staleItemIds, emptied, rewritten, taskUploads, logUploads, stashBack };
 }
-// persistLog as App.jsx now reads (task B9): what it queues and sends.
+// persistLog as App.jsx now reads (task B9; review round 23 #4: queued as given, never stripped here): what it queues
+// and sends.
 function persistLog(e) {
   if (S.uploadBlockedIds("history").has(e?.id)) return null;
-  const send = historyUploadPlan([e]).defer.length ? e : S.withoutBlockedItems([e])[0];
-  if (!send) return null;
+  const held = historyUploadPlan([e], { strip: false }).defer.length > 0;
+  const send = e;
   S.addFailedSync({ kind: "history", id: send.id, data: send });
-  const sent = S.uploadable("history", S.withoutBlockedItems([send]));
+  const sent = held ? [] : S.uploadable("history", S.withoutBlockedItems([send], { strip: false }));
   if (sent.length) S.removeFailedSync("history", send.id, q => B.sameLogContent(q.data, send));
   return { queued: send, sent };
 }
@@ -562,7 +563,10 @@ test("wiring: the reconcile decides superseded confirms from the cloud after the
   assert.match(between("const replayHistoryUploads = async", "\n  };"), /const \{ upload, skip \} = historyUploadPlan\(/);
   assert.doesNotMatch(src, /withoutDeleting\([^;]*(uploadBlockedIds|pendingDeleteIds)\(/, "no History upload strips pending ids");
   const pl = between("const persistLog = useCallback(", "}, [trackedSync]);");
-  assert.match(pl, /const send = historyUploadPlan\(\[entry\]\)\.defer\.length \? entry : withoutBlockedItems\(\[entry\]\)\[0\];/);
+  // Review round 23 #4 rewrote this check (was: persistLog sent withoutBlockedItems([entry]), final items stripped): it
+  // queues the entry as given and never strips on its own; an entry holding a final item is held like a deferred one.
+  assert.match(pl, /const held = historyUploadPlan\(\[entry\], \{ strip: false \}\)\.defer\.length > 0;\s*const send = entry;/);
+  assert.match(pl, /if \(held\) return Promise\.resolve\(\);[\s\S]*sendHistoryEntry\(send, \{ strip: false \}\)/);
   assert.match(pl, /\.then\(\(sent\) => \{ if \(sent\?\.length\) removeFailedSync\("history", send\.id/, "the queue entry goes only with a sent upload");
   assert.match(st.slice(st.indexOf("export function restoreGuard("), st.indexOf("export function deletesGoingSince(")), /if \(known && restoreAt > 0\) noteRestoreKnown\(restoreAt\);/);
 });

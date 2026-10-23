@@ -52,6 +52,27 @@ export function ownedPaths(tasks, logs, { taskIds = new Set(), logIds = new Set(
   return pathsInUse([...keptTasks, ...keptLogs]);
 }
 
+// Review round 23 #3: who each of a purge's `paths` belongs to (storage.js holdPurgeDeletes: a path goes only once every
+// owner's delete is final, and stays if one is voided). A removed generation owns its own paths (by task id). An item of
+// a removed History entry owns its outputs (its task id); the entry's own fields (the batch's inputs) belong to all its
+// items. An entry whose removal is its own History delete (`logOwners`: the entries the delete queued intents for), or
+// that holds an item without an id, owns its paths itself ("history:<id>"). Returns { path: [owners] }.
+export function pathOwners(removed, goneLogs, paths, { logOwners = new Set() } = {}) {
+  const want = new Set(paths || []), out = new Map();
+  const add = (list, owners) => {
+    for (const p of list) if (want.has(p)) { if (!out.has(p)) out.set(p, new Set()); for (const o of owners) out.get(p).add(o); }
+  };
+  for (const t of removed || []) if (t?.id) add(pathsOf(t), [String(t.id)]);
+  for (const l of goneLogs || []) {
+    if (!l?.id) continue;
+    const items = Array.isArray(l.tasks) ? l.tasks : [];
+    if (logOwners.has(l.id) || !items.length || items.some(i => !i?.id)) { add(pathsOf(l), [`history:${l.id}`]); continue; }
+    for (const i of items) add(list(i.outputs).map(storagePathOf).filter(Boolean), [String(i.id)]);
+    add(pathsOf({ ...l, tasks: [] }), items.map(i => String(i.id)));
+  }
+  return Object.fromEntries([...out].map(([p, s]) => [p, [...s]]));
+}
+
 // The public URL of a bucket path (the queue's gone-check HEADs it). Round-trips through storagePathOf.
 export const publicUrlOf = (base, path) => (base && path ? base.replace(/\/+$/, "") + MARK + path.split("/").map(encodeURIComponent).join("/") : null);
 

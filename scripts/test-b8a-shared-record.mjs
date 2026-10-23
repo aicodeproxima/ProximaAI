@@ -122,7 +122,9 @@ test("#1 wiring: the senders, the reconcile, replayHistoryUploads and persistLog
   assert.match(between("const logUploads =", "setFailedSyncCount"), /historyUploadPlan\(uploadable\("history", logPlan\.upload\.slice\(0, 100\)\)\)\.upload/);
   assert.match(between("const replayHistoryUploads = async", "\n  };"), /historyUploadPlan\(\[\.\.\.byId\.values\(\)\]\.map\(f => f\.data\)\)/);
   assert.doesNotMatch(src, /withoutDeleting\([^;]*(pendingDeleteIds|uploadBlockedIds)\(/, "no upload strips pending ids");
-  assert.match(between("const persistLog = useCallback(", "}, [trackedSync]);"), /const send = historyUploadPlan\(\[entry\]\)\.defer\.length \? entry : withoutBlockedItems\(\[entry\]\)\[0\];[\s\S]*addFailedSync\(\{ kind: "history", id: send\.id, data: send \}\)[\s\S]*sendHistoryEntry\(send\)/);
+  // Review round 23 #4 rewrote this check (was: persistLog stripped final items itself): it queues the entry as given,
+  // sends nothing while it holds a final item, and its sender never strips (the reconcile and the replays do).
+  assert.match(between("const persistLog = useCallback(", "}, [trackedSync]);"), /const held = historyUploadPlan\(\[entry\], \{ strip: false \}\)\.defer\.length > 0;\s*const send = entry;[\s\S]*addFailedSync\(\{ kind: "history", id: send\.id, data: send \}\)[\s\S]*if \(held\) return Promise\.resolve\(\);[\s\S]*sendHistoryEntry\(send, \{ strip: false \}\)/);
   const rc = between("const reconcileWithCloud = useCallback(", "\n  }, []);");
   const stale = rc.indexOf("taskDel.stale(tasksRef.current)"), drop = rc.indexOf("dropLogItemsFor(staleGone)"), plan = rc.indexOf("const logPlan = planLogSync(");
   assert.ok(stale >= 0 && drop > stale && plan > drop, "the stale step runs dropLogItemsFor before History is planned");
