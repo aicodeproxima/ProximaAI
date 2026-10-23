@@ -358,6 +358,33 @@ begin
     end if;
   exception when others then execute 'reset role'; out := out || format('FAIL reset-queued %s %s; ', sqlstate, sqlerrm); end;
 
+  -- 20. Review round 11 (migration 20261022320000): the snapshot comes from the server, not the device's clock estimate.
+  declare v_ms bigint; v_now bigint := (extract(epoch from clock_timestamp()) * 1000)::bigint;
+  begin
+    execute 'set local role anon';
+    v_ms := server_time_ms(v_tok);
+    execute 'reset role';
+    begin perform server_time_ms('garbage'); out := out || 'FAIL server-time accepts a bad token; ';
+    exception when others then null; end;
+    out := out || case when abs(v_ms - v_now) < 2000 then 'ok server-time; ' else format('FAIL server-time %s vs %s; ', v_ms, v_now) end;
+  exception when others then execute 'reset role'; out := out || format('FAIL server-time %s %s; ', sqlstate, sqlerrm); end;
+
+  -- 21. Review round 11: Reset clears tasks before History, the order of every other path (History first could deadlock
+  --     with a concurrent task delete); settings are bounded by the exact snapshot (p_prefs_at), rows by p_queued_at.
+  declare v_src text; v_t int; v_h int;
+  begin
+    select prosrc into v_src from pg_proc where proname = 'reset_queued_rows' and pronamespace = 'public'::regnamespace;
+    v_t := position('''task''' in v_src); v_h := position('''history''' in v_src);
+    insert into settings (device_id, key, value) values (u, 'qd-prefs', '"v"') on conflict (device_id, key) do update set value = excluded.value;
+    insert into tasks (id, device_id, status, start_time, outputs) values ('qd-pa-now', u, 'completed', 1, '[]');
+    r := reset_queued_rows(v_tok, (extract(epoch from now() - interval '30 seconds') * 1000)::bigint, null, null,
+                           (extract(epoch from now()) * 1000)::bigint + 1000);
+    out := out || case when v_t > 0 and v_h > v_t
+                        and not exists (select 1 from settings where device_id = u and key = 'qd-prefs')
+                        and exists (select 1 from tasks where id = 'qd-pa-now')
+      then 'ok reset-order-prefs; ' else format('FAIL reset-order-prefs task@%s history@%s %s; ', v_t, v_h, r) end;
+  exception when others then out := out || format('FAIL reset-order-prefs %s %s; ', sqlstate, sqlerrm); end;
+
   -- 7. Review round 6 (migration 20261022261000): the backup-scrub drain takes each account's restore marker before it
   --    touches the queue or the backups, like restore, rename and replayed deletes (a cron drain and a rename locked
   --    backup_scrub_queue / data_backups in opposite orders).
