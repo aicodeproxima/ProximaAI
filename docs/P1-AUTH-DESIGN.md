@@ -268,6 +268,13 @@ create type proxima_auth.account as (id uuid, username text, role text, scope te
   The rollback copies the owner row back into the frozen rows (§7), so nothing changed during P1 is lost. The rows
   retire in P5.
 
+**Agreed with the RLS session (2026-10-23):** users.scope is written only by M1's seed (the owner row,
+`'user:'||username`), by rename_my_account (in step with the username until P3) and by the RLS session's P3 cut-over;
+never by sign-in or anything else. sync_topic stays owner-only until P4, where the RLS session derives it per account from
+users.id plus that account's own epoch, together with the per-account ping. M1's version is 20261023100000_mu_p1_accounts;
+the RLS session numbers M2 above it and applies it only after "M1 applied". Its catalog gate test-mu-catalog.sql allowlists
+unlock_with_backup_code with verify_admin (G6) and treats both as sign-in for G7.
+
 ## 3. Token format and verification
 - **New:** `'u:<uuid>.<exp>.<sig>'`. **Legacy:** `'admin:<name>.<exp>.<sig>'`. The signature, the key, the header and
   the proxy check are all unchanged. A `u:` subject never contains `.`, `:` after the prefix, or a name. That keeps it
