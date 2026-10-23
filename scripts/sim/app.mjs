@@ -17,13 +17,13 @@
 // sourceImageUrl and the History entry's, shared), an odd-numbered one an archived output (s/<id>.png as its output URL,
 // so its History item holds it too), and its WaveSpeed prediction (ws-<id>, taskId). Modelled: the held purges (storage.js
 // holdPurgeDeletes through reserveDelete, releaseHeldPurges with the pass's evidence incl. the shared IndexedDB, the
-// give-back's keepGivenBack), flushWsDeletes / flushFileDeletes with their cloud checks (predictions_in_use,
+// give-back leaves them to the next pass, owner ruling 2026-10-23), flushWsDeletes / flushFileDeletes with their cloud checks (predictions_in_use,
 // generations_live, paths_in_use, the WaveSpeed delete, Storage remove + HEAD), purgeEverywhere / finishPurge, the
 // relinks (applyRelinks). The flushes run at the scheduler's "timer" op (the 1.5 s timeout after a pass and the minute
 // intervals, App.jsx 2410, 3143-3152) and inside purgeEverywhere / finishPurge.
-// Left out: form holds (pull_form_holds answers none, no draft form), archives started by the owner (onCloudArchiveTask,
-// so stash archive records stay empty), late submits and the lost-submit lookup (keepLateSubmitId, recoverOrphans,
-// deleteOnWaveSpeed: a generation has its prediction id from its start), a full localStorage (every reserveDelete is
+// Left out: the draft form beyond the input of the last batch (task B13c models that and the holds publication), archives started by the owner (onCloudArchiveTask,
+// so stash archive records stay empty), late submits and the lost-submit lookup (keepLateSubmitId, recoverOrphans; a
+// generation has its prediction id from its start; deleteOnWaveSpeed is mirrored for the reconcile's re-plan, B13b), a full localStorage (every reserveDelete is
 // stored: the storage-full aborts never run), favorites/settings, toasts/save status, in-flight polling (a generation
 // is submitted, then finished by a later op), finishLogs (entries are created closed), the input backfill, rename/sessions,
 // the HISTORY_PULL_LIMIT branch (the sim never holds 1000 entries).
@@ -65,6 +65,9 @@ export class Page {
     this.bulkDeleting = false; this.bulkDeletingLogs = false;
     this.resyncApplied = new Set();   // App.jsx 2121 resyncAppliedRef (task B12b)
     this.wsDeleteRunning = false; this.fileDeleteRunning = false;   // App.jsx 2889, 3006
+    // Task B13c: the Generate form, modelled as holding the input of the last batch this page generated (a new input is
+    // picked for each batch; a new page starts with an empty form), and the last cloud publication (cloudFormPubRef).
+    this.formInput = null; this.cloudFormPub = null;
     this.macros = [];   // continuations waiting for a render (IndexedDB awaits)
   }
 
@@ -119,6 +122,7 @@ export class Page {
       const queue = this.taskSyncQueue.splice(0).filter(t => !this.deletingIds.has(t.id));
       if (queue.length) this.sendTasks(queue).then(sent => { for (const t of sent) S.removeFailedSync("task", t.id, S.sentVersion(t)); }).catch(() => {});
     }
+    this.macros.push(() => { this.publishForms().catch(e => this.sim.flowError(this, "publishForms", e)); });   // the minute interval
     this.macros.push(() => { this.flushWsDeletes().catch(e => this.sim.flowError(this, "flushWsDeletes", e)); });
     this.macros.push(() => { this.flushFileDeletes().catch(e => this.sim.flowError(this, "flushFileDeletes", e)); });
   }
@@ -252,10 +256,14 @@ export class Page {
   async pathsInUseRemote(paths) {   // 711-716: Set; null unanswered
     try { return new Set(await this.call("get_paths_in_use", `[${paths}]`, () => this.srv.pathsInUse(paths))); } catch { return null; }
   }
-  async pullFormHolds() { try { return await this.call("pullFormHolds", "", () => []); } catch { return null; } }   // 700-707 (none)
+  async pullFormHolds() { try { return await this.call("pullFormHolds", "", () => this.srv.pullFormHolds()); } catch { return null; } }   // 700-707
   async deletePredictions(list) { return this.call("predictions/delete", `[${list}]`, () => this.srv.wsDelete(list)); }   // api.js: throws on failure
   async deleteArchivedPath(path) {   // 606-612
     try { const r = await this.call("storage remove", path, () => this.srv.storageRemove(path)); return Array.isArray(r) && r.includes(path); } catch { return false; }
+  }
+  // Task B13a (review round 26 #2): supabase.js taskRowsPresentRemote: which of these ids have a tasks row now; null unanswered.
+  async taskRowsPresentRemote(list) {
+    try { return new Set(await this.call("pull taskRowsPresent", `[${list}]`, () => (list || []).filter(id => this.srv.tasks.has(id)))); } catch { return null; }
   }
   async headStatus(path) { try { return await this.call("HEAD", path, () => this.srv.headStatus(path)); } catch { return 0; } }   // fileDelete.js 106-109
   async restoreBackup(id) {   // supabase.js 680-686
@@ -271,7 +279,7 @@ export class Page {
   async sendQueuedHistory(entries, queuedAt) { const S = this.S; const send = S.uploadable("history", S.withoutBlockedItems(entries)); return send.length ? this.rawUpsertQueuedHistory(send, queuedAt) : { ok: true, voided: [], upserted: [] }; }
 
   // App.jsx 47-60
-  confirmIntents(kind, list, at) { this.sim.noteConfirm(this, kind === "task-delete" ? "task" : "history", list, at); this.queueArchivedFileDeletes(this.S.confirmDeleteIntents(kind, list, at)); }
+  confirmIntents(kind, list, at, opts) { this.sim.noteConfirm(this, kind === "task-delete" ? "task" : "history", list, at, opts); this.queueArchivedFileDeletes(this.S.confirmDeleteIntents(kind, list, at, opts)); }   // task B13a: opts.assumed
   releaseVoided(set, kind, list) { const still = this.S.pendingDeleteIds(kind); for (const id of list || []) if (id && !still.has(id)) set.delete(id); }
   // App.jsx 1802-1817
   holdDeleting(kind, list, hold) { const m = this.holds[kind]; for (const id of list || []) { if (!id) continue; if (!m.has(id)) m.set(id, new Set()); m.get(id).add(hold); } }
@@ -283,12 +291,7 @@ export class Page {
     }
   }
 
-  // ─── App.jsx 1514-1518 keepGivenBack (task B12b, review round 25 #10) ───
-  keepGivenBack(tasks = [], logs = [], more = []) {
-    const task = [...tasks.map(t => t?.id), ...more, ...logs.flatMap(l => (Array.isArray(l?.tasks) ? l.tasks.map(i => i?.id) : []))].filter(Boolean);
-    const history = logs.map(l => l?.id).filter(Boolean);
-    if (task.length || history.length) this.S.releaseHeldPurges(Date.now(), null, { alive: { task, history } });
-  }
+  // (keepGivenBack removed by the owner ruling 2026-10-23: a put-back leaves its holds to the next pass after the restore)
   // App.jsx 30-33
   queueArchivedFileDeletes(paths) {
     const S = this.S, list = (paths || []).filter(Boolean);
@@ -316,7 +319,7 @@ export class Page {
       }
       if (backTasks.length || backLogs.length) this.sim.trace(`  ${this.label} stash ${s.at} gives back tasks [${ids(backTasks)}] logs [${ids(backLogs)}] uploads [${back.uploads.map(e => e.kind[0] + ":" + e.id)}]`);
       this.queueArchivedFileDeletes(back.goneArchivePaths);   // 1542 (reapplyArchives 1539: no archive records here)
-      this.keepGivenBack(tasks, logs, Object.keys(back.archives || {}));   // 1544: before the stash goes
+      this.applyRelinks([...heldTasks.values(), ...backTasks]);   // task B13a (round 26 #6)
       S.dropGivenBackStash(s);
     }
   }
@@ -498,6 +501,7 @@ export class Page {
           for (const [at, list] of byAt) { S.queueDeleteIntents(kind, list, at); this.sim.trace(`  ${this.label} re-deletes ${kind} [${list}] @${at} (F1)`); }
         }
       }
+      const logsBeforeDrops = this.ref.logs;   // task B13b: the History these removals start from
       const staleTasks = new Set(taskDel.stale(this.ref.tasks)), staleLogs = new Set(logDel.stale(this.ref.logs));
       const staleTaskRows = this.ref.tasks.filter(t => staleTasks.has(t.id));
       if (staleTasks.size) {
@@ -557,6 +561,7 @@ export class Page {
         tombstones: cids?.historyTombstones ?? null, pending: pendingLogs, deleting: logDel.deleting, since });
       const rmTasks = new Set(taskPlan.remove), rmLogs = new Set(logPlan.remove);
       const updates = new Map(taskPlan.update.map(u => [u.id, u]));
+      let userRemovedHere = [];   // task B13b
       const logsFromCloud = B.takeFinishedFromCloud(this.ref.logs, remote.history || []).filter(l => !logDel.deleting.has(l.id));
       if (logsFromCloud.length) {
         const byId = new Map(logsFromCloud.map(l => [l.id, l]));
@@ -585,6 +590,7 @@ export class Page {
           const removedHere = this.ref.tasks.filter(t => rmTasks.has(t.id));
           S.releasePredictions(removedHere.map(t => t.taskId));
           const userRemoved = R.historyRemovals(removedHere, cids?.taskRestoreRemoved ?? null);
+          userRemovedHere = userRemoved;
           S.recordClaimants(userRemoved, { deleted: true });
           this.dropLogItemsFor(userRemoved);
           for (const id of rmTasks) { this.savedTaskIds.delete(id); S.removeFailedSync("task", id); }
@@ -593,6 +599,22 @@ export class Page {
       }
       const goneItems = R.tombstonedItems(this.ref.logs, cids?.taskTombstones ?? null, cids?.taskRestoreRemoved ?? null, new Set(ids(this.ref.tasks)));
       if (goneItems.length) this.dropLogItemsFor(goneItems.map(id => ({ id })));
+      // 2348-2371 (task B13b, simulator classes A and C): what a user deleted elsewhere and this pass removed is re-planned
+      // against this tab's kept view; its WaveSpeed result is deleted by the device holding the prediction id.
+      {
+        const itemsBefore = new Map(logsBeforeDrops.flatMap(l => (Array.isArray(l?.tasks) ? l.tasks : [])).filter(i => i?.id).map(i => [i.id, i]));
+        const goneHere = [...staleTaskRows, ...userRemovedHere];
+        const goneHereIds = new Set(goneHere.map(t => t.id));
+        for (const id of [...staleItemIds, ...goneItems]) if (!goneHereIds.has(id)) { goneHereIds.add(id); goneHere.push(itemsBefore.get(id) || { id }); }
+        if (goneHere.length) {
+          const { paths, ws } = P.elsewherePurge({ gone: goneHere, logsBefore: logsBeforeDrops,
+            keptTasks: [...this.ref.tasks.filter(t => !rmTasks.has(t.id) && !goneHereIds.has(t.id)), ...this.taskSyncQueue],
+            keptLogs: this.ref.logs.filter(l => !rmLogs.has(l.id)) });
+          if (paths.length || ws.length) this.sim.trace(`  ${this.label} re-plans elsewhere-deleted [${[...goneHereIds]}]: files [${paths}] ws [${ws.map(g => g.taskId)}]`);
+          this.queueArchivedFileDeletes(paths);
+          if (ws.length) this.deleteOnWaveSpeed(ws, { flush: false });
+        }
+      }
       const taskUploads = S.uploadable("task", taskPlan.upload.slice(0, 100));
       if (taskUploads.length) {
         for (const t of taskUploads) { this.savedTaskIds.add(t.id); this.b.saveTask(t); S.addFailedSync({ kind: "task", id: t.id, data: t }); }
@@ -629,11 +651,19 @@ export class Page {
           shared = await S.storedEvidenceIds({ tasks: async () => b.allStoredTasks(), history: async () => b.allStoredHistory() });
           await this.idb();   // the IndexedDB read completes in a later task
         }
-        if (shared) { for (const id of shared.task) keptTaskIds.add(id); for (const id of shared.history) keptLogIds.add(id); }
+        // owner ruling 2026-10-23: IndexedDB copies of ids the cloud tombstones or this pass removes are leftovers
+        const tombT = cids.taskTombstones instanceof Set ? cids.taskTombstones : new Set(), tombH = cids.historyTombstones instanceof Set ? cids.historyTombstones : new Set();
+        if (shared) {
+          for (const id of shared.task) if (!tombT.has(id) && !rmTasks.has(id)) keptTaskIds.add(id);
+          for (const id of shared.history) if (!tombH.has(id) && !rmLogs.has(id)) keptLogIds.add(id);
+        }
+        // task B13a (G): the restore's own removals are not present; task B13b (D): the ids the cloud says were deleted.
+        const userTaskTombstones = cids.taskTombstones instanceof Set && restoreRemoved ? [...cids.taskTombstones].filter(id => !restoreRemoved.has(id)) : [];
         const evidence = { restoreKnownAt,
-          task: { present: [...(cids.tasks || []), ...(cloudItemIds || []), ...(restoreRemoved || [])], local: keptTaskIds,
+          task: { present: [...(cids.tasks || []), ...(cloudItemIds || [])], local: keptTaskIds, deleted: userTaskTombstones,
             complete: cids.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared },
-          history: { present: [...(cids.history || [])], local: keptLogIds, complete: cids.history instanceof Set && !!shared } };
+          history: { present: [...(cids.history || [])], local: keptLogIds, deleted: cids.historyTombstones instanceof Set ? [...cids.historyTombstones] : [],
+            complete: cids.history instanceof Set && !!shared } };
         if (evidence.task.complete && (remote.history || []).length >= HISTORY_PULL_LIMIT) {
           const candidates = S.heldGoneCandidates(evidence);
           const live = candidates.length ? await this.generationsLiveRemote(candidates) : new Set();
@@ -721,7 +751,9 @@ export class Page {
     return clean;
   }
   // ─── App.jsx 3062 planStagePurge (task B12a: computes everything, changes nothing; purge.js planDeleteStage) ───
-  planStagePurge(removed, kept, opts = {}) { return P.planDeleteStage(opts.logs || this.ref.logs, removed, kept, opts); }
+  planStagePurge(removed, kept, opts = {}) {   // task B13a (round 26 #6): with the removed generations' relinks
+    return P.planDeleteStage(opts.logs || this.ref.logs, removed, kept, { ...opts, relinks: this.S.relinksOf((removed || []).map(t => t?.id)) });
+  }
   // ─── App.jsx 3063-3091 stagePurge(staged): the History changes, once the caller's reservation is stored ───
   stagePurge(staged) {
     const S = this.S;
@@ -769,13 +801,39 @@ export class Page {
   // App.jsx 3135-3139 finishPurge (the toast's note is not modelled)
   async finishPurge() { await this.flushWsDeletes(); await this.flushFileDeletes(); }
 
+  // ─── App.jsx 3026-3051 deleteOnWaveSpeed (task B13b: the reconcile's re-plan of elsewhere-deleted generations calls it
+  // with flush false; no toast / save status here) ───
+  deleteOnWaveSpeed(removed, { holdAt, relink = false, flush = true } = {}) {
+    const S = this.S, now = Date.now(), direct = [], unstored = [];
+    const relinks = S.relinksOf((removed || []).map(t => t?.id));
+    for (const t of removed || []) {
+      if (!t?.taskId) continue;
+      const h = t?.id ? S.deleteHoldAt(t.id) : undefined;
+      const at = h === undefined ? holdAt : h;
+      if (at != null) {
+        const ws = W.queueDeletes({}, [t], now);
+        const ok = relink && t.id ? S.holdLateResult(at, t.id, t.taskId, ws[t.taskId]) : S.holdPurgeDeletes(at, { ws });
+        if (!ok) unstored.push(t.taskId);
+        const extra = P.relinkHold([t], relinks, now);
+        if (ok && (Object.keys(extra.files).length || Object.keys(extra.ws).length)) S.holdPurgeDeletes(at, extra);
+        continue;
+      }
+      direct.push(t);
+    }
+    if (direct.length && !S.writeWsDeletes(W.queueDeletes(S.readWsDeletes(), direct, now))) unstored.push(...direct.map(t => t.taskId));
+    if (flush) this.flushWsDeletes().catch(() => {});
+    return unstored;
+  }
+
   // ─── App.jsx 2757-2791 applyRelinks (task B12b) ───
-  applyRelinks() {
+  applyRelinks(extra = []) {   // task B13a (round 26 #6): + the tasks a give-back just put into state
     const S = this.S;
     const ready = S.readyRelinks();
     if (!ready.size) return;
     const done = new Map(), link = new Map(), archive = new Map(), unrelease = [];
-    for (const t of this.ref.tasks) {
+    const inRef = new Set(ids(this.ref.tasks));
+    const pool = [...this.ref.tasks, ...(extra || []).filter(t => t?.id && !inRef.has(t.id))];
+    for (const t of pool) {
       const r = ready.get(t.id);
       if (!r || this.deletingIds.has(t.id)) continue;
       const parts = {};
@@ -796,11 +854,11 @@ export class Page {
       };
       this.ref.tasks = this.ref.tasks.map(fix);
       this.setTasks(prev => prev.map(fix));
-      for (const t of this.ref.tasks) {
+      for (const t of pool.map(fix)) {
         if (!link.has(t.id) && !archive.has(t.id)) continue;
         this.savedTaskIds.delete(t.id);
         this.b.saveTask(t);
-        if (archive.has(t.id)) S.addFailedSync({ kind: "task", id: t.id, data: t });
+        S.addFailedSync({ kind: "task", id: t.id, data: t });   // task B13a: a linked id too
       }
     }
     S.dropRelinks(done);
@@ -835,7 +893,10 @@ export class Page {
         for (const p of due) if (queue[p]?.tid && live.has(queue[p].tid)) held.push(p);
         if (held.length) S.writeWsDeletes(W.holdHeldIds(S.readWsDeletes(), held, Date.now()));
       }
-      for (const list of W.dueDeletes(S.readWsDeletes(), Date.now())) {
+      const checked = new Set(due);   // task B13b: only ids the checks above saw are sent
+      for (const chunk of W.dueDeletes(S.readWsDeletes(), Date.now())) {
+        const list = chunk.filter(p => checked.has(p));
+        if (!list.length) continue;
         try {
           const deleted = await this.deletePredictions(list);
           S.writeWsDeletes(W.settleDeletes(S.readWsDeletes(), list, deleted, Date.now()));
@@ -848,7 +909,20 @@ export class Page {
       this.wsDeleteRunning = false;
     }
   }
-  // ─── App.jsx 3007-3037 flushFileDeletes (no form holds: pull_form_holds answers none, no draft form) ───
+  // ─── App.jsx 3361-3390 the forms' holds publication (task B13c): this page's form, every tab's key, and the paths this
+  // browser's queued, not yet uploaded rows use (storage.js unsentUploadPaths), published when they change ───
+  async publishForms() {
+    const S = this.S;
+    S.publishFormPaths([...P.pathsInUse([{ sourceImageUrl: this.formInput }])]);
+    const now = Date.now(), mine = [...new Set([...F.liveFormPaths(S.readFormPublications(), now), ...S.unsentUploadPaths()])];
+    if (!F.formPublishDue(this.cloudFormPub, mine, now)) return;
+    try {
+      const bid = S.browserId();   // read now: the server callback runs later, under another page's globals
+      await this.call("syncSetting", `form-inputs:${bid} [${mine}]`, () => this.srv.setFormHold(bid, { at: now, paths: mine }));
+      this.cloudFormPub = { at: now, paths: mine };
+    } catch {}
+  }
+  // ─── App.jsx 3007-3037 flushFileDeletes (task B13c: with the forms' holds and the queued uploads' paths) ───
   async flushFileDeletes() {
     const S = this.S;
     if (this.fileDeleteRunning || !F.fileFlushReady({ loaded: this.initialLoadDone, synced: this.cloudSynced })) return;
@@ -860,11 +934,13 @@ export class Page {
       const owned = P.ownedPaths(this.ref.tasks, this.ref.logs, { taskIds: this.deletingIds, logIds: this.deletingLogIds });
       for (const p of S.heldDeleteRefs().paths) owned.add(p);
       const cloudHolds = await this.pullFormHolds();
-      const forms = new Set([...P.pathsInUse([null]), ...F.liveFormPaths(S.readFormPublications(), Date.now()), ...F.liveFormPaths(cloudHolds || [], Date.now())]);
+      const forms = new Set([...P.pathsInUse([{ sourceImageUrl: this.formInput }]), ...F.liveFormPaths(S.readFormPublications(), Date.now()),
+        ...F.liveFormPaths(cloudHolds || [], Date.now()), ...S.unsentUploadPaths()]);   // task B13c
       const candidates = due.filter(p => !owned.has(p) && !forms.has(p));
       const remote = candidates.length ? await this.pathsInUseRemote(candidates) : new Set();
       for (const p of due) {
         let outcome = F.classifyPath(p, { owned, forms, remote, formsKnown: cloudHolds !== null });
+        if (!outcome && p.startsWith("uploads/")) this.sim.trace(`  ${this.label} flush sees no hold on ${p}: cloud holds ${JSON.stringify((cloudHolds || []).map(h => h.paths))}`);
         if (!outcome) {
           if ((await this.deleteArchivedPath(p)) || (await this.deleteArchivedPath(p))) outcome = "deleted";
           else outcome = F.headOutcome(await this.headStatus(p));
@@ -884,6 +960,9 @@ export class Page {
     const now = C.serverNow();
     const batchId = this.sim.newId("L");
     const src = PUBLIC + uploadPathOf(batchId);
+    // Task B13c: the input was picked (uploaded) before Generate: the form holds it and its publication effect runs.
+    this.formInput = src;
+    this.publishForms().catch(e => this.sim.flowError(this, "publishForms", e));   // the effect, not awaited by Generate
     const tasks = [];
     for (let i = 0; i < n; i++) {
       const id = this.sim.newId("t");
@@ -896,7 +975,9 @@ export class Page {
     // An archived output is known to every copy from the start (the History entry is created closed, so its item holds it
     // too): a copy that is still "processing" names the same file (no copy of a generation misses a file it has).
     const running = tasks.map(t => ({ ...t, status: "processing", endTime: null, outputs: outputPathOf(t.id) ? t.outputs : [], taskId: `ws-${t.id}` }));
-    const entry = { id: batchId, timestamp: now - 5000, prompt: "p", genType: "i2i", models: ["M"], sourceImageUrl: src, tasks: B.batchLogItems(tasks), totalCost: 0.01 * n };
+    const entry = { id: batchId, timestamp: now - 5000, prompt: "p", genType: "i2i", models: ["M"], sourceImageUrl: src,
+      // task B13b: created closed, so its items are what finishLogs writes for finished tasks (itemOf), prediction id included
+      tasks: B.batchLogItems(tasks.map(t => ({ ...t, taskId: `ws-${t.id}` }))), totalCost: 0.01 * n };
     this.setTasks(prev => [...running, ...prev]);
     this.setLogs(prev => [entry, ...prev]);
     await this.idb();   // rendered: the entry is saved and sent
@@ -1034,11 +1115,12 @@ export class Page {
     const clearedLogIds = [...new Set([...removedLogIds, ...ids(queuedLogsAtSnap)])];
     const clearedLogSet = new Set(clearedLogIds);
     this.sim.noteAction(this, "Clear Logs", "history", clearedLogIds);
-    if (!S.reserveDelete({ intents: [{ kind: "history-delete", ids: clearedLogIds, at: snap }] })) return;   // 5331 (task B12a)
-    this.sim.noteRequest("Clear Logs", "history", clearedLogIds, snap);
+    // task B13a (round 26 #4): the stash is built first and stored inside the reservation (loaded-only as the fallback)
     const stashUploads = S.peekQueuedUploads(["history"]).filter(e => clearedLogSet.has(e.id));
     const logsStash = S.clearLogsStash({ loaded: this.ref.logs, stored: storedLogs, uploads: stashUploads, planned: clearedLogSet, cloudLogIds });
-    if (!S.writeClearStash(snap, logsStash.full)) S.writeClearStash(snap, logsStash.loadedOnly);
+    if (!S.reserveDelete({ intents: [{ kind: "history-delete", ids: clearedLogIds, at: snap }],
+      stash: { at: snap, value: logsStash.full, fallback: logsStash.loadedOnly } })) return;   // 5410 (tasks B12a, B13a)
+    this.sim.noteRequest("Clear Logs", "history", clearedLogIds, snap);
     const takenLogUploads = S.takeQueuedUploads("history", clearedLogIds);
     for (const id of clearedLogIds) this.deletingLogIds.add(id);
     const logsBefore = this.ref.logs.filter(l => clearedLogSet.has(l.id));
@@ -1058,8 +1140,12 @@ export class Page {
         const back = S.inlineVoidPutBack(snap, { logs: [...logsBefore, ...storedOnlyBefore], uploads: takenLogUploads });
         const backIds = new Set(ids(back.logs));
         const logsBack = logsBefore.filter(l => backIds.has(l.id));
-        this.setLogs(prev => { const have = new Set(ids(prev)); const add = logsBack.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
+        // task B13b (simulator I2): stored-only entries a page load would show go back into state too, as loaded (saved)
+        const logsIntoView = S.intoLoadedView(storedOnlyBefore.filter(l => backIds.has(l.id)), [...this.ref.logs, ...logsBack], { time: l => l.timestamp });
+        const logsToState = [...logsBack, ...logsIntoView];
+        this.setLogs(prev => { const have = new Set(ids(prev)); const add = logsToState.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
         for (const l of logsBack) { this.b.addHistoryEntry(l); if (savedLogsBefore.has(l.id)) this.savedLogIds.add(l.id); }
+        for (const l of logsIntoView) this.savedLogIds.add(l.id);
         const loadedNow = new Set(ids(this.ref.logs));
         for (const l of storedOnlyBefore) if (backIds.has(l.id) && !loadedNow.has(l.id)) this.b.addHistoryEntry(l);
         S.putBackQueuedUploads(back.uploads);
@@ -1103,19 +1189,22 @@ export class Page {
     const clearedTaskIds = ids(removed);
     const plannedTaskIds = new Set(clearedTaskIds);
     this.sim.noteAction(this, "Clear Outputs", "task", clearedTaskIds);
-    // 5489-5495 (task B12a): planned, then reserved first; nothing changes before.
-    const staged = this.planStagePurge(removed, [], { all: true, logs: mergedLogs, serverHistory: true, at: clearAt, holdAt: clearAt });
-    if (!S.reserveDelete({ intents: [{ kind: "task-delete", ids: clearedTaskIds, at: clearAt }, ...staged.intents], holdAt: clearAt, hold: staged.hold })) return;
-    const queuedAt = clearAt;
-    this.taskSyncQueue = this.taskSyncQueue.filter(t => !plannedTaskIds.has(t.id));
-    if (!this.taskSyncQueue.length) this.timerArmed = false;
+    // 5566-5598 (tasks B12a, B13a, B13b): planned with the late rows and late entries it does not delete as kept (classes B
+    // and D), then reserved first, the stash inside the reservation (round 26 #4); nothing changes before.
+    const lateKept = [...remote.tasks.filter(t => !plannedTaskIds.has(t.id)), ...P.entriesWithout(remote.history.filter(l => late.has(l.id)), plannedTaskIds)];
+    const staged = this.planStagePurge(removed, lateKept, { all: true, logs: mergedLogs, serverHistory: true, at: clearAt, holdAt: clearAt });
     const logsBefore = new Map(this.ref.logs.map(l => [l.id, l]));
     const mergedLogIds = new Set(ids(mergedLogs));
-    S.writeClearStash(clearAt, S.buildClearStash({
+    const outputsStash = S.buildClearStash({
       uploads: S.peekQueuedUploads(["task", "history"]).filter(e => (e.kind === "task" ? plannedTaskIds : mergedLogIds).has(e.id)),
       tasks: realTasks.filter(t => currentTasks.has(t.id) || copyTasks.has(t.id)),
       logs: [...logsBefore.values()].filter(l => mergedLogIds.has(l.id)),
-      cloudTaskIds: new Set(remoteTasks.keys()), cloudLogIds: new Set(ids(remote.history)) }));
+      cloudTaskIds: new Set(remoteTasks.keys()), cloudLogIds: new Set(ids(remote.history)) });
+    if (!S.reserveDelete({ intents: [{ kind: "task-delete", ids: clearedTaskIds, at: clearAt }, ...staged.intents], holdAt: clearAt, hold: staged.hold,
+      stash: { at: clearAt, value: outputsStash } })) return;
+    const queuedAt = clearAt;
+    this.taskSyncQueue = this.taskSyncQueue.filter(t => !plannedTaskIds.has(t.id));
+    if (!this.taskSyncQueue.length) this.timerArmed = false;
     const takenUploads = S.takeQueuedUploads("task", clearedTaskIds);
     for (const id of clearedTaskIds) this.deletingIds.add(id);
     const claimsBefore = S.claimantRecords(ids(realTasks));
@@ -1159,12 +1248,22 @@ export class Page {
         this.setLogs(prev => { const have = new Set(ids(prev)); const add = logsBack.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
         for (const l of logsBack) { this.b.addHistoryEntry(l); if (savedLogsBefore.has(l.id)) this.savedLogIds.add(l.id); }
         S.putBackQueuedUploads(back.uploads);
-        this.keepGivenBack(back.tasks, back.logs);   // 5584 (task B12b)
+        this.applyRelinks(tasksBack);   // task B13a (round 26 #6)
         this.applyClearStashes(S.voidedClearStashes(clearAt), { tasks: new Map(tasksBack.map(t => [t.id, t])), logs: backIds });
         return;
       }
       const unnamedHistoryOnly = historyOnly.filter(g => !localLogIds.has(g.batchId)).map(g => g.id);
-      if (cr.ok) { S.markAssumedConfirms("task-delete", unnamedHistoryOnly, queuedAt); this.confirmIntents("task-delete", unnamedHistoryOnly, queuedAt); }
+      // 5703-5722 (task B13a #2): assumed only where a read right after the clear finds the row the server left in place;
+      // (task B13b, class E) the others are named at the clear's time, then confirmed normally (final mark).
+      if (cr.ok && unnamedHistoryOnly.length) {
+        const withRow = await this.taskRowsPresentRemote(unnamedHistoryOnly);
+        const assumedIds = withRow ? unnamedHistoryOnly.filter(id => withRow.has(id)) : unnamedHistoryOnly;
+        const assumedSet = new Set(assumedIds);
+        if (assumedIds.length) { S.markAssumedConfirms("task-delete", assumedIds, queuedAt); this.confirmIntents("task-delete", assumedIds, queuedAt, { assumed: true }); }
+        const plainIds = unnamedHistoryOnly.filter(id => !assumedSet.has(id));
+        if (plainIds.length) { this.sim.noteRequest("Clear Outputs (no row)", "task", plainIds, queuedAt); try { await this.deleteTasksRemote(plainIds, queuedAt); } catch {} }
+        if (plainIds.length) this.confirmIntents("task-delete", plainIds, queuedAt);
+      }
       if (cr.ok) this.queueArchivedFileDeletes(S.stashArchivePaths({ archives: heldArchives }));
       if (cr.ok) await this.purgeEverywhere(plan);
       const outputsGone = cr.ok && await this.settleCloudClear({ tasks: namedIds, at: queuedAt });
@@ -1201,31 +1300,38 @@ export class Page {
     for (const t of remote.tasks) if (!(Date.parse(t.createdAt) > resetAt) || heldIds.has(t.id)) plannedTaskIds.add(t.id);
     const plannedLogIds = new Set([...copyLogs.keys(), ...queuedLogs.keys()]);
     for (const l of remote.history) if (!plannedLogIds.has(l.id) && !(Date.parse(l.createdAt) > resetAt)) plannedLogIds.add(l.id);
+    // task B13c (simulator I6-end): the History-only items of the entries this reset deletes go with it, named
+    const resetHistoryOnly = new Map(B.historyOnlyGenerations([...plannedLogIds].map(id => copyLogs.get(id) || queuedLogs.get(id) || remote.history.find(l => l.id === id)).filter(Boolean),
+      new Set([...plannedTaskIds, ...remoteTasks.keys()])).map(g => [g.id, g]));
+    for (const id of resetHistoryOnly.keys()) plannedTaskIds.add(id);
     const currentTasks = new Map(this.ref.tasks.map(t => [t.id, t]));
     const currentLogs = new Map(this.ref.logs.map(l => [l.id, l]));
     const remoteLogs = new Map(remote.history.map(l => [l.id, l]));
     const queuedPlanned = S.peekQueuedUploads(["task", "history"]).filter(e => (e.kind === "task" ? plannedTaskIds : plannedLogIds).has(e.id));
     const takenData = new Map(queuedPlanned.map(e => [`${e.kind}:${e.id}`, e.data]));
     const allTasks = new Map(), allLogs = new Map();
-    for (const id of plannedTaskIds) allTasks.set(id, currentTasks.get(id) || remoteTasks.get(id) || takenData.get(`task:${id}`) || queuedTasks.get(id) || copyTasks.get(id) || { id });
+    for (const id of plannedTaskIds) allTasks.set(id, currentTasks.get(id) || remoteTasks.get(id) || takenData.get(`task:${id}`) || queuedTasks.get(id) || copyTasks.get(id) || resetHistoryOnly.get(id) || { id });
     for (const id of plannedLogIds) allLogs.set(id, currentLogs.get(id) || remoteLogs.get(id) || takenData.get(`history:${id}`) || queuedLogs.get(id) || copyLogs.get(id) || { id });
     const removedTasks = [...allTasks.values()], removedLogs = [...allLogs.values()];
     const clearedTaskIds = [...plannedTaskIds];
     const clearedLogIds = [...plannedLogIds];
-    const keptTasks = this.ref.tasks.filter(t => !plannedTaskIds.has(t.id));
+    // task B13b (classes B and D): with the late cloud rows and entries this reset does not delete
+    const keptTasks = [...this.ref.tasks.filter(t => !plannedTaskIds.has(t.id)),
+      ...remote.tasks.filter(t => !plannedTaskIds.has(t.id) && !currentTasks.has(t.id)), ...P.entriesWithout(remote.history.filter(l => !plannedLogIds.has(l.id)), plannedTaskIds)];
     this.sim.noteAction(this, "Reset", "task", ids(removedTasks));
     this.sim.noteAction(this, "Reset", "history", ids(removedLogs));
     // 5717-5724 (task B12a): planned, then reserved first; nothing changes before.
     const staged = this.planStagePurge(removedTasks, keptTasks, { history: false, alsoLogs: removedLogs, holdAt: resetAt });
-    if (!S.reserveDelete({ intents: [{ kind: "task-delete", ids: clearedTaskIds, at: resetAt }, { kind: "history-delete", ids: clearedLogIds, at: resetAt }],
-      holdAt: resetAt, hold: staged.hold })) return;
-    this.sim.noteRequest("Reset", "task", clearedTaskIds, resetAt);
-    this.sim.noteRequest("Reset", "history", clearedLogIds, resetAt);
-    S.writeClearStash(resetAt, { ...S.buildClearStash({
+    // task B13a (round 26 #4): the stash is stored inside the reservation (favorites not modelled)
+    const resetStash = { ...S.buildClearStash({
       uploads: queuedPlanned,
       tasks: [...plannedTaskIds].map(id => currentTasks.get(id) || copyTasks.get(id)).filter(Boolean),
       logs: [...plannedLogIds].map(id => currentLogs.get(id) || copyLogs.get(id)).filter(Boolean),
-      cloudTaskIds: new Set(remoteTasks.keys()), cloudLogIds: new Set(remoteLogs.keys()) }) });
+      cloudTaskIds: new Set(remoteTasks.keys()), cloudLogIds: new Set(remoteLogs.keys()) }) };
+    if (!S.reserveDelete({ intents: [{ kind: "task-delete", ids: clearedTaskIds, at: resetAt }, { kind: "history-delete", ids: clearedLogIds, at: resetAt }],
+      holdAt: resetAt, hold: staged.hold, stash: { at: resetAt, value: resetStash } })) return;
+    this.sim.noteRequest("Reset", "task", clearedTaskIds, resetAt);
+    this.sim.noteRequest("Reset", "history", clearedLogIds, resetAt);
     const takenUploads = [...S.takeQueuedUploads("task", [...plannedTaskIds]), ...S.takeQueuedUploads("history", [...plannedLogIds])];
     const plan = this.stagePurge(staged);
     const tasksRemovedHere = this.ref.tasks.filter(t => plannedTaskIds.has(t.id));
@@ -1263,14 +1369,20 @@ export class Page {
         const tasksBack = tasksRemovedHere.filter(t => backTaskIds.has(t.id)), storedTasksBack = storedOnlyTasks.filter(t => backTaskIds.has(t.id));
         const logsBack = logsRemovedHere.filter(l => backIds.has(l.id)), storedLogsBack = storedOnlyLogs.filter(l => backIds.has(l.id));
         const nowTaskIds = new Set(ids(this.ref.tasks)), nowLogIds = new Set(ids(this.ref.logs));
-        this.setTasks(prev => { const have = new Set(ids(prev)); const add = tasksBack.filter(t => !have.has(t.id)); return add.length ? [...prev, ...add] : prev; });
+        // task B13b (simulator I2, seed 12378): stored-only copies a page load would show go back into state too, as loaded
+        const tasksIntoView = S.intoLoadedView(storedTasksBack.filter(t => t.status === "completed" || t.status === "failed"), [...this.ref.tasks, ...tasksBack], { time: t => t.startTime });
+        const logsIntoView = S.intoLoadedView(storedLogsBack, [...this.ref.logs, ...logsBack], { time: l => l.timestamp });
+        const tasksToState = [...tasksBack, ...tasksIntoView], logsToState = [...logsBack, ...logsIntoView];
+        this.setTasks(prev => { const have = new Set(ids(prev)); const add = tasksToState.filter(t => !have.has(t.id)); return add.length ? [...prev, ...add] : prev; });
         this.b.saveTasks([...tasksBack, ...storedTasksBack].filter(t => !nowTaskIds.has(t.id)));
         for (const id of savedTasksBefore) if (backTaskIds.has(id)) this.savedTaskIds.add(id);
-        this.setLogs(prev => { const have = new Set(ids(prev)); const add = logsBack.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
+        for (const t of tasksIntoView) this.savedTaskIds.add(t.id);
+        this.setLogs(prev => { const have = new Set(ids(prev)); const add = logsToState.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
         for (const l of [...logsBack, ...storedLogsBack]) if (!nowLogIds.has(l.id)) this.b.addHistoryEntry(l);
         for (const id of savedLogsBefore) if (backIds.has(id)) this.savedLogIds.add(id);
+        for (const l of logsIntoView) this.savedLogIds.add(l.id);
         S.putBackQueuedUploads(back.uploads);
-        this.keepGivenBack(back.tasks, back.logs);   // 5812 (task B12b)
+        this.applyRelinks([...tasksBack, ...storedTasksBack]);   // task B13a (round 26 #6)
         this.applyClearStashes(S.voidedClearStashes(resetAt), { tasks: new Map([...storedTasksBack, ...tasksBack].map(t => [t.id, t])), logs: backIds });
         return;
       }

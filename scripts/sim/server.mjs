@@ -50,6 +50,10 @@ const clone = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)
 const itemIdsOf = (e) => (Array.isArray(e?.tasks) ? e.tasks.map(i => i?.id).filter(Boolean) : []);
 
 export class FakeServer {
+  // Task B13c: the forms' holds each browser publishes (App.jsx publish effect, syncSetting form-inputs:<browser>) and
+  // every browser reads (supabase.js pullFormHolds: all of this account's, its own included).
+  setFormHold(browser, value) { this.formPubs.set(browser, JSON.parse(JSON.stringify(value))); return { ok: true }; }
+  pullFormHolds() { return [...this.formPubs.values()].map(v => JSON.parse(JSON.stringify(v))); }
   constructor(clock) {
     this.clock = clock;
     this.tasks = new Map();     // id -> task (+ createdAt ms)
@@ -61,6 +65,7 @@ export class FakeServer {
     this.autoBackups = false;   // the owner's setting (CLAUDE.md "Delete means delete")
     this.restoring = false;     // proxima.restore
     this.nextBackup = 1;
+    this.formPubs = new Map();  // task B13c: settings rows form-inputs:<browser> -> { at, paths }
     // ledger
     this.delRec = new Map();    // "task:x" / "history:L" -> { at, legit, via }
     this.restoreRemoved = new Map(); // key -> at
