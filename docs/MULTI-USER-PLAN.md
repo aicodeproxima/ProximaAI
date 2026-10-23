@@ -142,9 +142,10 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
   - indexing the policy column took 171 ms to under 0.1 ms.
 
   Both are already true here; keep them.
-- Postgres runs BEFORE row triggers before the RLS WITH CHECK. For the P3 cut-over, a temporary alias trigger can
-  therefore map writes still stamped with the old `'user:<name>'` scope onto the new uuid scope, rejecting none.
-  Cover it with a test before relying on it.
+- Postgres runs BEFORE row triggers before the RLS WITH CHECK. For the P3 cut-over, an alias trigger can therefore map
+  writes still stamped with the old `'user:<name>'` scope onto the new uuid scope, rejecting none. Proven live
+  2026-10-23 (scripts/test-mu-alias-probe.sql, rolled back, 4/0): without the trigger a legacy-stamped insert is refused
+  (42501); with it, the insert and an upsert of an existing row land in the session's scope. Design: docs/P3-SCOPE-DESIGN.md.
 - Realtime counts each broadcast once when sent and once per receiving device. A project allows 200 concurrent
   connections on Free and 500 on Pro, so budget for accounts × open devices. The design target of 50 accounts × about 3
   open devices is about 150 connections: inside Free, with Pro as the step up.
