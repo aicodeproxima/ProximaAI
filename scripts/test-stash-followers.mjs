@@ -38,7 +38,6 @@ const rig = () => {
       st.tasks.push(...backTasks); st.logs.push(...backLogs);
       const base = new Map([...heldTasks, ...backTasks.map(t => [t.id, t])]);
       for (const [id, rec] of Object.entries(back.archives || {})) st.reapplied.push({ id, base: base.get(id) || rec.task, paths: rec.paths });
-      st.fileDeletes.push(...back.orphanPaths);
       if (back.favorites) st.favorites.push(back.favorites);
       dropGivenBackStash(s);
     }
@@ -239,16 +238,24 @@ test("versions held now win: the inline put-back's task is the archive's base, a
   assert.deepEqual(r.st.reapplied, [{ id: "loc", base: { id: "loc", v: 2 }, paths: ["p/loc.png"] }]);
 });
 
-test("an id pending deletion by a later clear is not given back by a follower; its archive record moves there", () => {
+// Round 19 #2 rewrote this one: B's archive record used to MOVE to the pending clear's stash (or, without one, its paths
+// were orphaned to the file-delete queue). It now stays in the kept part of the follower's stash and follows that time.
+test("an id pending deletion by a later clear is not given back by a follower; its archive record stays kept for that time", () => {
   const r = rig();
   r.clear(T1, { taskIds: ["A", "B"], local: [{ id: "A" }, { id: "B" }], cloudTaskIds: new Set() });
   writeClearStash(T1, { ...readClearStash(T1), archives: { B: { task: { id: "B" }, paths: ["p/b.png"] } } });
   const c2 = r.clear(T2, { taskIds: ["A"] });
-  writeClearStash(3000, buildClearStash({}));                         // a later clear of B, still pending
-  queueDeleteIntents("task-delete", ["B"], 3000);
+  const c3 = r.clear(3000, { taskIds: ["B"] });                        // a later clear of B, still pending
   r.answer(c2, "voided");
   assert.deepEqual(r.st.tasks.map(t => t.id), ["A"], "B stays deleted");
-  assert.deepEqual(readClearStash(3000).archives.B.paths, ["p/b.png"], "B's archive record moved to the pending delete");
+  assert.equal(readClearStash(3000).archives, undefined, "nothing moved into the pending clear's stash");
+  assert.deepEqual(readClearStash(T1).archives.B.paths, ["p/b.png"], "B's archive record stays in the kept part");
+  assert.deepEqual(r.st.fileDeletes, [], "nothing orphaned");
+  r.answer(c3, "voided");
+  assert.deepEqual(r.st.tasks.map(t => t.id).sort(), ["A", "B"], "B comes back with 3000's void");
+  assert.deepEqual(r.st.reapplied.map(a => a.id), ["B"]);
+  assert.deepEqual(r.st.fileDeletes, []);
+  assert.deepEqual(readClearStashes(), []);
 });
 
 // Review round 18 #3 (r18-correctness/plain-void.mjs): a clear's stash whose ids all moved to a PLAIN delete (no stash of
@@ -406,7 +413,9 @@ test("B5: T4 voided while T5 is pending: a's content back at once, b's part kept
   const c5 = splitStash(r);
   r.plainAnswer("task-delete", ["a"], T4, "voided");
   assert.deepEqual(r.st.tasks.map(t => t.id), ["a"], "a is back at T4's void");
-  assert.deepEqual(readClearStash(T5).archives.b.paths, ["p/b.png"], "b's archive record moved to the pending clear's stash");
+  // Round 19 #2: was "moved to the pending clear's stash"; it now stays in S1's kept part with b's local item.
+  assert.equal(readClearStash(T5).archives, undefined, "nothing moved into T5's stash");
+  assert.deepEqual(readClearStash(T1).archives.b.paths, ["p/b.png"], "b's archive record stays in S1's kept part");
   assert.deepEqual(readClearStash(T1).tasks.map(t => t.id), ["b"], "S1 keeps only b's part, still pending at T5");
   r.settleClearStashes();
   assert.deepEqual(readClearStashes().map(s => s.at), [T1, T5], "still waiting for T5");
@@ -422,7 +431,7 @@ test("B5: T4 voided while T5 is pending, then T5 confirmed: b's part leaves with
   r.plainAnswer("task-delete", ["a"], T4, "voided");
   r.answer(c5, "ok");
   assert.deepEqual(r.st.tasks.map(t => t.id), ["a"]);
-  assert.deepEqual(r.st.fileDeletes, ["p/b.png"], "b's archive (moved to T5's stash) is deleted with the confirm");
+  assert.deepEqual(r.st.fileDeletes, ["p/b.png"], "b's archive (kept in S1) is deleted with the confirm");
   assert.deepEqual(readClearStashes(), []);
   assert.deepEqual([...voidedTimes()], [], "the record is pruned once no stash refers to it");
 });
@@ -444,6 +453,153 @@ test("B5: stashDecision: wait while its own time or any movedTo time is pending;
   queueDeleteIntents("history-delete", ["h"], 500);
   assert.equal(S.stashDecision(readClearStash(500)), "wait", "its own intent pending");
   assert.equal(S.stashDecision(null), "wait");
+});
+
+// ─── Review round 19 ───
+// One root: whether an id is still pending deletion at ANOTHER time, or confirmed deleted, was honoured in some places
+// and not others. #1: a void answer settled the id's intent at every queue time. #2: a give-back put back the queued
+// upload (and moved / orphaned the archive record) of an id still pending at a later time, and a confirm left a queued
+// upload of the id behind. #3: Clear Outputs' ok settled its unnamed History-only ids without leaving the stashes.
+const { withoutConfirmedUploads } = S;
+// The mount replay of the next load (App.jsx): queued task uploads with no pending task-delete, minus confirmed ones.
+const nextLoadUploads = () => {
+  const q = getFailedSyncs(), del = new Set(q.filter(f => f.kind === "task-delete").map(f => f.id));
+  return withoutConfirmedUploads(q.filter(f => f.kind === "task" && !del.has(f.id))).map(f => f.id);
+};
+test("round 19 #1: a void of the group at T1 leaves an id re-queued at T2 pending there; T2 then voids or confirms itself", () => {
+  for (const t2 of ["voided", "deleted"]) {
+    mem.clear();
+    const r = rig();
+    addFailedSync({ kind: "task", id: "x", data: { id: "x", v: 2 } });   // x's newer version, queued here
+    r.clear(T1, { taskIds: ["x", "L"], local: [{ id: "L", v: 1 }], cloudTaskIds: new Set(["x"]) });
+    r.plainDelete("task-delete", ["x"], T4);                           // a stale tab deletes x again after a restore
+    assert.deepEqual(readClearStash(T1).movedTo, [T4]);
+    const free = voidDeleteIntents("task-delete", ["x", "L"], T1);     // T1's answer (ids read before the await)
+    assert.deepEqual(free, ["L"], "only L stops being deleted; x is still going at T4");
+    assert.deepEqual(intentGroups("task-delete"), [[T4, ["x"]]], "x's intent at T4 survives the T1 void");
+    assert.equal(S.intentsPendingAt(T4), true);
+    assert.deepEqual([...S.pendingDeleteIds("task-delete")], ["x"]);
+    r.applyClearStashes(voidedClearStashes(T1));
+    assert.deepEqual(r.st.tasks.map(t => t.id), ["L"], "L's local item is back");
+    assert.deepEqual(queuedTaskUploads(), [], "x's upload is not put back while x is pending at T4");
+    assert.deepEqual(readClearStash(T1).uploads.map(e => e.id), ["x"], "it stays in S1's kept part");
+    assert.equal(S.stashDecision(readClearStash(T1)), "wait", "nothing of T1 is decided while T4 is pending");
+    r.plainAnswer("task-delete", ["x"], T4, t2);
+    if (t2 === "voided") {
+      assert.ok(voidedTimes().has(T4), "T4 is recorded voided");
+      assert.deepEqual(queuedTaskUploads(), ["x"], "T4's void gives x's upload back");
+    } else {
+      assert.ok(S.confirmedDeletes("task-delete").has("x"), "T4's confirm is recorded");
+      assert.deepEqual(queuedTaskUploads(), [], "nothing of x comes back");
+    }
+    r.settleClearStashes();
+    assert.deepEqual(intentGroups("task-delete"), []);
+    assert.deepEqual(readClearStashes(), []);
+  }
+});
+// r19-safety/putback.mjs: A and B finished offline (local-only, queued uploads), Clear Outputs at t1 took both (no
+// answer), a stale tab bulk-deleted B at t3 (no answer), a restore at R.
+const putBackSetup = () => {
+  const r = rig();
+  const A = { id: "A", status: "completed" }, B = { id: "B", status: "completed" };
+  addFailedSync({ kind: "task", id: "A", data: A }); addFailedSync({ kind: "task", id: "B", data: B });
+  r.clear(T1, { taskIds: ["A", "B"], local: [A, B], cloudTaskIds: new Set() });
+  writeClearStash(T1, { ...readClearStash(T1), archives: { B: { task: { ...B, isArchived: true }, paths: ["gen/B.png"] } } });
+  r.plainDelete("task-delete", ["B"], T4);
+  assert.deepEqual(readClearStash(T1).movedTo, [T4]);
+  return r;
+};
+test("round 19 #2: R between t1 and t3: t1's give-back keeps B's upload and archive; t3 confirmed -> nothing of B comes back", () => {
+  const r = putBackSetup();
+  r.replay({ [T1]: "voided" });                                          // t3's call fails this pass
+  assert.deepEqual(queuedTaskUploads(), ["A"], "B's upload is NOT put back while B is pending at t3");
+  assert.deepEqual(r.st.tasks.map(t => t.id), ["A"]);
+  assert.deepEqual(r.st.fileDeletes, [], "B's archive is not orphaned while t3 is pending");
+  const kept = readClearStash(T1);
+  assert.deepEqual(kept.uploads.map(e => e.id), ["B"], "B's upload stays in the kept part");
+  assert.deepEqual(kept.archives.B.paths, ["gen/B.png"], "B's archive record stays in the kept part");
+  r.replay({ [T4]: "deleted" });
+  assert.deepEqual(queuedTaskUploads(), ["A"], "no upload of the confirmed B is queued");
+  assert.deepEqual(r.st.fileDeletes, ["gen/B.png"], "B's archive paths are queued for deletion at the confirm");
+  assert.deepEqual(r.st.tasks.map(t => t.id), ["A"]);
+  assert.deepEqual(readClearStashes(), []);
+  assert.deepEqual(nextLoadUploads(), ["A"], "the next load never uploads B");
+});
+test("round 19 #2: the same, t3 voided instead: B's upload and archive come back, no file is deleted", () => {
+  const r = putBackSetup();
+  r.replay({ [T1]: "voided" });
+  r.replay({ [T4]: "voided" });
+  assert.deepEqual(queuedTaskUploads().sort(), ["A", "B"]);
+  assert.deepEqual(r.st.tasks.map(t => t.id).sort(), ["A", "B"]);
+  assert.deepEqual(r.st.reapplied.map(a => a.id), ["B"], "B's archive record re-applies");
+  assert.deepEqual(r.st.fileDeletes, []);
+  assert.deepEqual(readClearStashes(), []);
+});
+test("round 19 #2: archive variant, R after both, replayed oldest first: t1's give-back keeps B's archive; t3's void returns it", () => {
+  const r = putBackSetup();
+  r.replay({ [T1]: "voided", [T4]: "voided" });                         // one pass: t1 first, then t3
+  assert.deepEqual(r.st.fileDeletes, [], "B's archived files were never queued for deletion");
+  assert.deepEqual(r.st.reapplied.map(a => a.id), ["B"]);
+  assert.deepEqual(queuedTaskUploads().sort(), ["A", "B"]);
+  assert.deepEqual(readClearStashes(), []);
+});
+test("round 19 #2: a give-back never orphans an archive record under a plain delete (accepted item (o) gone)", () => {
+  const r = putBackSetup();
+  voidDeleteIntents("task-delete", ["A"], T1);                          // T1 voided; B still pending at t3
+  const back = stashGiveBack(readClearStash(T1));
+  assert.equal("orphanPaths" in back, false);
+  assert.deepEqual(back.archives, {}, "B is pending at t3: its record is not given back");
+  assert.deepEqual(back.uploads.map(e => e.id), ["A"], "B's upload is not given back");
+  assert.deepEqual(r.st.fileDeletes, []);
+});
+// r19-regression/p1-kept-part-plain-settle.mjs: Clear Outputs A (a) holds local-only t; Clear Outputs C (c) re-queues t
+// as an UNNAMED History-only generation; A's remaining group is voided during C's call; C answers ok.
+test("round 19 #3: Clear Outputs' ok confirms its unnamed History-only ids through the helper: a kept part cannot restore them", () => {
+  const r = rig();
+  const a = r.clear(T1, { taskIds: ["t", "x"], local: [{ id: "t" }], cloudTaskIds: new Set(["x"]) });
+  const c = r.clear(T5, { taskIds: ["t"] });                           // t: unnamed History-only at C
+  assert.deepEqual(readClearStash(T1).movedTo, [T5]);
+  r.answer(a, "voided");                                                 // A's remaining group [x] voided during C's call
+  assert.deepEqual(readClearStash(T1).tasks.map(x => x.id), ["t"], "t kept for C");
+  // C answers ok (App.jsx): its stash goes, the unnamed History-only ids are confirmed (was a plain settle), then
+  // settleCloudClear confirms the named ones (none here) and runs the settle pass.
+  dropClearStash(c.at);
+  r.confirmIntents("task-delete", ["t"]);
+  assert.equal(readClearStash(T1)?.tasks.some(x => x.id === "t") ?? false, false, "t left A's stash with the confirm");
+  r.settleClearStashes();
+  assert.ok(!r.st.tasks.some(x => x.id === "t"), "t, whose delete C confirmed, is not given back");
+  assert.deepEqual(readClearStashes(), []);
+  // A later give-back of anything left cannot restore it either.
+  r.applyClearStashes(() => true);
+  assert.ok(!r.st.tasks.some(x => x.id === "t"));
+});
+test("round 19 C: a confirm removes a queued upload of the confirmed id (task and History)", () => {
+  addFailedSync({ kind: "task", id: "y", data: { id: "y" } });
+  addFailedSync({ kind: "task", id: "keep", data: { id: "keep" } });
+  addFailedSync({ kind: "history", id: "h", data: { id: "h" } });
+  queueDeleteIntents("task-delete", ["y"], T1);
+  queueDeleteIntents("history-delete", ["h"], T1);
+  confirmDeleteIntents("task-delete", ["y"]);
+  assert.deepEqual(queuedTaskUploads(), ["keep"]);
+  assert.ok(getFailedSyncs().some(e => e.kind === "history" && e.id === "h"), "a task confirm leaves History uploads alone");
+  confirmDeleteIntents("history-delete", ["h"]);
+  assert.equal(getFailedSyncs().some(e => e.kind === "history" && e.id === "h"), false);
+});
+test("round 19 C: the mount replay / replayHistoryUploads skip (and drop) an upload of a confirmed id queued before the confirm", () => {
+  queueDeleteIntents("task-delete", ["y"], T1);
+  queueDeleteIntents("history-delete", ["h"], T1);
+  confirmDeleteIntents("task-delete", ["y"]); confirmDeleteIntents("history-delete", ["h"]);
+  const old = Date.now() - 60000, later = Date.now() + 60000;
+  putBackQueuedUploads([{ kind: "task", id: "y", data: { id: "y" }, ts: old, attempts: 1 }, { kind: "history", id: "h", data: { id: "h" }, ts: old, attempts: 1 },
+    { kind: "task", id: "other", data: { id: "other" }, ts: old, attempts: 1 }]);   // a give-back in another tab, after the confirm
+  assert.deepEqual(nextLoadUploads(), ["other"], "the confirmed y is not uploaded");
+  assert.deepEqual(queuedTaskUploads(), ["other"], "and its stale entry left the queue");
+  assert.deepEqual(withoutConfirmedUploads(getFailedSyncs().filter(f => f.kind === "history")), [], "History too");
+  assert.equal(getFailedSyncs().some(e => e.kind === "history"), false);
+  // Queued AFTER the confirm (a restore brought y back and it changed here): sent.
+  putBackQueuedUploads([{ kind: "task", id: "y", data: { id: "y", v: 2 }, ts: later, attempts: 1 }]);
+  assert.deepEqual(nextLoadUploads().sort(), ["other", "y"]);
+  assert.deepEqual(withoutConfirmedUploads(null), []);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

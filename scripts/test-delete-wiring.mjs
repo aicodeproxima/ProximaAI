@@ -94,7 +94,8 @@ test("Clear Outputs: only cloud-only entries created after the snapshot are late
   assert.match(h, /const late = new Set\(remote\.history\.filter\(l => !localLogIds\.has\(l\.id\) && Date\.parse\(l\.createdAt\) > clearAt\)/);
   assert.match(h, /mergeLogs\(localLogs, remote\.history\.filter\(l => !late\.has\(l\.id\)\)\)/);
   assert.doesNotMatch(h, /mergeLogs\([^;]*\)\.filter\(l => !late/, "the merged list (local entries included) is not filtered");
-  assert.match(h, /settleDeleteIntents\("task-delete", historyOnly\.filter\(g => !localLogIds\.has\(g\.batchId\)\)/);
+  // Round 19 #3: confirmed through the confirm helper (was a plain settleDeleteIntents, which left them in the stashes).
+  assert.match(h, /confirmIntents\("task-delete", historyOnly\.filter\(g => !localLogIds\.has\(g\.batchId\)\)/);
 });
 // Review round 12 (F1): Clear Outputs and Reset planned over tasksRef / logsRef read AFTER the snapshot, so an entry or
 // task another device synced in during the awaits (created after the snapshot) was planned, named or given an intent.
@@ -371,7 +372,10 @@ test("task B5: no stash merge remains; settleClearStashes waits on the stash's o
   assert.match(dec, /if \(times\.some\(t => intentsPendingAt\(t\)\)\) return "wait";/, "waits on its own time AND every movedTo time");
   assert.match(dec, /return times\.some\(t => voided\.has\(t\)\) \? "give-back" : "drop";/);
   const keep = st.slice(st.indexOf("export function dropGivenBackStash("), st.indexOf("// Review round 17 (#1, #3, #6)"));
-  assert.match(keep, /movedTo\.some\(t => intentsPendingAt\(t\)\)/, "keeps the part still pending at a movedTo time");
+  // Round 19 #2: the kept part is everything of ids pending at another time (items, uploads, archive records), and it
+  // follows the times they are pending at (was: local items only, while a movedTo time was pending).
+  assert.match(keep, /writeClearStash\(stash\.at, \{ uploads: kept\.uploads, tasks, logs, archives: kept\.archives, movedTo: \[\.\.\.times\] \}\)/,
+    "keeps the part still pending at another time, uploads and archives included");
   assert.match(keep, /dropClearStash\(stash\.at\);\s*\n\}/, "otherwise dropped");
 });
 test("round 15 S5: an archive a clear held is recorded, re-applied on a void, its files deleted on a confirm", () => {
@@ -391,7 +395,8 @@ test("round 15 S5: an archive a clear held is recorded, re-applied on a void, it
   }
   const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
   assert.match(apply, /reapplyArchives\(back\.archives, new Map\(\[\.\.\.heldTasks, /, "onto the versions an inline void put back");
-  assert.match(apply, /queueArchivedFileDeletes\(back\.orphanPaths\)/);
+  // Round 19 #2: a give-back never orphans an archive record (it stays in the kept part for its pending time).
+  assert.doesNotMatch(apply, /orphanPaths/);
   const re = between("const reapplyArchives = (archives, base = new Map()) =>", "const restoreStashedFavorites = ");
   assert.match(re, /isArchived: true, archiving: false/);
   assert.match(re, /saveTask\(updated\);\s*\n\s*addFailedSync\(\{ kind: "task", id, data: updated \}\)/, "saved and its upload queued");
@@ -432,10 +437,10 @@ test("round 17: a voided clear gives back its stash and its followers, after its
 test("round 18 #3: every void answer settles through voidDeleteIntents with its queue time; plain deletes give back", () => {
   // Task B5: settleClearStashes asks stashDecision (which subsumes stashTiedToVoided) instead.
   assert.match(src, /import \{[^}]*\bvoidDeleteIntents\b[^}]*\bvoidedTimes\b[^}]*\bstashDecision\b[^}]*\bpruneVoidedAt\b[^}]*\} from "\.\/lib\/storage\.js";/);
-  // The only settleDeleteIntents left is a confirmed clear's (History-only intents the server tombstoned).
+  // Round 19 #3: no plain settleDeleteIntents is left in App.jsx (was one: a confirmed clear's unnamed History-only ids).
   const settles = src.match(/settleDeleteIntents\([^\n]*/g) || [];
-  assert.equal(settles.length, 1, `plain settles left: ${settles.join(" | ")}`);
-  assert.match(src, /if \(cr\.ok\) settleDeleteIntents\("task-delete", historyOnly\.filter/);
+  assert.equal(settles.length, 0, `plain settles left: ${settles.join(" | ")}`);
+  assert.match(src, /if \(cr\.ok\) confirmIntents\("task-delete", historyOnly\.filter/);
   // Every branch on a voided answer settles through the recording helper.
   // (`else if` ones are the toasts after a settled void; the replay's second branch is its give-back.)
   const branches = [...src.matchAll(/(else )?if \((?:(?:r|hr|cr|rr)\.voided(?:\.length)?|voided\.length)\) (\{|applyClearStashes\(voidedClearStashes\(ts\)\))/g)]
@@ -476,12 +481,60 @@ test("round 18 #3: settleClearStashes gives back a stash tied to a recorded void
   // storage.js: the helper settles and records; the tie needs nothing pending; restoreGuard's drop records too.
   const st = readFileSync(new URL("../src/lib/storage.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const v = st.slice(st.indexOf("export function voidDeleteIntents("), st.indexOf("export function stashTiedToVoided("));
-  assert.match(v, /settleDeleteIntents\(kind, ids\);\s*\n\s*if \(\(ids \|\| \[\]\)\.some\(Boolean\)\) recordVoidedAt\(at\);/);
+  // Round 19 #1: only the group queued at `at` (settleDeleteIntentsAt), not the id's intent at every time.
+  assert.match(v, /settleDeleteIntentsAt\(kind, ids, at\);\s*\n\s*if \(\(ids \|\| \[\]\)\.some\(Boolean\)\) recordVoidedAt\(at\);/);
   const tie = st.slice(st.indexOf("export function stashTiedToVoided("), st.indexOf("// Clear Logs' stash (round 16 #6)"));
   // Task B5: the tie needs nothing pending at its own time nor at any movedTo time (stashDecision).
   assert.match(tie, /intentsPendingAt\(stash\.at\)/); assert.match(tie, /stashDecision\(stash, voided\) === "give-back"/);
   assert.match(st.slice(st.indexOf("export function dropDeleteIntentsBefore("), st.indexOf("// The restore check every replay")), /recordVoidedAt\(times\)/);
-  assert.equal((st.match(/settleDeleteIntents\(/g) || []).length, 3, "definition, confirmDeleteIntents, voidDeleteIntents");
+  assert.equal((st.match(/settleDeleteIntents\(/g) || []).length, 2, "definition, confirmDeleteIntents (round 19 #1: a void settles by time)");
+});
+
+// Review round 19: whether an id is still pending deletion at another time, or confirmed deleted, holds everywhere.
+const storageSrc = () => readFileSync(new URL("../src/lib/storage.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+test("round 19 #3: App.jsx calls settleDeleteIntents nowhere; every confirm goes through the confirm helper", () => {
+  assert.doesNotMatch(src, /\bsettleDeleteIntents\b/, "neither called nor imported");
+  assert.equal(src.match(/confirmDeleteIntents\(/g)?.length, 1, "only inside confirmIntents");
+  const sites = src.match(/confirmIntents\((kind|"task-delete"|"history-delete"), [^\n]*/g) || [];
+  assert.ok(sites.length >= 10, `confirm sites: ${sites.length}`);
+  const st = storageSrc();
+  const c = st.slice(st.indexOf("export function confirmDeleteIntents("), st.indexOf("export function forgetConfirmed("));
+  assert.match(c, /forgetStashedIds\(kind, ids\)/, "the confirm strips the ids from every stash");
+  assert.match(c, /dropQueuedUploadsOf\(kind === "task-delete" \? "task" : "history", ids\)/, "and drops their queued uploads");
+});
+test("round 19 #1: void branches release only the ids left with no pending intent (releaseVoided)", () => {
+  const rel = between("function releaseVoided(ref, kind, ids)", "// ─── LOGIN SCREEN ───");
+  assert.match(rel, /const still = pendingDeleteIds\(kind\);/);
+  assert.match(rel, /if \(id && !still\.has\(id\)\) ref\.current\.delete\(id\)/);
+  const branches = [...src.matchAll(/(else )?if \((?:(?:r|hr|cr|rr)\.voided(?:\.length)?|voided\.length)\) \{/g)].filter(b => !b[1]);
+  assert.equal(branches.length, 8);
+  for (const b of branches) {
+    const line = src.slice(0, b.index).split("\n").length;
+    const body = src.slice(b.index, b.index + 1400);
+    const head = body.slice(0, body.search(/giveBackVoided\(|applyClearStashes\(|putBackClaimants\(|setLogs\(|setTasks\(/));
+    assert.doesNotMatch(head, /deleting(Log)?Ids\.current\.delete\(/, `void branch at line ${line}: no unconditional release`);
+    assert.match(head, /releaseVoided\((isTask \? deletingIds : deletingLogIds, kind|deletingIds, "task-delete"|deletingLogIds, "history-delete"), /, `void branch at line ${line}: releaseVoided`);
+  }
+  assert.match(between("const replayDeleteIntents = async", "const replayHistoryUploads = async"),
+    /voidDeleteIntents\(kind, r\.voided, ts\);[^\n]*\n\s*releaseVoided\(isTask \? deletingIds : deletingLogIds, kind, r\.voided\);/);
+  const st = storageSrc();
+  const at = st.slice(st.indexOf("export function settleDeleteIntentsAt("), st.indexOf("export function rekeyFavoriteRetries("));
+  assert.match(at, /\(e\.ts \|\| 0\) === ts/, "settles by queue time");
+});
+test("round 19 #2: the mount replay, forceSaveAll and replayHistoryUploads never send an upload of a confirmed delete", () => {
+  assert.match(src, /import \{[^}]*\bwithoutConfirmedUploads\b[^}]*\} from "\.\/lib\/storage\.js";/);
+  const mount = between('const delRetries = failed.filter(f => f.kind === "task-delete")', "const settingRetries = ");
+  assert.match(mount, /const taskRetries = withoutConfirmedUploads\(failed\.filter\(f => f\.kind === "task" && !delSet\.has\(f\.id\) && !deletingIds\.current\.has\(f\.id\)\)\)/);
+  assert.match(mount, /await replayHistoryUploads\(/);
+  const fs = between("const forceSaveAll = async () =>", "const favoriteScope = getDeviceId();");
+  assert.match(fs, /const taskRetries = withoutConfirmedUploads\(failed\.filter\(f => f\.kind === "task" && !deletingIds\.current\.has\(f\.id\)\)\)/);
+  assert.match(fs, /await replayHistoryUploads\(/);
+  assert.match(between("const replayHistoryUploads = async", "\n  };"), /new Map\(withoutConfirmedUploads\(queued\)\.filter\(f => f\.data\)/);
+  assert.equal(src.match(/const taskRetries = /g)?.length, 2, "no other replay of queued task uploads");
+  const st = storageSrc();
+  const g = st.slice(st.indexOf("export function stashGiveBack("), st.indexOf("export function stashedItems("));
+  assert.doesNotMatch(g, /orphanPaths|recordStashArchive\(/, "a give-back neither orphans nor moves an archive record");
+  assert.match(g, /uploads: parts\.back\.uploads/, "only the uploads of ids not pending elsewhere come back");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

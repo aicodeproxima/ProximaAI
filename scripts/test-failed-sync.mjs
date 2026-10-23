@@ -415,7 +415,7 @@ test("round 15 S1: a Reset voided group by group gives its stash back only after
   assert.deepEqual(back.logs.map(l => l.id), ["L", "Lq"], "local-only History comes back; L2 is being deleted by the later delete");
   assert.deepEqual(back.uploads.map(e => e.id), ["Lq"]);
   assert.equal(back.favorites, null);
-  assert.deepEqual(back.orphanPaths, []);
+  assert.equal("orphanPaths" in back, false, "round 19 #2: nothing is orphaned any more");
   assert.equal(stashGiveBack(null), null);
 });
 // S2: confirmed ids stayed in the stash, so a later void gave back items whose delete already succeeded.
@@ -459,7 +459,7 @@ test("round 15 S5: recordStashArchive records against the clear whose intent hol
   assert.deepEqual(stashArchivePaths(readClearStash(100)), ["p1", "p2"]);
   assert.equal(recordStashArchive("", {}), false);
 });
-test("round 15 S5: confirm returns a held archive's paths; a void gives it back; deleted again elsewhere it moves", () => {
+test("round 15 S5: confirm returns a held archive's paths; a void gives it back; deleted again elsewhere it stays kept", () => {
   queueDeleteIntents("task-delete", ["a", "b"], 100);
   writeClearStash(100, { tasks: [{ id: "a" }, { id: "b" }] });
   recordStashArchive("a", { paths: ["pa"], task: { id: "a" } });
@@ -470,17 +470,21 @@ test("round 15 S5: confirm returns a held archive's paths; a void gives it back;
   const back = stashGiveBack(readClearStash(100));
   assert.deepEqual(Object.keys(back.archives), ["b"]);
   assert.deepEqual(back.tasks.map(t => t.id), ["b"]);
-  // b deleted again by a clear at 200 that has a stash: the record moves there; without a stash its paths are orphaned.
-  mem.clear();
-  queueDeleteIntents("task-delete", ["b"], 200);
-  writeClearStash(100, { tasks: [{ id: "b" }], archives: { b: { task: { id: "b" }, paths: ["pb"] } } });
-  writeClearStash(200, { tasks: [] });
-  const moved = stashGiveBack(readClearStash(100));
-  assert.deepEqual(moved.archives, {});
-  assert.deepEqual(moved.orphanPaths, []);
-  assert.deepEqual(readClearStash(200).archives.b.paths, ["pb"]);
-  dropClearStash(200);
-  assert.deepEqual(stashGiveBack(readClearStash(100)).orphanPaths, ["pb"]);
+  // Round 19 #2 rewrote this part: b deleted again at 200 (with or without a stash there): the record used to move to
+  // 200's stash or be orphaned (its paths deleted while 200 was pending). It now stays in 100's kept part, for 200.
+  for (const withStash of [true, false]) {
+    mem.clear();
+    queueDeleteIntents("task-delete", ["b"], 200);
+    writeClearStash(100, { tasks: [{ id: "b" }], archives: { b: { task: { id: "b" }, paths: ["pb"] } } });
+    if (withStash) writeClearStash(200, { tasks: [] });
+    const held = stashGiveBack(readClearStash(100));
+    assert.deepEqual(held.archives, {}, "not given back while 200 is pending");
+    assert.equal("orphanPaths" in held, false);
+    dropGivenBackStash(readClearStash(100));
+    assert.deepEqual(readClearStash(100).archives.b.paths, ["pb"], "kept in 100's stash");
+    assert.deepEqual(readClearStash(100).movedTo, [200], "the kept part follows 200");
+    if (withStash) assert.equal(readClearStash(200).archives, undefined, "nothing moved into 200's stash");
+  }
 });
 
 // Review round 16 #5: two unanswered Resets in a row (the toast asks for the second), both voided by one restore, left the
@@ -614,12 +618,13 @@ test("round 16 #5: chainStashFavorites / chainedFavoritesBefore / stashDecision 
   assert.deepEqual(readClearStash(100).movedTo, [300, 400]);
   assert.equal(stashDecision(readClearStash(100)), "wait", "400 pending");
   assert.equal(readClearStash(400), null, "nothing is created at the pending target");
-  // dropGivenBackStash: with a movedTo time pending, only the local items pending at another time stay.
-  writeClearStash(100, { ...readClearStash(100), tasks: [{ id: "a" }, { id: "x" }], uploads: [{ kind: "task", id: "a", data: { id: "a" } }], favorites: { resetAt: 1 } });
+  // dropGivenBackStash: with a movedTo time pending, only what belongs to ids pending at another time stays.
+  writeClearStash(100, { ...readClearStash(100), tasks: [{ id: "a" }, { id: "x" }], uploads: [{ kind: "task", id: "a", data: { id: "a" } }, { kind: "task", id: "x", data: { id: "x" } }], favorites: { resetAt: 1 } });
   dropGivenBackStash(readClearStash(100));
   const kept = readClearStash(100);
   assert.deepEqual(kept.tasks.map(t => t.id), ["a"], "x is not pending anywhere: it was given back");
-  assert.deepEqual(kept.uploads, [], "uploads were put back by the give-back");
+  // Round 19 #2: was "uploads were put back by the give-back" (all of them, a's included); a's upload now stays kept.
+  assert.deepEqual(kept.uploads.map(e => e.id), ["a"], "a's upload stays with a (pending at 400); x's was given back");
   assert.equal("favorites" in kept, false);
   assert.deepEqual(kept.movedTo, [300, 400]);
   settleDeleteIntents("task-delete", ["a"]);

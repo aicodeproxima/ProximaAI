@@ -758,8 +758,14 @@ export function confirmDeleteIntents(kind, ids) {
   if (kind !== "task-delete" && kind !== "history-delete") return [];
   // A delete the cloud confirmed is never given back by a later void of its clear (review round 15 S2).
   const paths = forgetStashedIds(kind, ids);
+  // Nor uploaded again (review round 19 #2): a queued upload of a confirmed id (one a give-back put back while its delete
+  // was pending, or a stale tab's) would re-insert a row the server holds no tombstone for.
+  dropQueuedUploadsOf(kind === "task-delete" ? "task" : "history", ids);
   try {
-    const all = readConfirmed(), now = Date.now(), cut = now - CONFIRMED_FOR_MS;
+    // Server time, like the queued uploads' stamps (addFailedSync) that withoutConfirmedUploads compares it with, and
+    // like releaseRestored's `since`: a device clock off by more than a few ms would otherwise keep a stale upload or
+    // drop a real one (round 19 follow-up, scripts/test-confirm-clock.mjs).
+    const all = readConfirmed(), now = serverNow(), cut = now - CONFIRMED_FOR_MS;
     for (const k of Object.keys(all)) for (const [id, at] of Object.entries(all[k] || {})) if (!(at > cut)) delete all[k][id];
     all[kind] = all[kind] || {};
     for (const id of ids || []) if (id) all[kind][id] = now;
@@ -778,16 +784,50 @@ export function forgetConfirmed(kind, ids) {
   } catch {}
 }
 export function confirmedDeletes(kind) {
-  const cut = Date.now() - CONFIRMED_FOR_MS;
+  const cut = serverNow() - CONFIRMED_FOR_MS;
   return new Map(Object.entries(readConfirmed()[kind] || {}).filter(([, at]) => at > cut));
 }
 
-// The intents a confirmed clear settled (clearOutcome.js clearSettlement), removed in one write.
+// A recorded confirmation (confirmedDeletes, 30 days) also stops a queued upload of that id (review round 19 #2/#3).
+// Upload entries queued at or before the id's confirm (a stale copy a give-back put back keeps its original queue time)
+// are removed and left out; one queued after it (the id came back by a restore and changed here) is kept. The mount
+// replay, forceSaveAll and replayHistoryUploads pass their queued uploads through this. Returns the entries to send.
+export function withoutConfirmedUploads(entries) {
+  const confirmed = { task: confirmedDeletes("task-delete"), history: confirmedDeletes("history-delete") };
+  const out = [];
+  for (const e of entries || []) {
+    const at = confirmed[e?.kind]?.get(e?.id);
+    if (at != null && !((e.ts || 0) > at)) { removeFailedSync(e.kind, e.id, f => (f.ts || 0) === (e.ts || 0)); continue; }
+    out.push(e);
+  }
+  return out;
+}
+// The queued uploads of this kind ("task" / "history") for these ids, removed in one write.
+function dropQueuedUploadsOf(upKind, ids) {
+  try {
+    const gone = new Set((ids || []).filter(Boolean));
+    if (!gone.size) return;
+    const all = getFailedSyncs(), keep = all.filter(e => !(e.kind === upKind && gone.has(e.id)));
+    if (keep.length !== all.length) localStorage.setItem(FAILED_KEY, JSON.stringify(keep));
+  } catch {}
+}
+
+// The intents a confirmed delete settled, every queue time of these ids (confirmDeleteIntents only: App.jsx never calls it
+// directly, round 19 #3). Removed in one write.
 export function settleDeleteIntents(kind, ids) {
   try {
     const done = new Set(ids || []);
     if (!done.size) return;
     localStorage.setItem(FAILED_KEY, JSON.stringify(getFailedSyncs().filter(e => !(e.kind === kind && done.has(e.id)))));
+  } catch {}
+}
+// Review round 19 #1: a void answer is about ONE group, the intents queued at `at`. An id a later delete re-queued (its
+// intent moved to a later time) keeps that intent: that delete is still pending. Removed in one write.
+export function settleDeleteIntentsAt(kind, ids, at) {
+  try {
+    const done = new Set(ids || []), ts = Number(at);
+    if (!done.size || !Number.isFinite(ts)) return;
+    localStorage.setItem(FAILED_KEY, JSON.stringify(getFailedSyncs().filter(e => !(e.kind === kind && done.has(e.id) && (e.ts || 0) === ts))));
   } catch {}
 }
 
@@ -951,20 +991,27 @@ export function recordStashArchive(taskId, record) {
 }
 // What a voided clear's stash gives back (review round 15 S1), or null while ANY of its intents (task or History, at
 // its queue time) is still pending: that clear is not settled yet, and its remaining group's own void or confirm decides
-// (a task group voided first must not give back the stash while its History group still holds the entries back). Items
-// queued for deletion again by ANOTHER clear or delete (another queue time) stay deleted; archive records of such tasks
-// move to that clear's stash, or, if it has none, their paths are returned as `orphanPaths` (to delete).
+// (a task group voided first must not give back the stash while its History group still holds the entries back).
+// Review round 19 #2: NOTHING of an id queued for deletion again by ANOTHER clear or delete (another queue time) comes
+// back: not its task / History entry, not its queued upload, not its archive record. All of it stays in the stash's kept
+// part (dropGivenBackStash), so that time's void gives it back and its confirm drops it (forgetStashedIds: archive paths
+// deleted then). Nothing is moved to another stash nor orphaned to the file-delete queue while that delete is pending.
 export function stashGiveBack(stash) {
   if (!stash || intentsPendingAt(stash.at)) return null;
   const deletingTasks = pendingDeleteIds("task-delete", { exceptAt: stash.at });
   const deletingLogs = pendingDeleteIds("history-delete", { exceptAt: stash.at });
   const { tasks, logs } = stashedItems(stash, { deletingTasks, deletingLogs });
-  const archives = {}, orphanPaths = [];
-  for (const [id, rec] of Object.entries(stash.archives || {})) {
-    if (!deletingTasks.has(id)) { archives[id] = rec; continue; }
-    if (!recordStashArchive(id, rec)) orphanPaths.push(...stashArchivePaths({ archives: { [id]: rec } }));
-  }
-  return { uploads: stash.uploads || [], tasks, logs, archives, orphanPaths, favorites: stash.favorites || null };
+  const parts = splitStash(stash, deletingTasks, deletingLogs);
+  return { uploads: parts.back.uploads, tasks, logs, archives: parts.back.archives, favorites: stash.favorites || null };
+}
+// A stash's uploads and archive records, split into what a give-back returns (`back`) and what belongs to an id still
+// pending deletion at another time (`kept`).
+function splitStash(stash, deletingTasks, deletingLogs) {
+  const pending = (kind, id) => (kind === "task" ? deletingTasks : kind === "history" ? deletingLogs : null)?.has(id) || false;
+  const back = { uploads: [], archives: {} }, kept = { uploads: [], archives: {} };
+  for (const e of stash?.uploads || []) (pending(e?.kind, e?.id) ? kept : back).uploads.push(e);
+  for (const [id, rec] of Object.entries(stash?.archives || {})) (deletingTasks.has(id) ? kept : back).archives[id] = rec;
+  return { back, kept };
 }
 // The local items a voided clear's stash gives back: its tasks and History entries plus the data of the upload entries
 // it took, each id once, none that is queued for deletion again (a later delete of the same id).
@@ -1027,19 +1074,28 @@ export function stashDecision(stash, voided = voidedTimes()) {
   if (times.some(t => intentsPendingAt(t))) return "wait";
   return times.some(t => voided.has(t)) ? "give-back" : "drop";
 }
-// After a give-back (App.jsx applyClearStashes): the stash goes, unless a time its ids moved to is still pending. Then
-// only the local items still pending deletion at another time stay (stashGiveBack left them out; their archive records
-// moved to that time's stash, its uploads were put back), so that time's own void gives them back (as a follower) and its
-// confirm removes them (forgetStashedIds). Task B5: dropping the whole stash lost them on a later void.
+// After a give-back (App.jsx applyClearStashes): the stash goes, except everything stashGiveBack left out because its id is
+// still pending deletion at another time: its local items, its queued upload entries and its archive records (round 19
+// #2: those were put back / moved / orphaned before). That kept part stays under this key and follows the times those
+// ids are pending at (added to `movedTo`), so that time's own void gives it back (as a follower) and its confirm removes
+// it (forgetStashedIds, archive paths deleted then). Task B5: dropping the whole stash lost them on a later void.
 export function dropGivenBackStash(stash) {
   if (!stash) return;
-  const movedTo = (stash.movedTo || []).filter(t => t !== stash.at);
-  if (movedTo.some(t => intentsPendingAt(t))) {
-    const deletingTasks = pendingDeleteIds("task-delete", { exceptAt: stash.at });
-    const deletingLogs = pendingDeleteIds("history-delete", { exceptAt: stash.at });
-    const tasks = (stash.tasks || []).filter(x => x?.id && deletingTasks.has(x.id));
-    const logs = (stash.logs || []).filter(x => x?.id && deletingLogs.has(x.id));
-    if ((tasks.length || logs.length) && writeClearStash(stash.at, { uploads: [], tasks, logs, movedTo })) return;
+  const deletingTasks = pendingDeleteIds("task-delete", { exceptAt: stash.at });
+  const deletingLogs = pendingDeleteIds("history-delete", { exceptAt: stash.at });
+  const tasks = (stash.tasks || []).filter(x => x?.id && deletingTasks.has(x.id));
+  const logs = (stash.logs || []).filter(x => x?.id && deletingLogs.has(x.id));
+  const { kept } = splitStash(stash, deletingTasks, deletingLogs);
+  if (tasks.length || logs.length || kept.uploads.length || Object.keys(kept.archives).length) {
+    // The times the kept ids are pending at, so the kept part is decided by them (stashDecision, stashFollowers).
+    const keptTasks = new Set([...tasks.map(x => x.id), ...kept.uploads.filter(e => e.kind === "task").map(e => e.id), ...Object.keys(kept.archives)]);
+    const keptLogs = new Set([...logs.map(x => x.id), ...kept.uploads.filter(e => e.kind === "history").map(e => e.id)]);
+    const times = new Set((stash.movedTo || []).filter(t => t !== stash.at));
+    for (const e of getFailedSyncs()) {
+      const ts = e.ts || 0;
+      if (ts !== stash.at && ((e.kind === "task-delete" && keptTasks.has(e.id)) || (e.kind === "history-delete" && keptLogs.has(e.id)))) times.add(ts);
+    }
+    if (writeClearStash(stash.at, { uploads: kept.uploads, tasks, logs, archives: kept.archives, movedTo: [...times] })) return;
   }
   dropClearStash(stash.at);
 }
@@ -1104,11 +1160,15 @@ export function recordVoidedAt(times) {
   } catch {}
   pruneVoidedAt();
 }
-// The one way a void answer leaves the queue: settles the voided intents of the group queued at `at` and records `at`.
-// The caller then gives back applyClearStashes(voidedClearStashes(at)) at once; the record covers what it cannot see yet.
+// The one way a void answer leaves the queue: settles the voided intents of the group queued at `at` (only that group,
+// round 19 #1: an id re-queued at a later time keeps its intent) and records `at`. The caller then gives back
+// applyClearStashes(voidedClearStashes(at)) at once; the record covers what it cannot see yet. Returns the ids that are
+// no longer being deleted (no intent of this kind left at any time): only those may leave the caller's deleting set.
 export function voidDeleteIntents(kind, ids, at) {
-  settleDeleteIntents(kind, ids);
+  settleDeleteIntentsAt(kind, ids, at);
   if ((ids || []).some(Boolean)) recordVoidedAt(at);
+  const still = pendingDeleteIds(kind);
+  return (ids || []).filter(id => id && !still.has(id));
 }
 // Whether this stash is decided and tied to a voided time: nothing pending at its own queue time nor at any time its ids
 // moved to (task B5), and one of them recorded voided. Such a stash is given back, never dropped as confirmed.
