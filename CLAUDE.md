@@ -113,6 +113,9 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
 ## When in doubt
 - Pull Supabase data with curl first — don't assume
 - Verify the deployed bundle has expected code: `curl -sL <url>/assets/index-*.js`
+- Every build stamps `<meta name="proxima-version" content="<UTC build minute> <commit>">` into index.html and fails
+  without it (scripts/lib/build-version.mjs); Settings → Version shows it with "Up to date" or Reload. A push is live
+  once `sh scripts/browser/wait-deploy.sh $(git rev-parse HEAD)` hits.
 - Fix root cause + ship defensive guard (belt-and-suspenders) — don't guess
 - Spawn multiple agents in parallel for research-heavy audits (respect rate limits)
 - Verify fixes with the actual API or a test harness before claiming success
