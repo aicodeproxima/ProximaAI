@@ -186,8 +186,11 @@ test("a voided clear puts back this device's tasks, History entries and the queu
   }
 });
 // Review round 10 (F2): a confirmed delete kept in deletingIds stripped a generation a later restore brought back.
-test("History uploads leave out only generations whose delete is still in flight", () => {
-  assert.equal(src.match(/withoutDeleting\([^;]*pendingDeleteIds\("task-delete"\)\)/g)?.length, 2);
+// Task B8a (review round 21 #1/#5) rewrote this check: the shared record's blocked ids (pending in any tab AND confirmed
+// and not released; a restored id is released by the pass first) leave every History upload, not only pending ones.
+test("History uploads leave out generations the shared record blocks (pending and confirmed, not released)", () => {
+  assert.equal(src.match(/withoutDeleting\([^;]*uploadBlockedIds\("task"\)\)/g)?.length, 2);
+  assert.doesNotMatch(src, /withoutDeleting\([^;]*pendingDeleteIds\("task-delete"\)\)/);
   assert.doesNotMatch(src, /withoutDeleting\([^;]*deletingIds\.current/);
 });
 
@@ -222,7 +225,7 @@ test("Clear Logs plans over every stored entry and deletes only the planned ids 
 // A late submit whose task was merely missing from a stale tasksRef deleted a paid result on WaveSpeed.
 test("keepLateSubmitId deletes the prediction only when the task is being deleted (deletingIds or a queued intent)", () => {
   const h = between("function keepLateSubmitId(", "const submittingIds = useRef(");
-  assert.match(h, /const deleting = deletingIds\.current\.has\(id\) \|\| pendingDeleteIds\("task-delete"\)\.has\(id\)/);
+  assert.match(h, /const deleting = deletingIds\.current\.has\(id\) \|\| pendingDeleteIds\("task-delete"\)\.has\(id\) \|\| uploadBlockedIds\("task"\)\.has\(id\);/);
   assert.match(h, /if \(!cur\) \{ if \(deleting\) deleteOnWaveSpeed\(/);
   assert.equal(h.match(/deleteOnWaveSpeed\(/g)?.length, 1);
 });
@@ -377,8 +380,11 @@ test("task B5: no stash merge remains; settleClearStashes waits on the stash's o
   const keep = st.slice(st.indexOf("export function dropGivenBackStash("), st.indexOf("// Review round 17 (#1, #3, #6)"));
   // Round 19 #2: the kept part is everything of ids pending at another time (items, uploads, archive records), and it
   // follows the times they are pending at (was: local items only, while a movedTo time was pending).
+  // Task B8c removed the `spared` field B8b had added to this write (confirmDeleteIntents now skips an id pending at a
+  // later time, so no stash needs to remember one).
   assert.match(keep, /writeClearStash\(stash\.at, \{ uploads: kept\.uploads, tasks, logs, archives: kept\.archives, movedTo: \[\.\.\.times\] \}\)/,
     "keeps the part still pending at another time, uploads and archives included");
+  assert.match(keep, /const decide = giveBackRule\(stash\.at\);/, "decided by the one give-back rule (B8b)");
   assert.match(keep, /dropClearStash\(stash\.at\);\s*\n\}/, "otherwise dropped");
 });
 test("round 15 S5: an archive a clear held is recorded, re-applied on a void, its files deleted on a confirm", () => {
@@ -502,8 +508,9 @@ test("round 19 #3: App.jsx calls settleDeleteIntents nowhere; every confirm goes
   assert.ok(sites.length >= 10, `confirm sites: ${sites.length}`);
   const st = storageSrc();
   const c = st.slice(st.indexOf("export function confirmDeleteIntents("), st.indexOf("export function forgetConfirmed("));
-  assert.match(c, /forgetStashedIds\(kind, ids\)/, "the confirm strips the ids from every stash");
-  assert.match(c, /dropQueuedUploadsOf\(kind === "task-delete" \? "task" : "history", ids\)/, "and drops their queued uploads");
+  // Task B8a (review round 21 #8) bounded both by the confirmed group's time (scripts/test-b8a-shared-record.mjs).
+  assert.match(c, /forgetStashedIds\(kind, ids, at\)/, "the confirm strips the ids from every stash up to its time");
+  assert.match(c, /dropQueuedUploadsOf\(kind === "task-delete" \? "task" : "history", ids, at\)/, "and drops their queued uploads up to its time");
 });
 test("round 19 #1: void branches release only the ids left with no pending intent (releaseVoided)", () => {
   const rel = between("function releaseVoided(ref, kind, ids)", "// ─── LOGIN SCREEN ───");
@@ -631,9 +638,13 @@ test("B7b (#2/#6): the inline voided branches put back only through inlineVoidPu
   }
   const st = storageSrc();
   const f = st.slice(st.indexOf("export function inlineVoidPutBack("), st.indexOf("// Review round 17 (#1, #3, #6): a stash's fate"));
-  assert.match(f, /pendingDeleteIds\("task-delete", \{ exceptAt: ts \}\)/);
-  assert.match(f, /pendingDeleteIds\("history-delete", \{ exceptAt: ts \}\)/);
-  assert.match(f, /confirmedDeletes\("task-delete"\)/);
+  // Task B8b (review round 21 #3): the per-id checks moved into giveBackRule, which stashGiveBack uses too.
+  assert.match(f, /const decide = giveBackRule\(ts\);/);
+  assert.doesNotMatch(f, /pendingDeleteIds\(|confirmedDeletes\(/, "no per-id rule of its own");
+  const r = st.slice(st.indexOf("export function giveBackRule("), st.indexOf("function splitStash("));
+  assert.match(r, /pendingDeleteIds\("task-delete", \{ exceptAt: ts \}\)/);
+  assert.match(r, /pendingDeleteIds\("history-delete", \{ exceptAt: ts \}\)/);
+  assert.match(r, /confirmedDeletes\("task-delete"\)/);
   assert.match(f, /writeClearStash\(ts, /, "the pending-elsewhere part joins the clear's stash");
   assert.match(f, /uploadable\("task", /); assert.match(f, /uploadable\("history", /);
 });

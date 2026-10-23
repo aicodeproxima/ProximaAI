@@ -222,16 +222,24 @@ test("#7: T1's late 'deleted' answer leaves x's intent at T2 (re-queued after a 
   S.confirmDeleteIntents("task-delete", ["x"], T1);                  // A handles T1's answer only now
   assert.deepEqual(S.intentGroups("task-delete"), [[T2, ["x", "y"]]], "T2's group keeps x");
   assert.ok(S.pendingDeleteIds("task-delete").has("x"), "x still pending at T2");
-  assert.deepEqual(queued("task"), [], "the confirm still drops x's queued upload");
-  assert.deepEqual(S.readClearStash(T2)?.tasks.map(t => t.id), ["y"], "and still strips x from every stash (unchanged)");
+  // Task B8c rewrote this assertion (was: "the confirm still drops x's queued upload (stamped before T1)"): x is pending
+  // again at T2, so T1's late confirm skips it entirely. The upload stays queued but cannot be sent while T2 is pending
+  // (uploadable); T2's own confirm drops it below.
+  assert.deepEqual(queued("task"), ["x"], "T1's late confirm leaves x's queued upload to T2's answer");
+  assert.deepEqual(S.uploadable("task", ["x"]), [], "and it is not sent while T2 is pending");
+  assert.equal(S.confirmedDeletes("task-delete").has("x"), false, "no confirm record from T1's late answer");
+  // Task B8a (review round 21 #8): T2's later stash keeps x; T2's own void gives it back, its confirm drops it.
+  assert.deepEqual(S.readClearStash(T2)?.tasks.map(t => t.id), ["x", "y"], "T2's later stash keeps x");
   // The next replay (App.jsx replayDeleteIntents) sends T2's group, x included.
   const sent = [];
   for (const [ts, ids] of S.intentGroups("task-delete")) { sent.push([ts, ids]); S.confirmDeleteIntents("task-delete", ids, ts); }
   assert.deepEqual(sent, [[T2, ["x", "y"]]]);
   assert.deepEqual(S.intentGroups("task-delete"), []);
+  assert.deepEqual(queued("task"), [], "T2's confirm drops x's queued upload");
+  assert.ok(S.confirmedDeletes("task-delete").has("x"), "and records x");
   // releaseRestored never frees x while its T2 delete is pending (checked before that replay above).
 });
-test("#7: releaseRestored does not free x while T2 is pending, although T1's confirm is recorded", () => {
+test("#7: releaseRestored does not free x while T2 is pending (T1's late confirm leaves no record since B8c)", () => {
   S.queueDeleteIntents("task-delete", ["x"], 1000);
   S.queueDeleteIntents("task-delete", ["x"], 3000);
   const sinceSeq = S.confirmSeqNow() + 1;

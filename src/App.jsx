@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
@@ -60,19 +60,23 @@ async function sendTask(task) {
   if (send.length) await rawSyncTask(send[0]);
   return send;
 }
+// Task B8a (review round 21 #1/#5): no History upload carries an item of a task the shared record blocks (pending in any
+// tab, or confirmed and not released): such items are stripped here, centrally, and an entry left with no item is not
+// sent (storage.js withoutBlockedItems). A stripped entry's queued copy stays queued (sentVersion no longer matches) until
+// replayHistoryUploads, which strips the same ids, sends or drops it.
 async function sendHistory(entries) {
-  const send = uploadable("history", entries);
+  const send = uploadable("history", withoutBlockedItems(entries));
   if (send.length) await rawSyncHistoryBatch(send);
   return send;
 }
 async function sendHistoryEntry(entry) {
-  const send = uploadable("history", [entry]);
+  const send = uploadable("history", withoutBlockedItems([entry]));
   if (send.length) await rawSyncHistoryEntry(send[0]);
   return send;
 }
 // A delete's restore-checked History rewrites (upsert_queued_history): a left-out entry is neither upserted nor voided.
 async function sendQueuedHistory(entries, queuedAt) {
-  const send = uploadable("history", entries);
+  const send = uploadable("history", withoutBlockedItems(entries));
   return send.length ? rawUpsertQueuedHistory(send, queuedAt) : { ok: true, voided: [], upserted: [] };
 }
 
@@ -1511,6 +1515,9 @@ export default function ProximaApp() {
         for (const l of backLogs) addHistoryEntry(l);
       }
       reapplyArchives(back.archives, new Map([...heldTasks, ...backTasks.map(t => [t.id, t])]));
+      // Task B8b (review round 21 #3): an archive record of a task confirmed deleted after this clear is never re-applied
+      // (giveBackRule); its files go through the file-delete queue, as a confirm's forgetStashedIds sends them.
+      queueArchivedFileDeletes(back.goneArchivePaths);
       favorites = restoreStashedFavorites(back.favorites) || favorites;
       dropGivenBackStash(s);   // task B5: the part still pending at a time its ids moved to stays for that one
     }
@@ -1581,8 +1588,9 @@ export default function ProximaApp() {
     // Round 19 #2: an entry whose delete was confirmed is never sent (withoutConfirmedUploads removes a stale one). Task
     // B7a: nor one of an entry another tab is deleting or deleted (uploadable, the shared delete state).
     const byId = new Map(uploadable("history", withoutConfirmedUploads(queued)).filter(f => f.data).map(f => [f.id, f]));
-    // Only deletes still in flight (a confirmed id may be one a later restore brought back, review round 10).
-    const { upload, skip } = withoutDeleting([...byId.values()].map(f => f.data), pendingDeleteIds("task-delete"));
+    // Task B8a (review round 21 #1): every task id the shared record blocks, pending AND confirmed. A confirmed id a
+    // restore brought back is released by the reconcile pass (sharedDeleteState), so it is blocked only until then.
+    const { upload, skip } = withoutDeleting([...byId.values()].map(f => f.data), uploadBlockedIds("task"));
     for (const id of skip) removeFailedSync("history", id, sentVersion(byId.get(id).data));
     for (const entry of upload) {
       const f = byId.get(entry.id);
@@ -2127,8 +2135,9 @@ export default function ProximaApp() {
       for (const id of taskDel.released) deletingIds.current.delete(id);
       for (const id of logDel.released) deletingLogIds.current.delete(id);
       // Delete means delete in every tab: this tab's copy of a row whose delete was confirmed and that the cloud lacks goes
-      // (state and IndexedDB). Its History, WaveSpeed copy and files were handled by the tab that deleted it.
+      // (state and IndexedDB). Its WaveSpeed copy and files were handled by the tab that deleted it.
       const staleTasks = new Set(taskDel.stale(tasksRef.current)), staleLogs = new Set(logDel.stale(logsRef.current));
+      const staleTaskRows = tasksRef.current.filter(t => staleTasks.has(t.id));
       if (staleTasks.size) {
         tasksRef.current = tasksRef.current.filter(t => !staleTasks.has(t.id));
         setTasks(prev => prev.filter(t => !staleTasks.has(t.id)));
@@ -2142,6 +2151,15 @@ export default function ProximaApp() {
         for (const id of staleLogs) savedLogIds.current.delete(id);
         await deleteHistoryEntries([...staleLogs]);
       }
+      // Task B8a (review round 21 #1/#5): their History here too. The deleting tab removed its own entries, but one whose
+      // items all carry ids got no History intent there (the server's work), so this tab's copy would be uploaded again
+      // with the deleted item. The items of those tasks, and of every other confirmed task the cloud lacks that this tab
+      // holds only in History, leave its entries as the deleting tab's did: an entry keeping other items is rewritten, an
+      // emptied one gets its own History delete (dropLogItemsFor), all before History is planned below.
+      const staleItemIds = taskDel.stale(logsRef.current.flatMap(l => (Array.isArray(l?.tasks) ? l.tasks : [])).filter(i => i?.id))
+        .filter(id => !staleTasks.has(id));
+      const staleGone = [...staleTaskRows, ...[...new Set(staleItemIds)].map(id => ({ id }))];
+      if (staleGone.length) dropLogItemsFor(staleGone);
       const failed = getFailedSyncs();
       const pendingTasks = new Set([...failed.filter(f => f.kind === "task").map(f => f.id), ...taskSyncQueueRef.current.map(t => t.id)]);
       const pendingLogs = new Set(failed.filter(f => f.kind === "history").map(f => f.id));
@@ -2260,10 +2278,11 @@ export default function ProximaApp() {
           await deleteHistoryEntries([...rmLogs]);
         }
       }
-      // None carries a generation this device is deleting (review round 9 guard): such an entry goes without it. Only
-      // deletes still in flight (a confirmed id may be one a later restore brought back, review round 10).
+      // None carries a generation being deleted (review round 9 guard): such an entry goes without it. Task B8a (review
+      // round 21 #1/#5): every task id the shared record blocks, pending in any tab AND confirmed (this pass already
+      // released those a restore brought back, sharedDeleteState above); an entry left with no item is not uploaded.
       // Task B7a: entries another tab is deleting or deleted are left out first (uploadable).
-      const logUploads = withoutDeleting(uploadable("history", logPlan.upload.slice(0, 100)), pendingDeleteIds("task-delete")).upload;
+      const logUploads = withoutDeleting(uploadable("history", logPlan.upload.slice(0, 100)), uploadBlockedIds("task")).upload;
       if (logUploads.length) {
         for (const l of logUploads) { savedLogIds.current.add(l.id); addHistoryEntry(l); addFailedSync({ kind: "history", id: l.id, data: l }); }
         try { for (const l of await sendHistory(logUploads)) removeFailedSync("history", l.id, sentVersion(l)); } catch {}
@@ -2303,12 +2322,17 @@ export default function ProximaApp() {
   const persistLog = useCallback((entry) => {
     // Task B7a: an entry another tab is deleting or deleted is neither stored back here nor uploaded (a stale copy).
     if (uploadBlockedIds("history").has(entry?.id)) return Promise.resolve();
-    savedLogIds.current.add(entry.id);
+    // Task B8a (review round 21 #1): nor an item of a task the shared record blocks. Stored here as given (a pending
+    // delete may still be voided), queued and sent without those items; an entry left with no item is only stored, and
+    // stays unsaved, so it is persisted again once that delete is voided, or leaves with it (the reconcile's stale step).
+    const send = withoutBlockedItems([entry])[0];
     addHistoryEntry(entry);
-    addFailedSync({ kind: "history", id: entry.id, data: entry });
+    if (!send) return Promise.resolve();
+    savedLogIds.current.add(entry.id);
+    addFailedSync({ kind: "history", id: send.id, data: send });
     setFailedSyncCount(getFailedSyncs().length);
-    return trackedSync(`history-${entry.id}${isOpenLog(entry) ? "-open" : ""}`, () => sendHistoryEntry(entry))
-      .then(() => { removeFailedSync("history", entry.id, e => sameLogContent(e.data, entry)); setFailedSyncCount(getFailedSyncs().length); })
+    return trackedSync(`history-${send.id}${isOpenLog(send) ? "-open" : ""}`, () => sendHistoryEntry(send))
+      .then(() => { removeFailedSync("history", send.id, e => sameLogContent(e.data, send)); setFailedSyncCount(getFailedSyncs().length); })
       .catch(() => { setFailedSyncCount(getFailedSyncs().length); });
   }, [trackedSync]);
 
@@ -2555,8 +2579,9 @@ export default function ProximaApp() {
     if (!predictionId) return;
     releasePredictions([predictionId]);
     // Being deleted = gone (tasksRef is refreshed only on render): its id is in deletingIds or a queued task-delete
-    // intent names it.
-    const deleting = deletingIds.current.has(id) || pendingDeleteIds("task-delete").has(id);
+    // intent names it. Task B8b (review round 21 #4): or its delete was already confirmed (the shared record, any tab):
+    // the belt to the submit hold that keeps it in deletingIds until this decision.
+    const deleting = deletingIds.current.has(id) || pendingDeleteIds("task-delete").has(id) || uploadBlockedIds("task").has(id);
     const cur = deleting ? undefined : tasksRef.current.find(t => t.id === id);
     // Deleted (or cleared) while its submit was on the wire: delete the prediction on WaveSpeed too. A task that was only
     // cancelled is still here and keeps its result there (cancel is not delete). Review wf_9d0e3664-ab7 #3.
@@ -3209,6 +3234,11 @@ export default function ProximaApp() {
     for (const task of newTasks) {
       (async () => {
         let sent = false;
+        // Task B8b (review round 21 #4): while its submit is on the wire, a task a Clear / Reset / delete removes stays
+        // "being deleted" in this tab (pruneDeleting skips held ids), so keepLateSubmitId still deletes its late prediction
+        // on WaveSpeed. Released once the submit settled (finally: after keepLateSubmitId's decision or the poll start).
+        const submitHold = {};
+        holdDeleting("task-delete", [task.id], submitHold);
         try {
           // Build per-model payload using model's params config
           const modelConfig = models.find(m => m.id === task.modelId);
@@ -3255,6 +3285,8 @@ export default function ProximaApp() {
           setTasks(prev => prev.map(t => t.id === task.id ? {
             ...t, status: "failed", error: errMsg, endTime: Date.now()
           } : t));
+        } finally {
+          unholdDeleting("task-delete", [task.id], submitHold);
         }
       })();
     }
@@ -3321,6 +3353,9 @@ export default function ProximaApp() {
     // Fire the regenerated task — use task's own genType, not current UI tab
     (async () => {
       let sent = false;
+      // Task B8b (review round 21 #4): held "being deleted" while the submit runs, as in handleGenerate.
+      const submitHold = {};
+      holdDeleting("task-delete", [newTask.id], submitHold);
       try {
         const taskGenType = newTask.genType || genType;
         const taskModels = MODELS[taskGenType] || [];
@@ -3363,6 +3398,8 @@ export default function ProximaApp() {
         setTasks(prev => prev.map(t => t.id === newTask.id ? {
           ...t, status: "failed", error: errMsg, endTime: Date.now()
         } : t));
+      } finally {
+        unholdDeleting("task-delete", [newTask.id], submitHold);
       }
     })();
   }, [keyBlocked]);
@@ -3518,7 +3555,6 @@ export default function ProximaApp() {
     holdDeleting("task-delete", ids, callHold);
     let heldLogIds = [];
     try {
-      forgetConfirmed("task-delete", ids);   // an older confirmation must not release them while this delete runs (review round 7)
       // 1. Safety snapshot while Automatic backups is on (the server skips it when off: ok without an id). If an
       //    expected backup can't be confirmed, abort: never destroy data without the recovery point the owner chose.
       const bk = await createBackup("pre-bulk-delete", `Before deleting ${noun}`);
@@ -3537,6 +3573,10 @@ export default function ProximaApp() {
       for (const id of ids) { savedTaskIds.current.delete(id); removeFailedSync("task", id); }
       // 3. Enqueue cloud-delete intents BEFORE firing, so a tab-close/network drop replays them.
       const queuedAt = queueDeleteIntents("task-delete", ids);   // one queue time for the action (review rounds 5 and 7)
+      // An older confirmation of these ids says nothing about this delete (review round 7). Forgotten only now that this
+      // delete's intents are queued (task B8a, review round 21 #2/#7): they block the ids in every tab from here on, and
+      // an abort above (failed safety backup) leaves the confirm record exactly as it was.
+      forgetConfirmed("task-delete", ids);
       // 4. Optimistic local removal. Fresh copies: a submit that answered during the backup gave its task a prediction id
       //    the snapshot lacks. Their ids are released, so a lost submit of the same model never adopts a deleted result. A
       //    task whose submit never answered (Cancelled and then lost to a freeze or reload) becomes a deleted claimant, so
@@ -3676,7 +3716,6 @@ export default function ProximaApp() {
     const callHold = {};
     holdDeleting("history-delete", ids, callHold);
     try {
-      forgetConfirmed("history-delete", ids);   // an older confirmation must not release them while this delete runs (review round 7)
       // 1. Pre-destructive snapshot (HARD RULE) — abort if it can't be confirmed.
       const bk = await createBackup("pre-bulk-delete-logs", `Before deleting ${noun}`);
       if (!bk?.ok) {
@@ -3691,6 +3730,7 @@ export default function ProximaApp() {
       for (const id of ids) { savedLogIds.current.delete(id); removeFailedSync("history", id); }
       // 3. Enqueue cloud-delete intents BEFORE firing.
       const queuedAt = queueDeleteIntents("history-delete", ids);   // one queue time for the action (review rounds 5 and 8)
+      forgetConfirmed("history-delete", ids);   // only once this delete's intents are queued (task B8a, review round 21 #2/#7)
       // 4. Optimistic local removal.
       setLogs(prev => prev.filter(l => !idSet.has(l.id)));
       // 5. Local IndexedDB delete (awaited).
