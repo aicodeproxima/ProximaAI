@@ -4,7 +4,7 @@
 -- file alone. Tokens are minted inside the block and never printed. Fixtures use ids starting '__rls_probe_'.
 do $pt$
 declare
-  u text;   -- the owner's name, set first thing below
+  u text; tk text; sub text;   -- the owner's name, a fresh session token and its subject, set first thing below
   s text; p text := '__rls_probe_' || txid_current();
   t_good text; t_forged text; t_exp text; t_nonadmin text; v_topic text; v text;
   m0 int; m1 int; pl jsonb; r text[] := '{}';
@@ -12,16 +12,21 @@ declare
   users_live boolean := to_regclass('proxima_auth.users') is not null;   -- P1's M1 is applied
   topic_on_users boolean;                                                -- P1's M2 is applied
 begin
-  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in every P1 state). From M1
+  -- the session is minted by proxima_auth.mint_token the way the app's sign-in mints it ('u:' from M3), so the suite
+  -- keeps working after M4 retires 'admin:' tokens.
   if to_regclass('proxima_auth.users') is not null then
-    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+    execute 'select username, proxima_auth.mint_token(id), ''u:'' || id from proxima_auth.users where role = ''owner'''
+      into u, tk, sub;
   else
     u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+    sub := 'admin:' || u;
+    tk := public._sign_session_token(sub, now() + interval '12 hours');
   end if;
   s := 'user:' || u;
-  t_good     := public._sign_session_token('admin:' || u, now() + interval '12 hours');
+  t_good     := tk;
   t_forged   := left(t_good, -1) || case right(t_good, 1) when '0' then '1' else '0' end;
-  t_exp      := public._sign_session_token('admin:' || u, now() - interval '1 minute');
+  t_exp      := public._sign_session_token(sub, now() - interval '1 minute');
   t_nonadmin := public._sign_session_token('svc:__rls', now() + interval '12 hours');
   v_topic    := proxima_auth.sync_topic();
   r := r || format('%s topic shape', case when v_topic ~ '^proxima-sync-[0-9a-f]{64}$' then 'PASS' else 'FAIL' end);

@@ -1,6 +1,8 @@
 -- M2 gate (RLS session; docs/P1-AUTH-DESIGN.md §4 rows session_scope and sync_topic): proxima_auth.session_scope with
 -- both token formats, and proxima_auth.sync_topic on the owner row. Members __m2_a and __m2_b exist only inside this
 -- rolled-back block (no member account may exist before P5). Browser calls run as anon, the way PostgREST runs them.
+--   (From M4, marked by set_admin_credentials_rehash being gone, the owner's 'admin:' token must instead be refused with
+--   'session token revoked' in S4, R5 and T7.)
 --   S  scope: A's and B's 'u:' tokens give their own scope, the owner's 'u:' and 'admin:' tokens the owner's; no
 --      header, an unparsable header and every bad token are refused with 28000 and the verifier's message; disabling
 --      A or bumping A's epoch revokes A only; a token minted after the bump works.
@@ -27,6 +29,9 @@ declare
   o_id uuid; o_name text; o_scope text; o_epoch bigint;
   v_exp timestamptz; t_a text; t_b text; t_ou text; t_oa text; t text; v text; n int; t0 text; i int;
   lbl text[]; tok text[]; want text[];
+  -- From M4 the owner's 'admin:' token is refused ('session token revoked'). M4 drops set_admin_credentials_rehash, the
+  -- marker test-mu-auth uses too; S4, R5 and T7 follow it.
+  m4 boolean := to_regprocedure('public.set_admin_credentials_rehash(text,text)') is null;
 begin
   if to_regclass('proxima_auth.users') is null then
     raise exception 'RESULT: 0 PASS, 1 FAIL :: FAIL M1 not applied (no proxima_auth.users)';
@@ -50,9 +55,17 @@ begin
     execute 'set local role anon';
     begin
       v := proxima_auth.session_scope(true);
-      r := r || format('%s S%s %s own scope', case when v = want[i] then 'PASS' else 'FAIL' end, i, lbl[i]);
+      if i = 4 and m4 then
+        r := r || text 'FAIL S4 owner admin: accepted after M4';
+      else
+        r := r || format('%s S%s %s own scope', case when v = want[i] then 'PASS' else 'FAIL' end, i, lbl[i]);
+      end if;
     exception when others then
-      r := r || format('FAIL S%s %s: %s %s', i, lbl[i], sqlstate, sqlerrm);
+      if i = 4 and m4 and sqlstate = '28000' and sqlerrm = 'session token revoked' then
+        r := r || text 'PASS S4 owner admin: revoked from M4';
+      else
+        r := r || format('FAIL S%s %s: %s %s', i, lbl[i], sqlstate, sqlerrm);
+      end if;
     end;
     execute 'reset role';
   end loop;
@@ -174,9 +187,17 @@ begin
     execute 'set local role anon';
     begin
       select string_agg(substring(x.id from length(p) + 2), ',' order by x.id) into v from public.tasks x where left(x.id, length(p)) = p;
-      r := r || format('%s R5 %s sees only its own (%s)', case when v = want[i] then 'PASS' else 'FAIL' end, lbl[i], coalesce(v, 'none'));
+      if i = 3 and m4 then
+        r := r || text 'FAIL R5 owner admin: read after M4';
+      else
+        r := r || format('%s R5 %s sees only its own (%s)', case when v = want[i] then 'PASS' else 'FAIL' end, lbl[i], coalesce(v, 'none'));
+      end if;
     exception when others then
-      r := r || format('FAIL R5 %s: %s %s', lbl[i], sqlstate, sqlerrm);
+      if i = 3 and m4 and sqlstate = '28000' and sqlerrm = 'session token revoked' then
+        r := r || text 'PASS R5 owner admin: refused from M4';
+      else
+        r := r || format('FAIL R5 %s: %s %s', lbl[i], sqlstate, sqlerrm);
+      end if;
     end;
     execute 'reset role';
   end loop;
@@ -208,9 +229,15 @@ begin
   update proxima_auth.users set sessions_valid_after = 0 where id = a_id;
   execute 'set local role anon';
   begin
-    r := r || format('%s T7 get_my_account: owner topic (both formats), member null',
-      case when public.get_my_account(t_oa)->>'sync_topic' = t0 and public.get_my_account(t_ou)->>'sync_topic' = t0
-                and public.get_my_account(t_a)->>'sync_topic' is null then 'PASS' else 'FAIL' end);
+    begin
+      v := public.get_my_account(t_oa)->>'sync_topic';
+    exception when others then
+      v := case when sqlerrm = 'session token revoked' then 'revoked' else 'error ' || sqlstate end;
+    end;
+    r := r || format('%s T7 get_my_account: owner topic (u:%s), member null',
+      case when public.get_my_account(t_ou)->>'sync_topic' = t0 and public.get_my_account(t_a)->>'sync_topic' is null
+                and case when m4 then v = 'revoked' else v = t0 end then 'PASS' else 'FAIL' end,
+      case when m4 then '; admin: revoked from M4' else ' and admin:' end);
   exception when others then
     r := r || format('FAIL T7 get_my_account: %s %s', sqlstate, sqlerrm);
   end;

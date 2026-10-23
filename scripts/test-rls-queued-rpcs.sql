@@ -5,7 +5,7 @@
 -- Run alone (live), like the other test-rls-*.sql files.
 do $pt$
 declare
-  u text;   -- the owner's name, set first thing below
+  u text; tk text; sub text;   -- the owner's name, a fresh session token and its subject, set first thing below
   p text := '__rls_qrpc_' || txid_current();
   s text; o text; r text[] := '{}'; res json; j int; k int; ok boolean; ms bigint;
   t_good text; t_forged text; t_exp text; t_other text; t_nonadmin text; bad text[];
@@ -14,17 +14,22 @@ declare
   rpcs text[] := array['delete_queued_rows','clear_queued_rows','reset_queued_rows','upsert_queued_history','server_time_ms'];
   qat bigint := (extract(epoch from clock_timestamp()) * 1000)::bigint + 60000;   -- a queue time after any restore
 begin
-  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in every P1 state). From M1
+  -- the session is minted by proxima_auth.mint_token the way the app's sign-in mints it ('u:' from M3), so the suite
+  -- keeps working after M4 retires 'admin:' tokens.
   if to_regclass('proxima_auth.users') is not null then
-    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+    execute 'select username, proxima_auth.mint_token(id), ''u:'' || id from proxima_auth.users where role = ''owner'''
+      into u, tk, sub;
   else
     u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+    sub := 'admin:' || u;
+    tk := public._sign_session_token(sub, now() + interval '12 hours');
   end if;
   s := 'user:' || u;
   o := 'user:__rls_other_' || txid_current();
-  t_good     := public._sign_session_token('admin:' || u, now() + interval '12 hours');
+  t_good     := tk;
   t_forged   := left(t_good, -1) || case right(t_good, 1) when '0' then '1' else '0' end;
-  t_exp      := public._sign_session_token('admin:' || u, now() - interval '1 minute');
+  t_exp      := public._sign_session_token(sub, now() - interval '1 minute');
   t_other    := public._sign_session_token('admin:__rls_not_admin', now() + interval '12 hours');
   t_nonadmin := public._sign_session_token('svc:__rls', now() + interval '12 hours');
   bad := array[null, t_forged, t_exp, t_other, t_nonadmin, 'garbage'];

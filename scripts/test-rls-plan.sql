@@ -2,17 +2,22 @@
 -- Send after phase 0 + phase 2 (or with them prepended), rolled back.
 do $pt$
 declare
-  u text;   -- the owner's name, set first thing below
+  u text; tk text; sub text;   -- the owner's name, a fresh session token and its subject, set first thing below
   s text; t_good text; ln text; plan text; stmt text; r text[] := '{}';
 begin
-  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in every P1 state). From M1
+  -- the session is minted by proxima_auth.mint_token the way the app's sign-in mints it ('u:' from M3), so the suite
+  -- keeps working after M4 retires 'admin:' tokens.
   if to_regclass('proxima_auth.users') is not null then
-    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+    execute 'select username, proxima_auth.mint_token(id), ''u:'' || id from proxima_auth.users where role = ''owner'''
+      into u, tk, sub;
   else
     u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+    sub := 'admin:' || u;
+    tk := public._sign_session_token(sub, now() + interval '12 hours');
   end if;
   s := 'user:' || u;
-  t_good := public._sign_session_token('admin:' || u, now() + interval '12 hours');
+  t_good := tk;
   execute 'set local role anon';
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
   foreach stmt in array array[
