@@ -52,7 +52,7 @@ function stage(removed, holdAt, { logs = [], logOwners = new Set(), historyAt = 
   const now = Date.now();
   const held = S.holdPurgeDeletes && holdAt != null && S.holdPurgeDeletes(holdAt, {
     files: P.pathOwners(removed, plan.goneLogs, plan.paths, { logOwners }), ws: W.queueDeletes({}, removed, now), historyAt });
-  if (!held) {
+  if (!held && !S.holdPurgeDeletes) {   // the build before a79a43c (round 24 #2: the current one never queues directly)
     S.writeWsDeletes(W.queueDeletes(S.readWsDeletes(), removed, now));
     S.writeFileDeletes(F.queueFileDeletes(S.readFileDeletes(), plan.paths, now));
   }
@@ -195,10 +195,13 @@ await test("#3 (p2): a local-only x in an unanswered clear: nothing is sent; a r
   for (let i = 0; i < 3; i++) assert.deepEqual(dueNow(), { files: [], ws: [] }, "no answer: held (reconcile / interval flushes)");
   const g = S.restoreGuard({ last_restore_at: T + 10 });                // the owner restores the safety backup on the PC
   assert.deepEqual(g.voided.task, ["x"]);
-  assert.deepEqual(dueNow(), { files: [], ws: [] }, "the void cancels them");
-  assert.equal(mem.has("proximaai-held-purges"), false, "nothing left held");
+  assert.deepEqual(dueNow(), { files: [], ws: [] }, "the void sends nothing");
   const back = S.stashGiveBack(S.readClearStash(T));
   assert.deepEqual(back.tasks.map(t => t.id), ["x"], "x comes back");
+  // Review round 24 #1: the void leaves x undecided (still held); the next pass, which read the cloud after the restore,
+  // finds x kept here (the give-back) and cancels its held deletes.
+  S.releaseHeldPurges(Date.now(), { restoreKnownAt: S.knownRestoreAt(), task: { present: [], local: ["x"], complete: true }, history: { present: [], local: [], complete: true } });
+  assert.equal(mem.has("proximaai-held-purges"), false, "nothing left held");
   assert.deepEqual([F.dueFileDeletes(S.readFileDeletes(), Date.now() + 1e9), W.dueDeletes(S.readWsDeletes(), Date.now() + 1e9)], [[], []], "with its files and result");
 });
 await test("#3: confirmed -> released into both queues, due now (the previous layout)", () => {
@@ -233,7 +236,10 @@ await test("#3: a confirm answered before its group's void is final then: its ow
   S.confirmDeleteIntents("task-delete", ["x"], T);
   assert.deepEqual(dueNow(), { files: ["scope/x-out.png"], ws: ["pred-x"] }, "y still pending: the shared file waits");
   S.voidDeleteIntents("task-delete", ["y"], T);
-  assert.deepEqual(dueNow(), { files: ["scope/x-out.png"], ws: ["pred-x"] }, "y voided: its files and the shared one stay");
+  assert.deepEqual(dueNow(), { files: ["scope/x-out.png"], ws: ["pred-x"] }, "y voided: its files and the shared one wait");
+  // Review round 24 #1/#5: y is undecided until a pass after the restore: the cloud holds y (the restore kept it).
+  S.releaseHeldPurges(Date.now(), { restoreKnownAt: S.knownRestoreAt(), task: { present: ["y"], local: [], complete: true }, history: { present: [], local: [], complete: true } });
+  assert.deepEqual(dueNow(), { files: ["scope/x-out.png"], ws: ["pred-x"] }, "y alive: its files and the shared one stay");
   assert.equal(mem.has("proximaai-held-purges"), false);
 });
 await test("#3 (p1): another tab's call in flight for x keeps the held items; its 'deleted' at T1 releases its own group only", () => {
@@ -258,7 +264,11 @@ await test("#3: the restore brought x back (pass releases it): its files and res
   stage([x], T);
   S.voidDeleteIntents("task-delete", ["w"], T);
   S.confirmDeleteIntents("task-delete", ["x"], T);
-  S.resolveSuperseded("task-delete", new Set(["x"]), { restoreKnownAt: S.knownRestoreAt(), complete: true });
+  // Review round 24 #1: the pass that releases the record (the cloud holds x again) decides the held items in the same
+  // step: x is alive, so they are cancelled.
+  const rk = S.knownRestoreAt();
+  S.sharedDeleteState("task", { cloudIds: new Set(["x"]), sinceSeq: S.confirmSeqNow(), restoreKnownAt: rk, evidence: { present: [], complete: true } });
+  S.releaseHeldPurges(Date.now(), { restoreKnownAt: rk, task: { present: ["x"], local: [], complete: true }, history: { present: [], local: [], complete: true } });
   assert.deepEqual(dueNow(), { files: [], ws: [] });
   assert.equal(mem.has("proximaai-held-purges"), false);
 });
@@ -284,8 +294,9 @@ await test("#3 guard: a clear stash's content and held items count as kept for b
 await test("#3 wiring: stagePurge holds for its delete's queue time; every caller passes it after its intents; flushes release first", () => {
   const stageSrc = between("const stagePurge = useCallback(", "const purgeEverywhere = useCallback(");
   assert.match(stageSrc, /const held = holdAt != null && holdPurgeDeletes\(holdAt, \{ files: pathOwners\(removed, plan\.goneLogs, plan\.paths, \{ logOwners \}\),/);
-  assert.match(stageSrc, /if \(!held\) \{[^}]*writeWsDeletes\(queueDeletes\(readWsDeletes\(\), removed, now\)\);\s*writeFileDeletes\(queueFileDeletes\(readFileDeletes\(\), plan\.paths, now\)\);/);
-  assert.equal((stageSrc.match(/writeWsDeletes\(|writeFileDeletes\(/g) || []).length, 2, "only the fallback queues directly");
+  // Review round 24 #2/#4/#7: no direct fallback: a hold that cannot be stored stops the delete (the callers check).
+  assert.match(stageSrc, /if \(!held\) return \{ \.\.\.plan, held: false,/);
+  assert.equal((stageSrc.match(/writeWsDeletes\(|writeFileDeletes\(/g) || []).length, 0, "nothing queues directly");
   const calls = src.split("\n").filter(l => /= stagePurge\(/.test(l));
   assert.equal(calls.length, 3);
   for (const c of calls) assert.match(c, /holdAt: (queuedAt|clearAt|resetAt)/, c);

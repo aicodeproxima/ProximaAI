@@ -467,12 +467,14 @@ export const releasedPredictions = () => liveReleased(readReleased(), Date.now()
 // evict entries from the 200-entry failed-sync queue.
 const WS_DELETES_KEY = "proximaai-ws-deletes";
 export const readWsDeletes = () => { try { return JSON.parse(localStorage.getItem(WS_DELETES_KEY) || "{}") || {}; } catch { return {}; } };
-export const writeWsDeletes = (q) => { try { localStorage.setItem(WS_DELETES_KEY, JSON.stringify(q || {})); } catch {} };
+// Review round 24 #2/#4: says whether the write was stored (false: a full localStorage refused it). Callers that move
+// items out of another key (releaseHeldPurges) remove them there only when it was.
+export const writeWsDeletes = (q) => { try { localStorage.setItem(WS_DELETES_KEY, JSON.stringify(q || {})); return true; } catch { return false; } };
 
 // Files of deleted generations still to delete (fileDelete.js). Left alone by sign-out: those paths still need deleting.
 const FILE_DELETES_KEY = "proximaai-file-deletes";
 export const readFileDeletes = () => { try { return JSON.parse(localStorage.getItem(FILE_DELETES_KEY) || "{}") || {}; } catch { return {}; } };
-export const writeFileDeletes = (q) => { try { localStorage.setItem(FILE_DELETES_KEY, JSON.stringify(q || {})); } catch {} };
+export const writeFileDeletes = (q) => { try { localStorage.setItem(FILE_DELETES_KEY, JSON.stringify(q || {})); return true; } catch { return false; } };
 
 // The Generate form's input paths, published per tab so no tab's file flush deletes a file another tab's form still
 // uses (fileDelete.js liveFormPaths, review #3). One key per tab: its id lives in sessionStorage, which survives Chrome
@@ -655,6 +657,24 @@ export function queueDeleteIntents(kind, ids, at) {
     if (movedFrom.size) noteStashMoves(movedFrom, now);
   } catch {}
   return now;
+}
+// Review round 24 #2: a delete that cannot hold its files and WaveSpeed deletes (stagePurge: localStorage full) stops
+// before any server call, and its intents are taken back. `intentsOf` (read BEFORE queueing) keeps the intents of these
+// ids that the queueing would move from an earlier time; takeBackDeleteIntents removes the ones queued at `at` and puts
+// those back, so an earlier pending delete of the same id is still sent.
+export function intentsOf(kind, ids) {
+  const want = new Set((ids || []).filter(Boolean));
+  return want.size ? getFailedSyncs().filter(e => e.kind === kind && want.has(e.id)).map(e => ({ ...e })) : [];
+}
+export function takeBackDeleteIntents(kind, ids, at, before = []) {
+  const want = new Set((ids || []).filter(Boolean)), ts = Number(at);
+  if (!want.size || !Number.isFinite(ts)) return;
+  try {
+    const list = getFailedSyncs().filter(e => !(e.kind === kind && want.has(e.id) && (e.ts || 0) === ts));
+    const have = new Set(list.filter(e => e.kind === kind).map(e => e.id));
+    for (const e of before || []) if (e?.kind === kind && want.has(e.id) && !have.has(e.id)) { list.push(e); have.add(e.id); }
+    localStorage.setItem(FAILED_KEY, JSON.stringify(list));
+  } catch {}
 }
 // The ids with a queued delete intent of this kind: deletes still in flight (review round 10). A confirmed one has left
 // the queue, and its id may be one a later restore brought back.
@@ -976,13 +996,19 @@ export function inFlightIds(kind) {
 // while the delete was unanswered, and a restore that voided it later gave back generations whose outputs were gone. Now
 // they are queued HELD for that delete's queue time, in their own key (the two queues keep their exact layout; a previous
 // build never sees a held item), still before any network call. Each held item names its owners: the generations (task
-// ids) or History entries ("history:<id>") it belongs to. It goes to its queue once every owner's delete is confirmed for
-// good (a FINAL confirm queued at or after the hold), is cancelled as soon as one owner's delete ended without one (voided
-// by the server or a restore, or confirmed only before this delete: the given-back generation keeps its files and its
-// WaveSpeed result), and waits while an owner is pending (any queue time), in a call in flight, or superseded (the next
-// pass decides). No answer: it stays held, and the durable intent's replay decides. Layout: queue time -> { files: {
-// path: [owners] }, ws: { predictionId: its wsDelete.js queue entry (tid = generation id) }, h: the History intents'
-// queue time when it differs }.
+// ids) or History entries ("history:<id>") it belongs to. Layout: queue time -> { files: { path: [owners] }, ws: {
+// predictionId: its wsDelete.js queue entry (tid = generation id) }, h: the History intents' queue time when it differs }.
+// Review round 24 #1/#3/#5: an owner whose delete ended WITHOUT a final confirm at or after the hold (voided by the server,
+// dropped by restoreGuard, a flight that lapsed, a record a pass released) is UNDECIDED, not alive: the restore that
+// voided it may not have brought it back. Each owner is
+// - "gone": its delete is a FINAL confirm queued at or after the hold time, or, at a reconcile pass whose cloud reads
+//   began after a restore newer than the hold time (releaseHeldPurges' `evidence`), the cloud lacks it (no task row, no
+//   item of a History entry; History owners: no entry) and nothing of this browser keeps it;
+// - "alive": at such a pass, the cloud holds it or this browser keeps it (its state, a clear stash, a queued upload);
+// - "wait": otherwise (pending at any time, in a call of any tab that has not lapsed its 30 minutes, superseded, or no
+//   such pass yet).
+// An item goes to its queue once every owner is gone, is cancelled once any owner is alive (a path a kept generation uses
+// is never deleted), and waits otherwise. No answer: it stays held, and the durable intent's replay decides.
 const HELD_PURGE_KEY = "proximaai-held-purges";
 const HISTORY_OWNER = "history:";
 const readHeldPurges = () => {
@@ -992,89 +1018,190 @@ const writeHeldPurges = (m) => {
   if (Object.keys(m).length) localStorage.setItem(HELD_PURGE_KEY, JSON.stringify(m)); else localStorage.removeItem(HELD_PURGE_KEY);
 };
 // Holds `files` (path -> owner ids) and `ws` (prediction id -> wsDelete.js queue entry) for the delete queued at `at`;
-// `historyAt`: the queue time of its History intents (bulk delete: their own). Says whether it was stored (false: the
-// caller queues them directly, as before; a full localStorage must not lose a delete's files).
+// `historyAt`: the queue time of its History intents (bulk delete: their own). Says whether it was stored. Review round 24
+// #2/#4/#7: false means the caller's delete must stop before any server call (App.jsx stagePurge: no direct queueing,
+// which deleted a pending delete's files and results before its outcome). Nothing to hold: true, nothing written.
 export function holdPurgeDeletes(at, { files = {}, ws = {}, historyAt = null } = {}) {
   const ts = Number(at);
   if (!Number.isFinite(ts)) return false;
+  const addFiles = Object.entries(files || {}).filter(([p]) => p), addWs = Object.entries(ws || {}).filter(([pid, e]) => pid && plainObject(e));
+  if (!addFiles.length && !addWs.length) return true;
   try {
     const m = readHeldPurges();
     const g = plainObject(m[ts]) ? m[ts] : {};
     const gf = plainObject(g.files) ? { ...g.files } : {}, gw = plainObject(g.ws) ? { ...g.ws } : {};
-    for (const [p, owners] of Object.entries(files || {})) {
-      if (!p) continue;
+    for (const [p, owners] of addFiles) {
       gf[p] = [...new Set([...(Array.isArray(gf[p]) ? gf[p] : []), ...(Array.isArray(owners) ? owners : []).filter(Boolean).map(String)])];
     }
-    for (const [pid, e] of Object.entries(ws || {})) if (pid && plainObject(e) && !gw[pid]) gw[pid] = e;
-    const h = Number(historyAt);
+    for (const [pid, e] of addWs) if (!gw[pid]) gw[pid] = e;
+    const h = historyAt == null ? NaN : Number(historyAt);
     m[ts] = { files: gf, ws: gw, ...(Number.isFinite(h) && h !== ts ? { h } : Number.isFinite(Number(g.h)) ? { h: Number(g.h) } : {}) };
     localStorage.setItem(HELD_PURGE_KEY, JSON.stringify(m));
     return true;
   } catch { return false; }
 }
-// One held item's fate: "go" (every owner's delete is final), "cancel" (one owner's delete ended without one) or "wait".
-function heldPurgeRule() {
+// Review round 24 #6: the queue time a WaveSpeed delete of generation `id` that arrives late (a submit answered after its
+// task was deleted, a deleted claimant's prediction found by the lookup) is held for: its pending task-delete intent (the
+// latest), a delete call of any tab still within its 30 minutes, or a superseded confirm (the pass decides). null: its
+// delete is FINAL here (queued directly, as before). undefined: nothing here says it is being deleted.
+export function deleteHoldAt(id) {
+  if (!id) return undefined;
+  const key = String(id);
+  let at = null;
+  for (const e of getFailedSyncs()) if (e.kind === "task-delete" && e.id === key && (at == null || (e.ts || 0) > at)) at = e.ts || 0;
+  if (at != null) return at;
+  const now = Date.now();
+  for (const f of Object.values(readFlights())) {
+    if (plainObject(f) && Number(f.until) > now && plainObject(f.ids) && Array.isArray(f.ids["task-delete"]) && f.ids["task-delete"].includes(key)
+      && Number.isFinite(Number(f.at)) && (at == null || Number(f.at) > at)) at = Number(f.at);
+  }
+  if (at != null) return at;
+  const { final, superseded } = confirmStates("task-delete");
+  if (superseded.has(key)) return confirmQueuedAt("task-delete").get(key) ?? undefined;
+  return final.has(key) ? null : undefined;
+}
+// Review round 24 #6: a late submit's prediction id, kept on the copies of its task that clear stashes hold (and their
+// stashed uploads), so a voided clear gives the generation back WITH its result. Says whether any copy took it.
+export function recordStashPrediction(taskId, predictionId) {
+  if (!taskId || !predictionId) return false;
+  let any = false;
+  for (const s of readClearStashes()) {
+    let changed = false;
+    const fix = (x) => (x && typeof x === "object" && x.id === taskId && !x.taskId ? ((changed = true), { ...x, taskId: predictionId }) : x);
+    const tasks = s.tasks.map(fix);
+    const uploads = s.uploads.map(e => (e?.kind === "task" && e.id === taskId ? { ...e, data: fix(e.data) } : e));
+    if (changed && writeClearStash(s.at, { ...s, tasks, uploads })) any = true;
+  }
+  return any;
+}
+// What this browser keeps outside a tab's state: the content of every clear stash (a void gives it back) and every
+// queued upload. Task ids (tasks, History items, archive records) and History entry ids.
+function storedKeptIds() {
+  const task = new Set(), history = new Set();
+  const addLog = (l) => { if (!l || typeof l !== "object") return; if (l.id) history.add(String(l.id)); for (const i of Array.isArray(l.tasks) ? l.tasks : []) if (i?.id) task.add(String(i.id)); };
+  for (const s of readClearStashes()) {
+    for (const t of s.tasks) if (t?.id) task.add(String(t.id));
+    for (const l of s.logs) addLog(l);
+    for (const id of Object.keys(s.archives || {})) task.add(id);
+    for (const e of s.uploads) { if (e?.kind === "task" && e.id) task.add(String(e.id)); else if (e?.kind === "history") { if (e.id) history.add(String(e.id)); addLog(e.data); } }
+  }
+  for (const e of getFailedSyncs()) { if (e.kind === "task" && e.id) task.add(String(e.id)); else if (e.kind === "history") { if (e.id) history.add(String(e.id)); addLog(e.data); } }
+  return { task, history };
+}
+const toIdSet = (v) => new Set([...(v instanceof Set || Array.isArray(v) ? v : [])].filter(Boolean).map(String));
+// One held item's fate: "go", "cancel" or "wait" (the owner rules above). `evidence` (App.jsx reconcileWithCloud, after
+// its plans): { restoreKnownAt: knownRestoreAt() taken before the pass's cloud reads, task: { present: generation ids the
+// cloud holds (task rows and items of History entries), local: ids this tab keeps, complete: every source read },
+// history: { present: History entry ids, local, complete } }. It decides undecided owners only when its restore is the
+// latest this browser knows (a restore learned during the pass: the reads may predate it) and newer than the hold time.
+function heldPurgeRule(now, evidence) {
+  const flights = Object.values(readFlights()).filter(f => plainObject(f) && Number(f.until) > now && plainObject(f.ids));
   const kinds = {};
   for (const kind of ["task-delete", "history-delete"]) {
     const { final, superseded } = confirmStates(kind);
-    kinds[kind] = { final, superseded, q: confirmQueuedAt(kind), pending: pendingDeleteIds(kind), flying: inFlightIds(kind) };
+    // In flight for the hold: any tab's call within its 30 minutes (not only the call bound inFlightIds uses): a frozen
+    // tab may still hand its answer, and a give-back, to the generation (review round 24 #3). Waiting only delays a delete.
+    const flying = new Set();
+    for (const f of flights) for (const id of Array.isArray(f.ids[kind]) ? f.ids[kind] : []) if (id) flying.add(String(id));
+    kinds[kind] = { final, superseded, q: confirmQueuedAt(kind), pending: pendingDeleteIds(kind), flying };
   }
-  const voided = voidedTimes();
+  const rk = Number(evidence?.restoreKnownAt);
+  const usable = rk > 0 && rk >= knownRestoreAt();
+  let stored = null;
+  const seen = (kind, id) => {
+    const e = evidence?.[kind === "task-delete" ? "task" : "history"];
+    if (!e || e.complete !== true) return "wait";
+    if (!e.presentSet) { e.presentSet = toIdSet(e.present); e.localSet = toIdSet(e.local); }
+    stored = stored || storedKeptIds();
+    const keptHere = (kind === "task-delete" ? stored.task : stored.history).has(id);
+    return e.presentSet.has(id) || e.localSet.has(id) || keptHere ? "alive" : "gone";
+  };
   const owner = (o, at, hAt) => {
-    const isLog = o.startsWith(HISTORY_OWNER), k = kinds[isLog ? "history-delete" : "task-delete"];
+    const isLog = o.startsWith(HISTORY_OWNER), kind = isLog ? "history-delete" : "task-delete", k = kinds[kind];
     const id = isLog ? o.slice(HISTORY_OWNER.length) : o, since = isLog ? hAt : at;
     if (k.pending.has(id) || k.flying.has(id)) return "wait";
     const q = k.q.get(id);
-    if (q != null && q >= since) return k.final.has(id) ? "go" : "wait";   // superseded: the next pass decides
-    return "cancel";
+    if (q != null && q >= since) {
+      if (k.final.has(id)) return "gone";
+      if (k.superseded.has(id)) return "wait";   // the next pass decides the record first
+    }
+    // Undecided: only a pass that read the cloud after a restore newer than the hold time decides it.
+    return usable && rk > since ? seen(kind, id) : "wait";
   };
   // An item without owners follows its delete as a whole (none is written so: App.jsx names every owner).
-  const group = (at) => (intentsPendingAt(at) || [...Object.values(readFlights())].some(f => liveFlight(f, Date.now()) && Number(f.at) === at)
+  const voided = voidedTimes();
+  const group = (at) => (intentsPendingAt(at) || flights.some(f => Number(f.at) === at)
     ? "wait" : voided.has(at) ? "cancel" : "go");
   return (owners, at, hAt) => {
     const list = Array.isArray(owners) ? owners.filter(o => typeof o === "string" && o) : [];
     if (!list.length) return group(at);
     const d = list.map(o => owner(o, at, hAt));
-    return d.includes("cancel") ? "cancel" : d.includes("wait") ? "wait" : "go";
+    return d.includes("alive") ? "cancel" : d.every(x => x === "gone") ? "go" : "wait";
   };
 }
-// Decides every held item (App.jsx runs it before each flush; confirmDeleteIntents and voidDeleteIntents after their
-// answer): "go" items are queued (files: fileDelete.js queueFileDeletes; WaveSpeed: the stored entry, due now), then
-// leave the hold; "cancel" items leave it unqueued; "wait" items stay. Returns { files, ws, cancelled }.
-export function releaseHeldPurges(now = Date.now()) {
-  const out = { files: [], ws: [], cancelled: 0 };
+// Decides every held item (App.jsx runs it before each flush, and with `evidence` in each reconcile pass;
+// confirmDeleteIntents and voidDeleteIntents after their answer): "go" items are queued (files: fileDelete.js
+// queueFileDeletes; WaveSpeed: the stored entry, due now), then leave the hold; "cancel" items leave it unqueued; "wait"
+// items stay. Review round 24 #2/#4: an item leaves the hold only once its queue holds it (the write stored and read back):
+// a full localStorage leaves it held for the next release, still counted by heldPurgeLeft. Returns { files, ws (queued),
+// cancelled, kept (decided "go" but left held: the queue write failed) }.
+export function releaseHeldPurges(now = Date.now(), evidence = null) {
+  const out = { files: [], ws: [], cancelled: 0, kept: 0 };
   try {
     const m = readHeldPurges(), keys = Object.keys(m);
     if (!keys.length) return out;
-    const rule = heldPurgeRule(), wsGo = {};
+    const rule = heldPurgeRule(now, evidence);
+    const decided = [], goFiles = new Set(), wsGo = {};
     let changed = false;
     for (const k of keys) {
       const at = Number(k), g = m[k];
       if (!Number.isFinite(at) || !plainObject(g)) { delete m[k]; changed = true; continue; }
       const hAt = Number.isFinite(Number(g.h)) ? Number(g.h) : at;
-      const files = plainObject(g.files) ? { ...g.files } : {}, ws = plainObject(g.ws) ? { ...g.ws } : {};
+      const files = plainObject(g.files) ? g.files : {}, ws = plainObject(g.ws) ? g.ws : {};
       for (const [p, owners] of Object.entries(files)) {
         const d = rule(owners, at, hAt);
         if (d === "wait") continue;
-        if (d === "go") out.files.push(p); else out.cancelled++;
-        delete files[p]; changed = true;
+        decided.push([k, "files", p, d]);
+        if (d === "go") goFiles.add(p);
       }
       for (const [pid, e] of Object.entries(ws)) {
         const d = plainObject(e) ? rule(e.tid ? [String(e.tid)] : [], at, hAt) : "cancel";
         if (d === "wait") continue;
-        if (d === "go") { wsGo[pid] = e; out.ws.push(pid); } else out.cancelled++;
-        delete ws[pid]; changed = true;
+        decided.push([k, "ws", pid, d]);
+        if (d === "go" && !wsGo[pid]) wsGo[pid] = e;
       }
-      if (Object.keys(files).length || Object.keys(ws).length) m[k] = { ...g, files, ws };
-      else delete m[k];
     }
-    // The queues first, then the hold: a page killed in between leaves the item in both (queued twice is harmless).
-    if (out.files.length) writeFileDeletes(queueFileDeletes(readFileDeletes(), out.files, now));
-    if (out.ws.length) {
+    // The queues first, then the hold: a page killed in between leaves the item in both (queued twice is harmless). Each
+    // write is checked by reading the queue back: only what it holds leaves the hold.
+    const filesIn = new Set(), wsIn = new Set();
+    if (goFiles.size) {
+      writeFileDeletes(queueFileDeletes(readFileDeletes(), [...goFiles], now));
+      const q = readFileDeletes();
+      for (const p of goFiles) if (q[p]) filesIn.add(p);
+    }
+    if (Object.keys(wsGo).length) {
       const q = readWsDeletes();
       for (const [pid, e] of Object.entries(wsGo)) if (!q[pid]) q[pid] = { ...e, at: now, attempts: 0, next: now };
       writeWsDeletes(q);
+      const back = readWsDeletes();
+      for (const pid of Object.keys(wsGo)) if (back[pid]) wsIn.add(pid);
     }
+    for (const [k, part, key, d] of decided) {
+      const ok = d === "cancel" || (part === "files" ? filesIn.has(key) : wsIn.has(key));
+      if (!ok) { out.kept++; continue; }
+      if (d === "cancel") out.cancelled++;
+      const g = m[k];
+      const map = plainObject(g[part]) ? { ...g[part] } : {};
+      delete map[key];
+      m[k] = { ...g, [part]: map };
+      changed = true;
+    }
+    for (const k of Object.keys(m)) {
+      const g = m[k];
+      if (plainObject(g) && !Object.keys(plainObject(g.files) ? g.files : {}).length && !Object.keys(plainObject(g.ws) ? g.ws : {}).length) { delete m[k]; changed = true; }
+    }
+    out.files = [...filesIn];
+    out.ws = [...wsIn];
     if (changed) writeHeldPurges(m);
   } catch {}
   return out;

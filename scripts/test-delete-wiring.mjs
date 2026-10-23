@@ -51,7 +51,8 @@ test("the reconcile pass never uploads a History item this device is deleting", 
   assert.match(between("const logUploads =", "setFailedSyncCount"), /historyUploadPlan\(/);
 });
 test("every voided delete puts its claimant records back (bulk delete, Clear Outputs, Reset)", () => {
-  assert.equal(src.match(/putBackClaimants\(/g)?.length, 3);
+  // Review round 24 #2: plus Clear Outputs' abort when its purge cannot be held (it recorded them before stagePurge).
+  assert.equal(src.match(/putBackClaimants\(/g)?.length, 4);
   assert.equal(src.match(/claimantRecords\(/g)?.length, 3);
   assert.doesNotMatch(src, /resolveClaimants\(voided\)/);
 });
@@ -86,7 +87,9 @@ test("Clear Outputs and Reset take their snapshot from the SERVER's time BEFORE 
   assert.match(src, /SNAPSHOT_SLACK_MS/);
   assert.match(outputs(), /stagePurge\([^;]*at: clearAt/);
   assert.match(outputs(), /queueDeleteIntents\("task-delete", clearedTaskIds, clearAt\)/);
-  assert.match(stage(), /queueDeleteIntents\("history-delete", send\.remove, at\)/);
+  // Review round 24 #2: the same time, taken before the hold so the hold names it.
+  assert.match(stage(), /const historyQueuedAt = doHistory \? \(at \?\? serverNow\(\)\) : null;/);
+  assert.match(stage(), /queueDeleteIntents\("history-delete", send\.remove, historyQueuedAt\)/);
 });
 // Review round 11 (R5/R7): the late filter dropped THIS device's own entries from the plan, so they stayed here and
 // their History-only items survived. Only cloud entries can be late; the cloud list alone is filtered.
@@ -232,7 +235,8 @@ test("Clear Logs plans over every stored entry and deletes only the planned ids 
 test("keepLateSubmitId deletes the prediction only when the task is being deleted (deletingIds or a queued intent)", () => {
   const h = between("function keepLateSubmitId(", "const submittingIds = useRef(");
   assert.match(h, /const deleting = deletingIds\.current\.has\(id\) \|\| pendingDeleteIds\("task-delete"\)\.has\(id\) \|\| uploadBlockedIds\("task"\)\.has\(id\);/);
-  assert.match(h, /if \(!cur\) \{ if \(deleting\) deleteOnWaveSpeed\(/);
+  // Review round 24 #6: held for the delete that removed the task (deleteOnWaveSpeed with its generation id).
+  assert.match(h, /if \(!cur\) \{\s*if \(deleting\) \{[^}]*deleteOnWaveSpeed\(\[\{ id, taskId: predictionId, status: "processing" \}\], \{ holdAt: serverNow\(\) \}\);/);
   assert.equal(h.match(/deleteOnWaveSpeed\(/g)?.length, 1);
 });
 // An archive that finished after its task was deleted saved and synced it again (the generation came back).
