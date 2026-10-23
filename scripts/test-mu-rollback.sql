@@ -24,8 +24,20 @@
 --        Then an owner-row change (email, one failed sign-in) for the copy-back to carry.
 -- step 5 (after the third rollback, which must run without the guard and the snapshot): bodies and ACLs equal again,
 --        no P1 object remains, the untouched rows are untouched, and the owner-row change reached app_secrets.
+-- Migration record (review m3crit #1/#3): M1's rollback deletes M1's own supabase_migrations.schema_migrations row
+-- (version 20261023100000, name mu_p1_accounts) in its transaction, so a later re-apply through apply-migration.mjs
+-- really applies. Steps 2 and 4 insert that record as apply-migration.mjs writes it (sql-tx records nothing); steps 1,
+-- 3 and 5 require it gone and every other record still there (counted at step 0).
+-- Step 0 also checks every captured body against the pre-M1 md5s recorded when M1 was authored (m1-gen pre.json).
 -- No hash, key, code or token is printed.
+-- Before M1 was applied:
 --   node scripts/tools/sql-tx.mjs $T $M1 $RB $T $M1 $T $RB $T $M1 $T $RB --test $T
+-- With M1 + M2 live (from 2026-10-23; M3 not live): M2's rollback, then M1's, restore the pre-M1 state before step 0
+-- (and the first M1 rollback deletes the live M1 record, which step 1 then finds gone). The verifier the rollback
+-- restores carries its one guard line, so step 0 strips that line once from its capture before the pre-M1 md5 check;
+-- steps 1, 3 and 5 still compare against capture + exactly one guard line.
+--   RB2=supabase/rollback/20261023200000_mu_p1_scope_topic.rollback.sql
+--   node scripts/tools/sql-tx.mjs $RB2 $RB $T $M1 $RB $T $M1 $T $RB $T $M1 $T $RB --test $T
 do $t$
 declare
   fns constant text[] := array['public._verify_session_token(text)', 'public.verify_admin(text,text)',
@@ -48,11 +60,40 @@ declare
   guard constant text := '  if v_subject like ''u:%'' then raise exception ''session token revoked''; end if;   -- P1 rollback: u: holders sign in again' || chr(10);
   po constant text := 'mu-rb-owner-pass-01'; po2 constant text := 'mu-rb-owner-pass-02';
   ko constant text := 'mu-rb-owner-code-000001'; nm constant text := '__mu_rb_owner';
-  v_step int; out text := ''; v_bad text; n int; r json; t0 text; t1 text; t_before text; t2 text; v_id uuid; ok boolean;
+  pre_md5 constant jsonb := '{
+    "public._verify_session_token(text)": "e5279a955d40ad5e83f616b9a715751d",
+    "public.verify_admin(text,text)": "0ea5e49fdd8440021b862e2da76fbd90",
+    "public.unlock_admin_with_backup_code(text,text)": "a6b33ca4e27c159ef0aec43d12809fc5",
+    "public.change_my_password(text,text,text)": "7c6bd6b17d859c13357c9950c8bcc6bf",
+    "public.rename_my_account(text,text,text)": "df83b48dc188d008b12e5a2e5cda81c3",
+    "public.set_admin_backup_code(text,text,text)": "5c42c965870e83e61751b1ecea849af2",
+    "public.set_admin_credentials_rehash(text,text)": "501e7685d07b71bba360926f5864b9c4",
+    "public.get_my_account(text)": "dc00344c10838600ebee66106faf712a",
+    "public.set_my_account(text,text,boolean,bigint)": "eb62f0446fb21f97b88bbfe250bdcfb3",
+    "public.get_my_wavespeed_key(text)": "afcb2ee65397fa0159d7717208763771",
+    "public.set_my_wavespeed_key(text,text)": "c0f8c0e5ca8a82095c038a3bc101cb63",
+    "public.get_auto_backups(text)": "df3ed54f683bcb444e1efc1ae1a70aa7",
+    "public.set_auto_backups(text,boolean)": "6dcd3e1b5b770de671fc58e680154a86",
+    "public._rows_keep_owner()": "bcac6e054cc7c5f4bede6c55ec7c4b6f",
+    "public.clear_queued_rows(text,text,bigint,text[])": "1048b01fb8c46633043506b5c742faba",
+    "public.delete_queued_rows(text,text,text[],bigint)": "6055ffdde8572b6d7a51f951bda1ee0d",
+    "public.generations_live(text,text[])": "867288f2fa843c3b609a3c116f491790",
+    "public.paths_in_use(text,text[])": "113a9a0cfde369f2133f009bedb65719",
+    "public.reset_queued_rows(text,bigint,text[],text[],bigint)": "28477808ca92d36e8ee1b21929c47152",
+    "public.upsert_queued_history(text,jsonb,bigint)": "d71124ec3a60dda4b6267cbd8af9d989",
+    "public.server_time_ms(text)": "0833546769db65af467e5807045a9289",
+    "public.list_my_backups_phase2(text,integer)": "e78a4d245728f0fac1eb91339a0d4a2a",
+    "public.delete_my_backup_phase2(text,uuid)": "5b663629c5a574c58351273d2ba445fa",
+    "public.purge_my_backups_of(text,text[],text[])": "5cd2680f21b2c92c2d9196192b19426e",
+    "public.restore_my_backup_phase2(text,uuid)": "303cd3180bc59e113a33f79c6b02d4d2",
+    "public.snapshot_my_data_phase2(text,text,text)": "cb00c6db451a0499fb2d4f82343ec474"
+  }';
+  m1_ver constant text := '20261023100000'; m1_name constant text := 'mu_p1_accounts';
+  v_step int; out text := ''; v_bad text; n int; n2 int; r json; t0 text; t1 text; t_before text; t2 text; v_id uuid; ok boolean;
 begin
   if to_regclass('pg_temp.mu_rb_state') is null then
     -- step 0: the capture, before M1.
-    create temp table mu_rb_state (step int, acc text, tok_before text, tok_after text, users_oid oid) on commit drop;
+    create temp table mu_rb_state (step int, acc text, tok_before text, tok_after text, users_oid oid, rec_others int) on commit drop;
     create temp table mu_rb_fn (sig text primary key, def text, acl text) on commit drop;
     create temp table mu_rb_sec (key text primary key, value jsonb, updated_at timestamptz) on commit drop;
     insert into mu_rb_fn
@@ -60,8 +101,20 @@ begin
              (select string_agg(a::text, ',' order by a::text) from unnest(p.proacl) a)
         from unnest(fns) x join pg_proc p on p.oid = to_regprocedure(x);
     get diagnostics n = row_count;
+    -- Live form (M1 rolled back just before this step): the restored verifier carries the rollback's guard line once.
+    update mu_rb_fn set def = replace(def, anchor || guard, anchor)
+     where sig = 'public._verify_session_token(text)' and position(anchor || guard in def) > 0;
+    get diagnostics n2 = row_count;
+    -- Every captured body is the pre-M1 text recorded when M1 was authored.
+    select string_agg(f.sig, ',') into v_bad from mu_rb_fn f where md5(f.def) is distinct from pre_md5->>f.sig;
     insert into mu_rb_sec select s.key, s.value, s.updated_at from public.app_secrets s;
-    insert into mu_rb_state values (1, case when n = cardinality(fns) then 'ok capture; ' else format('FAIL capture %s of %s; ', n, cardinality(fns)) end, null, null, null);
+    insert into mu_rb_state values (1, case when n = cardinality(fns) then 'ok capture; ' else format('FAIL capture %s of %s; ', n, cardinality(fns)) end
+      || case when v_bad is null and (select count(*) from mu_rb_fn) = (select count(*) from jsonb_object_keys(pre_md5))
+              then format('ok capture-is-pre-m1 (guard line stripped: %s); ', n2 = 1)
+              else format('FAIL capture-is-pre-m1 %s; ', left(v_bad, 120)) end
+      || case when not exists (select 1 from supabase_migrations.schema_migrations where version = m1_ver)
+              then 'ok own-record-absent-0; ' else 'FAIL own-record-absent-0; ' end,
+      null, null, null, (select count(*) from supabase_migrations.schema_migrations where version <> m1_ver));
     return;
   end if;
 
@@ -91,6 +144,18 @@ begin
     select count(*) into n from mu_rb_sec c join public.app_secrets s using (key)
      where c.key in ('auto_backups', 'session_signing_key') and s.value = c.value and s.updated_at = c.updated_at;
     out := out || case when n = 2 then format('ok untouched-rows-%s; ', v_step) else format('FAIL untouched-rows-%s %s; ', v_step, n) end;
+    -- The rollback deleted M1's own migration record and no other.
+    out := out || case when not exists (select 1 from supabase_migrations.schema_migrations where version = m1_ver)
+                         and (select count(*) from supabase_migrations.schema_migrations where version <> m1_ver)
+                             = (select rec_others from mu_rb_state)
+      then format('ok own-record-deleted-%s; ', v_step) else format('FAIL own-record-deleted-%s; ', v_step) end;
+  end if;
+
+  if v_step in (2, 4) then
+    -- M1 is live again: its record as apply-migration.mjs writes it (buildApplyScript: version, name, statements).
+    insert into supabase_migrations.schema_migrations (version, name, statements)
+      values (m1_ver, m1_name, array['-- test-mu-rollback stand-in for the M1 text'])
+      on conflict (version) do nothing;   -- a record the previous rollback left is already reported as FAIL
   end if;
 
   if v_step = 1 then

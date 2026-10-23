@@ -494,10 +494,59 @@ round 16 #1).
 
    Then it rewrites issue_session to mint `u:` for every role. Catalog gate after: nothing matches
    `(?i)'admin:'\s*\|\|`.
+
+   **As built (2026-10-23, not applied):** `supabase/migrations/20261023300000_mu_p1_mint_u_tokens.sql`, rollback
+   `supabase/rollback/20261023300000_mu_p1_mint_u_tokens.rollback.sql`, proof `scripts/test-mu-m3-rollback.sql`.
+   - One transaction, no transaction control. The opening DO block first checks M1's objects exist, then takes
+     `lock table proxima_auth.users in exclusive mode` until the commit: every sign-in, unlock, password change and
+     rename locks its account row, so one in flight finishes before M3 and none starts until the commit; every token
+     minted after the commit is `u:` (the clean cut M4's timing counts from). Token reads are not blocked.
+   - (c) compare-and-swap on all 34 functions M1 rewrote or added, against M1's post-apply md5s (issue_session
+     `69fdda20ce11b5dd3d7e588bf44cbac0` included, since M3 replaces it). Live matched all 34 on 2026-10-23.
+   - (a) as specified, with one difference: before the rewrite, `mint_token(owner id)` still gives `admin:`, so the
+     pre-check signs the owner's `u:` token exactly as M3's issue_session will (`_sign_session_token('u:'||id, …)`, issue
+     time `greatest(now, epoch + 1)`), puts it in `request.headers` (the previous value restored after), and requires
+     `session_scope(true)` = the owner's scope and `current_account` = the owner row; `sync_topic`'s body must match
+     `proxima_auth\.users`. The post-check then mints with `mint_token(owner id)` itself (a `u:<owner id>` token) and
+     requires the same.
+   - (b) semantic, no-fall-through, `'admin:` only in the four functions, no table privilege for anon, authenticated,
+     service_role on the four proxima_auth tables, the P1 helpers postgres-only and never through PUBLIC. (The pre-M1
+     ACL list, the frozen-guard trigger shape and the throttle mode stay in scripts/test-mu-p1-catalog.sql only: M1b
+     and M4 change the last two legitimately.)
+   - Post-check: issue_session's md5 is `b9ba44a18b04d17bdf0034b944a57035` with owner postgres, `{postgres=X/postgres}`,
+     SECURITY DEFINER and `search_path ''`; no body in public or proxima_auth matches `(?i)'admin:'\s*\|\|`; an
+     `admin:<owner>` token issued before the commit still resolves to the owner (dual window intact).
+   - **Rollback refusal rule.** M3's rollback refuses while M4 is live, even in part. M4 counts as live when ANY of:
+     (M4-a) `proxima_auth.current_account`'s body no longer contains the literal `'admin:`; (M4-b)
+     `_verify_session_token` answers `session token revoked` to a fresh `admin:<owner name>` token signed with the
+     current key and issued after the owner's epoch (as the pre-M3 issue_session issued one; before M4 it verifies);
+     (M4-c) `public.set_admin_credentials_rehash(text,text)` is gone. Restoring the owner's `admin:` mint after M4 would
+     hand out tokens the verifier revokes at once. It then compares issue_session with M3's post-apply md5, restores
+     the pre-M3 text verbatim (captured from the live database by a script), and checks md5 `69fdda20…`, the
+     attributes, that `mint_token(owner id)` gives `admin:<owner name>` again and that an owner `u:` token still
+     resolves (nobody is signed out). Each of M4-a/b/c is proved alone under a simulated M4 in a rolled-back run.
+   - **M4 timing:** M4 may be applied no earlier than **12 h 05 min after the later of** M3's apply (the last one, if
+     M3 is rolled back and re-applied) **and** the last `admin:` token a script minted (rotate-signing-key.mjs prints
+     that time when it minted one; from M3 it mints `u:` only).
+   - **Fixture edit M3 needs (open, outside the M3 author's files):** `scripts/test-mu-frozen-guard.sql:279` (and
+     line 133 of the M1 generator's `frozen-test-template.sql`, so `gen.mjs` does not report drift) takes the old
+     client's `admin:<owner>` token from `proxima_auth.mint_token(v_id)`, which gives `u:` from M3; the old bodies then
+     answer `forbidden` and `old-body-after-commit` fails (6 ok, 1 FAIL with M3 prepended). Sign it directly instead:
+     `t := public._sign_session_token('admin:' || v_owner, to_timestamp(greatest(extract(epoch from
+     clock_timestamp())::bigint, (select u.sessions_valid_after from proxima_auth.users u where u.id = v_id) + 1) +
+     43200));`. A scratch copy with that line passed 7 ok / 0 FAIL both on live and with M3 prepended (2026-10-23).
 8. **Rotate scripts, from M3:** both mint their probe with `proxima_auth.mint_token(owner id)` (a `u:` token), in the
    commit that ships M3 (rotate-service-key by message).
 9. **M4 `2026102300xx40_mu_p1_end_dual_accept.sql`**, ≥ 12 h 05 min after the latest of the last M3 apply and the last
    script-minted `admin:` token (§3):
+   - **hard precondition, M3 is live** (review m3crit #1/#3): M4's opening DO block takes `proxima_auth.users` in
+     EXCLUSIVE mode and refuses unless issue_session no longer mints `admin:`: its md5 is M3's post-apply
+     `b9ba44a18b04d17bdf0034b944a57035` (the compare-and-swap M3's rollback requires), or, if it changed since, no
+     body of issue_session matches `(?i)'admin:'\s*\|\|` (the test M2's rollback guard uses, inverted). Otherwise
+     M3 was rolled back (or never applied), and M4 would revoke every token the owner is being issued, locking the
+     only owner out. A rollback deletes its own migration record (M1's and M3's do; M4's rollback must too), so a
+     re-apply of M3 through apply-migration.mjs after its rollback really applies instead of printing "already
+     recorded"; the precondition still catches an operator who skips the re-apply;
    - replaces the `admin:` branches (explicit `revoked` in the verifier, removed from current_account);
    - drops set_admin_credentials_rehash, and the old unlock if it shows no calls;
    - drops the frozen guard (the triggers `app_secrets_m1_frozen` and `app_secrets_m1_frozen_truncate`, then
@@ -604,11 +653,25 @@ after each live step, checked against the per-stage table in §9.1.
 
 ## 7. Rollback and how it is proven exact
 - **Order:** M4 → M3 → M2 (RLS) → M1b → M1, each with its own `supabase/rollback/<v>.rollback.sql`.
+  - **Migration records** (review m3crit #1/#3): each P1 rollback deletes its own `supabase_migrations.schema_migrations`
+    row (`delete … where version = '<v>' and name = '<name>'`) in its own transaction; zero rows is fine (an apply
+    that did not record). `scripts/tools/apply-migration.mjs` skips a version recorded under the same name, so without
+    the delete a re-apply after a rollback would print "already recorded" and change nothing. Done in M1's rollback
+    (generated by m1-gen `gen.mjs`) and M3's; M1b's and M4's must do the same; M2's is the RLS session's. A re-apply
+    while a newer record is left (M2's rollback keeps its own today) is `refused-old` unless `--allow-old` is given.
+    Proved in scripts/test-mu-m3-rollback.sql (`step2 rollback deleted its own record only`) and
+    scripts/test-mu-rollback.sql (`own-record-absent-0`, `own-record-deleted-1/3/5`): the proof inserts the record as
+    apply-migration.mjs writes it, and after the rollback the record is gone and every other record is still there.
   - M4's rollback restores the `admin:` branches and the functions M4 dropped, but **not** the frozen guard or
     `m1_seed_snapshot` (their seed md5s cannot be re-captured, and nothing writes the frozen rows after M4). M1's
     rollback runs whether or not M4 dropped them (review round 18 #2).
   - M3's rollback restores issue_session's owner `admin:` path. `u:` tokens stay accepted, because M1 still verifies
-    them. Nobody is signed out.
+    them. Nobody is signed out. It refuses while M4 is live (any of M4-a/b/c, §4 item 7 "As built") and is
+    compare-and-swap on M3's post-apply md5. Proof (2026-10-23, live M1 + M2): `sql-tx $T $M3 $T $RB3 $T $M3 --test $T`
+    with `T=scripts/test-mu-m3-rollback.sql` → 15 ok, 0 FAIL (body restored byte for byte, owner mints `admin:` again,
+    the `u:` token minted under M3 still valid, M3's record deleted and no other, re-apply leaves issue_session with
+    M3's body); the refusal runs listed in that file's header stop
+    with the expected message (M4-a, M4-b, M4-c each alone, M3 not live, and M2's rollback while M3 is live).
   - **M2's rollback refuses while M3 is live** (to agree with the RLS session): it aborts if
     `proxima_auth.issue_session`'s body has no `'admin:'` (M3 removed it). Rolling M2 back first would restore a
     session_scope that refuses every `u:` token.
@@ -677,6 +740,12 @@ after each live step, checked against the per-stage table in §9.1.
 
   The existing suites then run unchanged against the rolled-back state.
 
+  With M1 + M2 live the M1 proof runs in its live form (header of scripts/test-mu-rollback.sql): M2's and M1's
+  rollbacks first, then the same six steps; step 0 strips the restored verifier's one guard line from its capture and
+  checks every captured body against the pre-M1 md5s recorded when M1 was authored. 2026-10-23: `sql-tx $RB2 $RB $T
+  $M1 $RB $T $M1 $T $RB $T $M1 $T $RB --test $T` → 28 ok, 0 FAIL (before the record delete: 24 ok, 4 FAIL, the four
+  record checks).
+
 ## 8. Concurrency and non-interference notes
 - **Sign-ins of different accounts share no lock.** Each takes its IP row, then its own name's advisory lock, then its
   own account row.
@@ -724,14 +793,15 @@ Every case uses its own documentation IP so no case trips another's throttle. Ca
 | 18 | backup-pause-A-only / pause-generic | 5 wrong codes pause A; during the pause A's right and a wrong code give byte-identical `invalid` and A stays paused; B's right code still unlocks B. |
 | 19 | other-subject-malformed | A signed `user:__mu_a` token and a `zz:x` token → `malformed session token`. |
 | 20 | owner-untouched | The real owner row's counters and epoch equal the seed snapshot. |
+| 20b | mint-u-owner / owner-u-session-scope / owner-u-scope-topic / admin-still-verifies | mint_token(owner id) gives `admin:<owner>` before M3 and `u:<owner id>` from M3. A `u:` token for the owner: session_scope, in its own block, resolves it to the owner's scope; when it refuses (before M2, `not admin-scoped`) the case prints `FAIL owner-u-session-scope` and goes on (that label is printed only on a refusal); get_my_account gives the owner's id, role, scope and the same sync topic. A fresh `admin:<owner>` token keeps verifying until M4 (revoked from M4). |
 | 21 | owner-signin / owner-pwchange / owner-rename / owner-old-unlock | The owner flows in every stage (the owner row gets a known cost-4 hash and code inside the block): verify_admin, change_my_password and rename_my_account each return a token that get_my_account accepts as the owner (`admin:<name>` before M3, `u:<id>` after); each replaced token is revoked; `pg_sleep(0.6)` before each bump makes the call cross a second boundary. The old 2-arg unlock acts on the owner row (unlocks it, sets the new password, bumps only its epoch); after M4 it may be dropped, which the case reports. |
 
 **Expected result per stage** (the go/no-go for each live step; "all" = every other label ok):
 
 | Stage | Result line |
 |---|---|
-| before P1 (today) | every case FAIL (no users table); no syntax error |
-| `M1` alone | all ok except `FAIL scope-header-A` (session_scope still refuses `u:` with 28000 until M2); owner flows mint `admin:` |
+| before P1 (and after M1's rollback) | every case FAIL (no users table); no syntax error |
+| `M1` alone | all ok except `FAIL scope-header-A` and `FAIL owner-u-session-scope` (session_scope still refuses `u:` with 28000 until M2); owner flows mint `admin:`. Checked 2026-10-23 with M2's rollback prepended: 41 ok, 2 FAIL, exactly those two |
 | `M1 + M2` | all ok; owner flows still mint `admin:` |
 | `M1 + M2 + M3` | all ok; owner flows mint `u:` |
 | after `M4` | all ok; dual-accept-admin asserts `admin:` is revoked; owner-old-unlock may report the 2-arg unlock as dropped |
@@ -742,7 +812,10 @@ follows from it: `relation "proxima_auth.users" does not exist`, `relation "prox
 `function proxima_auth.mint_token(uuid) does not exist`, `function proxima_auth.current_account(text) does not exist`,
 `function unlock_with_backup_code(...)` (missing), `invalid session token` (null tokens), `session token missing`, and
 `other-subject-malformed 0` (today's verifier still lets a `user:` subject through). 22 FAIL lines, not 36, because a
-case that fails early reports only its first label. When everything passes, the line holds 36 labels.
+case that fails early reports only its first label. When everything passes, the line holds 36 labels. (The suite has
+grown since, case 20b among others: it holds 42 labels when everything passes (M1 + M2 and M1 + M2 + M3,
+2026-10-23); the before-P1 stage re-checked on 2026-10-23 with M2's and M1's rollbacks prepended printed `0 ok,
+25 FAIL`, exit 1, no syntax error.)
 
 ### 9.2 Gates added with M1/M3
 These live in `scripts/test-mu-p1-catalog.sql` (checked in with M1, review round 2 #10; without M1 it prints a skip

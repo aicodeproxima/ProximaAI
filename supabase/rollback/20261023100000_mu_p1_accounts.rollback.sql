@@ -12,6 +12,11 @@
 -- progress. The rollback also locks proxima_auth.users (EXCLUSIVE: reads go on, every new-code write waits and then
 -- fails against the dropped table, and the client retries against the restored functions), so no rename, password,
 -- code, email or counter write can commit between the copy-back and the drop (review #1).
+-- 4) M1's own migration record is deleted (supabase_migrations.schema_migrations, version 20261023100000, name
+-- mu_p1_accounts), in this same transaction: apply-migration.mjs skips a version recorded under the same name, so
+-- without this a later re-apply of M1 through it would print "already recorded" and change nothing (review m3crit
+-- #1/#3). Zero rows is fine (M1 applied by a tool that does not record). A re-apply while a newer record is left
+-- (M2's rollback keeps its own) is refused-old by apply-migration.mjs unless --allow-old is given.
 
 -- ── 0. Guards ──
 do $guard$
@@ -1007,3 +1012,6 @@ drop table proxima_auth.signin_throttle;
 drop table proxima_auth.auth_config;
 drop table proxima_auth.users;
 drop type proxima_auth.account;
+
+-- ── 4. M1's own migration record, so a re-apply through apply-migration.mjs really applies ──
+delete from supabase_migrations.schema_migrations where version = '20261023100000' and name = 'mu_p1_accounts';

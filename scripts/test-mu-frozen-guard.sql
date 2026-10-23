@@ -276,7 +276,8 @@ begin
   exception when others then
     if sqlstate = '55000' and sqlerrm = msg then n := n + 1; else v_bad := v_bad || 'verify ' || sqlstate || ', '; end if;
   end;
-  t := proxima_auth.mint_token(v_id);                        -- an owner 'admin:<name>' token, as the old client holds
+  t := public._sign_session_token('admin:' || v_owner, to_timestamp(greatest(extract(epoch from clock_timestamp())::bigint,
+         (select u.sessions_valid_after from proxima_auth.users u where u.id = v_id) + 1) + 43200));   -- an owner 'admin:<name>' token, as the old client holds (mint_token gives 'u:' from M3)
   begin
     r := pg_temp.mu_fg_old_change_my_password(t, 'mu-fg-any-current', po2);
     v_bad := v_bad || 'change answered ' || coalesce(r->>'reason', 'ok') || ', ';

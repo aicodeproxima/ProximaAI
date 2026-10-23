@@ -15,6 +15,12 @@
 -- the only function newly executable by anon or authenticated is public.unlock_with_backup_code(text,text,text).
 -- When a later reviewed migration adds a browser-callable function, add it to that list in the same commit. M3's
 -- precondition block reuses these checks.
+-- no-admin-mint (design §3, §9.2; M3 = supabase/migrations/20261023300000_mu_p1_mint_u_tokens.sql): once M3 is live,
+-- no body in public or proxima_auth matches (?i)'admin:'\s*\|\| ; before M3 the only match is issue_session (the
+-- owner's 'admin:'||username branch). M3 is detected by issue_session's body: its reviewed post-apply md5, or no
+-- 'admin:' || in it. Both states pass:
+--   live without M3:  node scripts/tools/sql-tx.mjs --test scripts/test-mu-p1-catalog.sql               (no-admin-mint pre-M3)
+--   with M3:          node scripts/tools/sql-tx.mjs <M3> --test scripts/test-mu-p1-catalog.sql          (no-admin-mint M3 live)
 do $g$
 declare
   pre_m1 constant text[] := array[
@@ -31,7 +37,8 @@ declare
     'public.set_my_account(text,text,boolean,bigint)', 'public.set_my_wavespeed_key(text,text)',
     'public.snapshot_my_data_phase2(text,text,text)', 'public.unlock_admin_with_backup_code(text,text)',
     'public.upsert_queued_history(text,jsonb,bigint)', 'public.verify_admin(text,text)'];
-  out text := ''; v text; n int; n2 int;
+  m3_post constant text := 'b9ba44a18b04d17bdf0034b944a57035';   -- M3's issue_session (pg_get_functiondef md5)
+  out text := ''; v text; n int; n2 int; v_m3 boolean;
 begin
   if to_regclass('proxima_auth.users') is null then
     raise exception 'RESULT: ok p1-catalog-skipped (no M1: run with M1 prepended); ';
@@ -96,5 +103,15 @@ begin
   out := out || case when n = 2 and n2 = 1 then 'ok frozen-guard-triggers; ' else format('FAIL frozen-guard-triggers triggers=%s fn=%s; ', n, n2) end;
   select (select c.signin_throttle from proxima_auth.auth_config c) into v;
   out := out || case when v in ('observe', 'off') then format('ok throttle-not-on (%s); ', v) else format('FAIL throttle-not-on %s; ', v) end;
+  -- no-admin-mint: from M3 nothing mints 'admin:'; before M3 only issue_session does.
+  select md5(d) = m3_post or d !~* $re$'admin:'\s*\|\|$re$ into v_m3
+    from pg_get_functiondef(to_regprocedure('proxima_auth.issue_session(uuid)')) d;
+  select string_agg(p.oid::regprocedure::text, ',' order by p.oid::regprocedure::text) into v from pg_proc p
+   where p.pronamespace in ('public'::regnamespace, 'proxima_auth'::regnamespace) and p.prosrc ~* $re$'admin:'\s*\|\|$re$;
+  out := out || case
+    when v_m3 is null then 'FAIL no-admin-mint issue_session missing; '
+    when v_m3 and v is null then 'ok no-admin-mint (M3 live); '
+    when not v_m3 and v = 'proxima_auth.issue_session(uuid)' then 'ok no-admin-mint (pre-M3: issue_session only); '
+    else format('FAIL no-admin-mint m3=%s %s; ', v_m3, left(coalesce(v, 'none'), 120)) end;
   raise exception 'RESULT: %', out;
 end $g$;

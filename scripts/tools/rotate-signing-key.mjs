@@ -85,6 +85,10 @@ const dbHas = async (k) => !!(await retry(() => sql("select (value->>'key') = " 
 // app_secrets name mint a revoked token); before M1, or after its rollback, app_secrets. The probe is minted by
 // proxima_auth.mint_token(owner id) when it exists ('admin:<name>' until M3, 'u:<id>' from M3), else by
 // _sign_session_token('admin:'||name), and must pass _verify_session_token before it is used.
+// From M3 (supabase/migrations/20261023300000_mu_p1_mint_u_tokens.sql, design §4 step 8) the probe and every token this
+// script signs locally (tokenWith, same subject as the probe) are 'u:<owner id>' tokens, with no change here. Before
+// M3 they are 'admin:' tokens, and M4 must then wait 12 h 05 min after this run's last mint (design §3): the run
+// prints that time. The subject kind is printed, never the token.
 async function readOwner() {
   const [st] = await retry(() => sql("select to_regclass('proxima_auth.users') is not null as has_users, to_regprocedure('proxima_auth.mint_token(uuid)') is not null as has_mint"));
   const keyCols = "(select value->>'key' from public.app_secrets where key = 'session_signing_key') as k, exists (select 1 from public.app_secrets where key = 'session_signing_key_previous') as has_prev";
@@ -112,7 +116,13 @@ async function main() {
   // The subject the database mints for the owner right now ('admin:<name>' before M3, 'u:<id>' after); the locally
   // signed old-/current-key tokens below use the same subject.
   const subject = (await mintProbe(mintSql)).s;
-  console.log(`Preflight: owner read from ${source}; probe minted by ${minter} and accepted by _verify_session_token.`);
+  const kind = subject.startsWith("u:") ? "u:<owner id>" : "admin:<owner name>";
+  console.log(`Preflight: owner read from ${source}; probe (${kind}) minted by ${minter} and accepted by _verify_session_token.`);
+  if (!subject.startsWith("u:")) {
+    // Every admin: token this run mints lives at most 12 h 2 min (tokenWith; mint_token's 12 h). Printed again at the end.
+    process.on("exit", () => console.log(`Note: this run minted admin: tokens; M4 (end of the dual-accept window) no earlier than ` +
+      `${new Date(Date.now() + (12 * 3600 + 5 * 60 + 120) * 1000).toISOString()} (12 h 05 min after the last, design §3).`));
+  }
   const envs = (await retry(() => vercel("GET", `/v9/projects/${PROJECT}/env`))).envs || [];
   // Every SESSION_SIGNING_KEY row (one per environment set) gets the new key, and exactly one of them must serve
   // production: otherwise stop and list them (review round 2: editing the wrong row would break the proxy later).

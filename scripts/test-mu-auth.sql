@@ -6,7 +6,11 @@
 --   before P1:  node scripts/tools/sql-tx.mjs --test scripts/test-mu-auth.sql            (must FAIL: no users table)
 --   with P1:    node scripts/tools/sql-tx.mjs <M1> [<M2 RLS>] [<M3>] --test scripts/test-mu-auth.sql
 --   after P1:   node scripts/tools/sql-tx.mjs --test scripts/test-mu-auth.sql
--- Expected result per stage: design §9.1 (M1 alone: only scope-header-A fails; M1+M2 onward: all ok).
+-- Expected result per stage: design §9.1 (M1 alone: only scope-header-A and owner-u-session-scope fail, both because
+-- session_scope refuses u: tokens until M2; M1+M2 onward: all ok, owner-u-session-scope not printed). The owner flows
+-- (cases 20b, 21) expect the stage's token: 'admin:<owner name>' before M3, 'u:<owner id>' from M3
+-- (supabase/migrations/20261023300000_mu_p1_mint_u_tokens.sql), detected by issue_session's body. 2026-10-23, live
+-- M1+M2: `sql-tx --test` 42 ok / 0 FAIL (owner flows admin:); `sql-tx <M3> --test` 42 ok / 0 FAIL (owner flows u:).
 -- Fixtures: usernames '__mu_a', '__mu_b', '__mu_c', '__mu_d' (disabled), '__mu_e' (cost-12 hashes, case 7b only); ids
 -- 00000000-0000-4000-8000-0000000000a1/b1/c1/d1/e1; task ids 'mu-*'; documentation IPs 192.0.2.x / 198.51.100.x / 203.0.113.x / 2001:db8::/32, one per case so no
 -- case trips another's throttle. The owner row is touched only inside this rolled-back block (case 14 moves its epoch
@@ -27,7 +31,7 @@ declare
   ko text := 'mu-owner-code-000001';
   ta text; tb text; tc text; ta_old text; t text; t2 text; t3 text; v_owner text; v_owner_id uuid; v_own_snap text;
   r json; r2 json; r3 json; r4 json; v_bk uuid; v_ep bigint; v_ep2 bigint; n int; n2 int; s text; v_md5 text;
-  ok boolean; v_m4 boolean;
+  ok boolean; v_m4 boolean; v_m3 boolean; v_pfx text; v_otok text;
   ip_t constant text := '{"x-forwarded-for":"203.0.113.7","cf-connecting-ip":"203.0.113.7"}';
   ip_u constant text := '{"x-forwarded-for":"198.51.100.9","cf-connecting-ip":"198.51.100.9"}';
   ip_v constant text := '{"x-forwarded-for":"192.0.2.44","cf-connecting-ip":"192.0.2.44"}';
@@ -481,6 +485,54 @@ begin
     out := out || case when s = v_own_snap then 'ok owner-untouched; ' else 'FAIL owner-untouched; ' end;
   exception when others then out := out || format('FAIL owner-untouched %s; ', left(sqlerrm, 60)); end;
 
+  -- 20b. M3 (supabase/migrations/20261023300000_mu_p1_mint_u_tokens.sql): mint_token(owner id) gives 'u:<owner id>'
+  --      from M3 ('admin:<owner name>' before it). A 'u:' token for the owner (minted from M3; signed as M3 signs it
+  --      before) gives the owner's scope through session_scope and the owner's id, role, scope and sync topic through
+  --      get_my_account, the same topic as an 'admin:' token. An 'admin:<owner>' token issued before M3 (signed as the
+  --      pre-M3 issue_session did) keeps verifying as the owner until M4 (revoked from M4).
+  begin
+    -- M3 is live when issue_session has M3's post-apply body or no longer signs 'admin:' || ... (the catalog gate's test).
+    select md5(x) = 'b9ba44a18b04d17bdf0034b944a57035' or x !~* $re$'admin:'\s*\|\|$re$ into v_m3
+      from pg_get_functiondef('proxima_auth.issue_session(uuid)'::regprocedure) x;
+    v_pfx := case when v_m3 then 'u:' || v_owner_id || '.' else 'admin:' || v_owner || '.' end;
+    t := proxima_auth.mint_token(v_owner_id);
+    out := out || case when left(t, length(v_pfx)) = v_pfx then format('ok mint-u-owner (m3=%s); ', v_m3)
+                       else format('FAIL mint-u-owner m3=%s got %s; ', v_m3, split_part(t, ':', 1)) end;
+    v_otok := case when v_m3 then t else _sign_session_token('u:' || v_owner_id,
+                to_timestamp(greatest(extract(epoch from clock_timestamp())::bigint,
+                                      (select sessions_valid_after from proxima_auth.users where id = v_owner_id) + 1) + 43200)) end;
+    t2 := _sign_session_token('admin:' || v_owner,
+            to_timestamp(greatest(extract(epoch from clock_timestamp())::bigint,
+                                  (select sessions_valid_after from proxima_auth.users where id = v_owner_id) + 1) + 43200));
+    -- session_scope on the owner's u: token in its own block: before M2 it refuses every u: token ('not admin-scoped',
+    -- 28000), reported as `FAIL owner-u-session-scope` (expected at the M1-alone stage, design §9.1); the label is
+    -- printed only then, and the checks below still run. From M2 it resolves and owner-u-scope-topic checks the scope.
+    perform set_config('request.headers', json_build_object('x-proxima-session', v_otok)::text, true);
+    begin
+      s := proxima_auth.session_scope(true);
+      ok := true;
+    exception when others then
+      ok := false;
+      out := out || format('FAIL owner-u-session-scope %s; ', left(sqlerrm, 40));
+    end;
+    perform set_config('request.headers', ip_y, true);
+    set local role anon;
+    r := get_my_account(v_otok);
+    reset role;
+    out := out || case when (not ok or s = 'user:' || v_owner) and (r->>'id')::uuid = v_owner_id and r->>'role' = 'owner'
+                         and r->>'scope' = 'user:' || v_owner and r->>'sync_topic' is not null
+                         and r->>'sync_topic' = proxima_auth.sync_topic()
+      then 'ok owner-u-scope-topic; ' else format('FAIL owner-u-scope-topic %s %s; ', left(coalesce(s, 'null'), 30), r->>'role') end;
+    v_m4 := not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'set_admin_credentials_rehash');
+    begin
+      set local role anon;
+      r2 := get_my_account(t2);
+      reset role;
+      ok := not v_m4 and (r2->>'id')::uuid = v_owner_id and r2->>'role' = 'owner' and r2->>'sync_topic' = r->>'sync_topic';
+    exception when others then reset role; ok := v_m4 and sqlerrm ~ 'revoked'; end;
+    out := out || case when ok then format('ok admin-still-verifies (m4=%s); ', v_m4) else format('FAIL admin-still-verifies m4=%s; ', v_m4) end;
+  exception when others then reset role; out := out || format('FAIL mint-u-owner %s; ', left(sqlerrm, 60)); end;
+
   -- 21. The owner's own flows, in every stage (admin:<name> tokens before M3, u:<id> after): sign-in, password change
   --     and rename each return a token get_my_account accepts as the owner, and revoke the one before. pg_sleep(0.6)
   --     before each bump makes the call cross a second boundary (the token must not be born revoked). The old 2-arg
@@ -496,17 +548,18 @@ begin
     reset role;
     t := r->>'token';
     r2 := get_my_account(t);
-    out := out || case when (r->>'ok')::boolean
-                         and (left(t, length('admin:' || v_owner) + 1) = 'admin:' || v_owner || '.' or left(t, 39) = 'u:' || v_owner_id || '.')
+    -- From M3 every owner flow returns 'u:<owner id>'; before M3 'admin:<owner name>' (v_pfx, case 20b).
+    out := out || case when (r->>'ok')::boolean and left(t, length(v_pfx)) = v_pfx
                          and (r2->>'id')::uuid = v_owner_id and r2->>'role' = 'owner'
-      then 'ok owner-signin; ' else format('FAIL owner-signin %s; ', left(coalesce(r->>'reason', 'ok'), 40)) end;
+      then format('ok owner-signin (%s); ', split_part(t, ':', 1))
+      else format('FAIL owner-signin %s %s; ', left(coalesce(r->>'reason', 'ok'), 40), split_part(coalesce(t, ''), ':', 1)) end;
 
     perform pg_sleep(0.6);
     set local role anon;
     r := change_my_password(t, po, po2);
     reset role;
     t2 := r->>'token';
-    ok := (r->>'ok')::boolean and (get_my_account(t2)->>'id')::uuid = v_owner_id;
+    ok := (r->>'ok')::boolean and (get_my_account(t2)->>'id')::uuid = v_owner_id and left(t2, length(v_pfx)) = v_pfx;
     begin perform get_my_account(t); ok := false;
     exception when others then ok := ok and sqlerrm ~ 'revoked'; end;
     out := out || case when ok then 'ok owner-pwchange; ' else format('FAIL owner-pwchange %s; ', left(coalesce(r->>'reason', 'ok'), 40)) end;
@@ -518,7 +571,9 @@ begin
     t3 := r->>'token';
     r2 := get_my_account(t3);
     ok := (r->>'ok')::boolean and (r2->>'id')::uuid = v_owner_id and r2->>'role' = 'owner'
-          and r2->>'username' = '__mu_owner_tmp' and r2->>'scope' = 'user:__mu_owner_tmp';
+          and r2->>'username' = '__mu_owner_tmp' and r2->>'scope' = 'user:__mu_owner_tmp'
+          and left(t3, length(case when v_m3 then v_pfx else 'admin:__mu_owner_tmp.' end))
+              = case when v_m3 then v_pfx else 'admin:__mu_owner_tmp.' end;
     begin perform get_my_account(t2); ok := false;
     exception when others then ok := ok and sqlerrm ~ 'revoked'; end;
     out := out || case when ok then 'ok owner-rename; ' else format('FAIL owner-rename %s; ', left(coalesce(r->>'reason', 'ok'), 40)) end;
