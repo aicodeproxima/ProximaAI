@@ -6,7 +6,8 @@ globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setI
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
   restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload, pendingDeleteIds, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads,
-  buildClearStash, writeClearStash, readClearStashes, dropClearStash, stashedItems, allStoredHistory, allStoredTasks } = await import("../src/lib/storage.js");
+  buildClearStash, writeClearStash, readClearStashes, dropClearStash, stashedItems, allStoredHistory, allStoredTasks,
+  intentsPendingAt, readClearStash, stashGiveBack, forgetStashedIds, recordStashArchive, stashArchivePaths } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -377,6 +378,108 @@ test("stashedItems: stashed items plus the taken uploads' data, each id once, no
   assert.deepEqual(r.tasks.map(t => t.id), ["a", "b"]);
   assert.deepEqual(r.logs.map(l => l.id), ["L1", "L2"]);
   assert.deepEqual(stashedItems(null), { tasks: [], logs: [] });
+});
+
+// Review round 15 S1: a Reset's task group voided at its replay gave the stash back while the same reset's History
+// intents were still pending, so stashedItems held back every History entry, and the stash was dropped: local-only
+// History lost. Now nothing is given back while any intent at the clear's queue time is pending, in either kind.
+test("round 15 S1: pendingDeleteIds(kind, { exceptAt }) and intentsPendingAt", () => {
+  queueDeleteIntents("task-delete", ["a"], 100);
+  queueDeleteIntents("history-delete", ["L"], 100);
+  queueDeleteIntents("history-delete", ["L2"], 200);
+  assert.deepEqual([...pendingDeleteIds("history-delete")].sort(), ["L", "L2"]);
+  assert.deepEqual([...pendingDeleteIds("history-delete", { exceptAt: 100 })], ["L2"]);
+  assert.deepEqual([...pendingDeleteIds("task-delete", { exceptAt: 100 })], []);
+  assert.equal(intentsPendingAt(100), true);
+  assert.equal(intentsPendingAt(300), false);
+  assert.equal(intentsPendingAt(NaN), false);
+  settleDeleteIntents("task-delete", ["a"]);
+  assert.equal(intentsPendingAt(100), true, "the History intent at 100 is still pending");
+  settleDeleteIntents("history-delete", ["L"]);
+  assert.equal(intentsPendingAt(100), false);
+});
+test("round 15 S1: a Reset voided group by group gives its stash back only after the last group, History included", () => {
+  writeClearStash(100, { tasks: [{ id: "a" }], logs: [{ id: "L" }, { id: "L2" }], uploads: [{ kind: "history", id: "Lq", data: { id: "Lq" } }] });
+  queueDeleteIntents("task-delete", ["a"], 100);
+  queueDeleteIntents("history-delete", ["L", "L2", "Lq"], 100);
+  queueDeleteIntents("history-delete", ["L2"], 200);   // a later delete of the same entry (another queue time)
+  const s = () => readClearStashes().find(x => x.at === 100);
+  assert.equal(stashGiveBack(s()), null, "both groups pending");
+  settleDeleteIntents("task-delete", ["a"]);            // the task group is voided first
+  assert.equal(stashGiveBack(s()), null, "the History group of the same reset is still pending: nothing yet");
+  settleDeleteIntents("history-delete", ["L", "Lq"]);   // then the History group (L2 at 200 stays queued: it is ANOTHER delete)
+  const back = stashGiveBack(s());
+  assert.ok(back);
+  assert.deepEqual(back.tasks.map(t => t.id), ["a"]);
+  assert.deepEqual(back.logs.map(l => l.id), ["L", "Lq"], "local-only History comes back; L2 is being deleted by the later delete");
+  assert.deepEqual(back.uploads.map(e => e.id), ["Lq"]);
+  assert.equal(back.favorites, null);
+  assert.deepEqual(back.orphanPaths, []);
+  assert.equal(stashGiveBack(null), null);
+});
+// S2: confirmed ids stayed in the stash, so a later void gave back items whose delete already succeeded.
+test("round 15 S2: a confirmed delete leaves every stash (items and taken uploads), only its kind", () => {
+  writeClearStash(100, { tasks: [{ id: "a" }, { id: "b" }], logs: [{ id: "a" }, { id: "L" }],
+    uploads: [{ kind: "task", id: "a", data: { id: "a" } }, { kind: "history", id: "a", data: { id: "a" } }, { kind: "task", id: "c", data: { id: "c" } }] });
+  writeClearStash(200, { tasks: [{ id: "a" }] });
+  queueDeleteIntents("task-delete", ["a", "b", "c"], 100);
+  assert.deepEqual(confirmDeleteIntents("task-delete", ["a", "c"]), [], "no archive held: no paths");
+  const s1 = readClearStash(100), s2 = readClearStash(200);
+  assert.deepEqual(s1.tasks.map(t => t.id), ["b"]);
+  assert.deepEqual(s1.logs.map(l => l.id), ["a", "L"], "a History entry with the same id is another kind: kept");
+  assert.deepEqual(s1.uploads.map(e => `${e.kind}:${e.id}`), ["history:a"]);
+  assert.deepEqual(s2.tasks, []);
+  confirmDeleteIntents("history-delete", ["L"]);
+  assert.deepEqual(readClearStash(100).logs.map(l => l.id), ["a"]);
+  assert.deepEqual(forgetStashedIds("model-favorites", ["x"]), []);
+  assert.deepEqual(forgetStashedIds("task-delete", []), []);
+  assert.equal(readClearStash(999), null);
+});
+// S3: a Reset's favorites came back only in the inline voided branch; a later void left them empty.
+test("round 15 S3: a stash carries a Reset's favorites state and gives it back", () => {
+  const favorites = { scope: "user:owner", byType: { t2i: ["m1"] }, updatedAt: 5, setting: { byType: { t2i: ["m1"] }, updatedAt: 5 },
+    queued: [{ kind: "model-favorites", id: "user:owner", scope: "user:owner", data: { updatedAt: 5 } }], resetAt: 9 };
+  writeClearStash(100, { tasks: [], favorites });
+  assert.deepEqual(readClearStash(100).favorites, favorites);
+  assert.deepEqual(stashGiveBack(readClearStash(100)).favorites, favorites);
+  writeClearStash(101, { tasks: [] });
+  assert.equal("favorites" in readClearStash(101), false, "absent unless a Reset stored it");
+});
+// S5: an archive that finished while a clear held its task was thrown away, and the task came back stuck as archiving.
+test("round 15 S5: recordStashArchive records against the clear whose intent holds the task", () => {
+  writeClearStash(100, { tasks: [{ id: "a", archiving: true }] });
+  assert.equal(recordStashArchive("a", { paths: ["p1"], task: { id: "a", isArchived: true } }), false, "no pending intent: not held");
+  queueDeleteIntents("task-delete", ["a"], 100);
+  queueDeleteIntents("task-delete", ["z"], 300);   // no stash at 300
+  assert.equal(recordStashArchive("z", { paths: ["pz"], task: null }), false, "no stash: the caller deletes the files");
+  assert.equal(recordStashArchive("a", { paths: ["p1"], task: { id: "a", isArchived: true } }), true);
+  assert.equal(recordStashArchive("a", { paths: ["p2"], task: null }), true);
+  assert.deepEqual(readClearStash(100).archives, { a: { task: { id: "a", isArchived: true }, paths: ["p1", "p2"] } }, "paths merged, archived version kept");
+  assert.deepEqual(stashArchivePaths(readClearStash(100)), ["p1", "p2"]);
+  assert.equal(recordStashArchive("", {}), false);
+});
+test("round 15 S5: confirm returns a held archive's paths; a void gives it back; deleted again elsewhere it moves", () => {
+  queueDeleteIntents("task-delete", ["a", "b"], 100);
+  writeClearStash(100, { tasks: [{ id: "a" }, { id: "b" }] });
+  recordStashArchive("a", { paths: ["pa"], task: { id: "a" } });
+  recordStashArchive("b", { paths: ["pb"], task: { id: "b" } });
+  assert.deepEqual(confirmDeleteIntents("task-delete", ["a"]), ["pa"], "confirmed: its files go to the file-delete queue");
+  assert.deepEqual(Object.keys(readClearStash(100).archives), ["b"]);
+  settleDeleteIntents("task-delete", ["b"]);   // voided
+  const back = stashGiveBack(readClearStash(100));
+  assert.deepEqual(Object.keys(back.archives), ["b"]);
+  assert.deepEqual(back.tasks.map(t => t.id), ["b"]);
+  // b deleted again by a clear at 200 that has a stash: the record moves there; without a stash its paths are orphaned.
+  mem.clear();
+  queueDeleteIntents("task-delete", ["b"], 200);
+  writeClearStash(100, { tasks: [{ id: "b" }], archives: { b: { task: { id: "b" }, paths: ["pb"] } } });
+  writeClearStash(200, { tasks: [] });
+  const moved = stashGiveBack(readClearStash(100));
+  assert.deepEqual(moved.archives, {});
+  assert.deepEqual(moved.orphanPaths, []);
+  assert.deepEqual(readClearStash(200).archives.b.paths, ["pb"]);
+  dropClearStash(200);
+  assert.deepEqual(stashGiveBack(readClearStash(100)).orphanPaths, ["pb"]);
 });
 
 // Review round 14: Clear Logs / Reset plan over every stored entry, not only the 500 loaded. Without IndexedDB (node)

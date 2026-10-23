@@ -647,10 +647,19 @@ export function queueDeleteIntents(kind, ids, at) {
 }
 // The ids with a queued delete intent of this kind: deletes still in flight (review round 10). A confirmed one has left
 // the queue, and its id may be one a later restore brought back.
-export function pendingDeleteIds(kind) {
+// `exceptAt`: leave out the intents queued at that time (one clear's own intents, review round 15 S1).
+export function pendingDeleteIds(kind, { exceptAt } = {}) {
   const out = new Set();
-  for (const e of getFailedSyncs()) if (e.kind === kind && e.id) out.add(e.id);
+  const skip = exceptAt != null && Number.isFinite(Number(exceptAt)) ? Number(exceptAt) : null;
+  for (const e of getFailedSyncs()) if (e.kind === kind && e.id && (skip == null || (e.ts || 0) !== skip)) out.add(e.id);
   return out;
+}
+// Whether any delete intent (task or History) queued at this time is still pending: one clear's intents share its
+// queue time, so while one of them is left, that clear is neither voided nor confirmed as a whole (round 15 S1).
+export function intentsPendingAt(at) {
+  const ts = Number(at);
+  if (!Number.isFinite(ts)) return false;
+  return getFailedSyncs().some(e => (e.kind === "task-delete" || e.kind === "history-delete") && (e.ts || 0) === ts);
 }
 // A restore on any device (settings 'last_restore_at', epoch ms; migration 20261022180000) supersedes every delete
 // intent queued before it: replayed, a pending clear would delete what the restore brought back (review round 2).
@@ -736,9 +745,13 @@ export function intentGroups(kind) {
 const CONFIRMED_KEY = "proximaai-confirmed-deletes";
 const CONFIRMED_FOR_MS = 30 * 24 * 60 * 60 * 1000;
 const readConfirmed = () => { try { return JSON.parse(localStorage.getItem(CONFIRMED_KEY) || "{}") || {}; } catch { return {}; } };
+// Returns the archived file paths of confirmed tasks that a clear's stash held (forgetStashedIds): the caller queues
+// them for deletion through the file-delete queue.
 export function confirmDeleteIntents(kind, ids) {
   settleDeleteIntents(kind, ids);
-  if (kind !== "task-delete" && kind !== "history-delete") return;
+  if (kind !== "task-delete" && kind !== "history-delete") return [];
+  // A delete the cloud confirmed is never given back by a later void of its clear (review round 15 S2).
+  const paths = forgetStashedIds(kind, ids);
   try {
     const all = readConfirmed(), now = Date.now(), cut = now - CONFIRMED_FOR_MS;
     for (const k of Object.keys(all)) for (const [id, at] of Object.entries(all[k] || {})) if (!(at > cut)) delete all[k][id];
@@ -746,6 +759,7 @@ export function confirmDeleteIntents(kind, ids) {
     for (const id of ids || []) if (id) all[kind][id] = now;
     localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
   } catch {}
+  return paths;
 }
 // A new delete of these ids starts: their older confirmations no longer say anything (a restore brought them back and
 // they are going again), so releaseRestored must not release them while this delete is in flight (review round 7).
@@ -848,13 +862,26 @@ export function buildClearStash({ uploads = [], tasks = [], logs = [], cloudTask
   return { uploads: (uploads || []).filter(e => e && e.kind && e.id), tasks: local(tasks, "task", cloudTaskIds), logs: local(logs, "history", cloudLogIds) };
 }
 // Says whether it was stored (a full localStorage refuses it; the clear goes on, as it did before stashes existed).
+// Optional parts (review round 15), stored only when present: `favorites` (Reset: the local favorites state it replaced,
+// S3) and `archives` (task id -> an archive that finished while this clear held its task, S5).
 export function writeClearStash(at, stash) {
   if (!Number.isFinite(Number(at))) return false;
   try {
-    localStorage.setItem(CLEAR_STASH_PREFIX + Number(at), JSON.stringify({ uploads: stash?.uploads || [], tasks: stash?.tasks || [], logs: stash?.logs || [], at: Number(at) }));
+    const out = { uploads: stash?.uploads || [], tasks: stash?.tasks || [], logs: stash?.logs || [], at: Number(at) };
+    if (stash?.favorites) out.favorites = stash.favorites;
+    if (stash?.archives && Object.keys(stash.archives).length) out.archives = stash.archives;
+    localStorage.setItem(CLEAR_STASH_PREFIX + Number(at), JSON.stringify(out));
     return true;
   } catch { return false; }
 }
+const parseStash = (raw, at) => {
+  const s = JSON.parse(raw || "null");
+  if (!s) return null;
+  const out = { uploads: Array.isArray(s.uploads) ? s.uploads : [], tasks: Array.isArray(s.tasks) ? s.tasks : [], logs: Array.isArray(s.logs) ? s.logs : [], at };
+  if (s.favorites && typeof s.favorites === "object") out.favorites = s.favorites;
+  if (s.archives && typeof s.archives === "object" && Object.keys(s.archives).length) out.archives = s.archives;
+  return out;
+};
 // Every stored stash, oldest first.
 export function readClearStashes() {
   const out = [];
@@ -864,16 +891,72 @@ export function readClearStashes() {
     for (const k of keys) {
       const at = Number(k.slice(CLEAR_STASH_PREFIX.length));
       if (!Number.isFinite(at)) continue;
-      try {
-        const s = JSON.parse(localStorage.getItem(k) || "null");
-        if (s) out.push({ uploads: Array.isArray(s.uploads) ? s.uploads : [], tasks: Array.isArray(s.tasks) ? s.tasks : [], logs: Array.isArray(s.logs) ? s.logs : [], at });
-      } catch {}
+      try { const s = parseStash(localStorage.getItem(k), at); if (s) out.push(s); } catch {}
     }
   } catch {}
   return out.sort((a, b) => a.at - b.at);
 }
+// One clear's stash, or null.
+export function readClearStash(at) {
+  if (!Number.isFinite(Number(at))) return null;
+  try { return parseStash(localStorage.getItem(CLEAR_STASH_PREFIX + Number(at)), Number(at)); } catch { return null; }
+}
 export function dropClearStash(at) {
   try { localStorage.removeItem(CLEAR_STASH_PREFIX + Number(at)); } catch {}
+}
+// The archived file paths a stash's archive records hold.
+export function stashArchivePaths(stash) {
+  return Object.values(stash?.archives || {}).flatMap(a => (Array.isArray(a?.paths) ? a.paths : [])).filter(Boolean);
+}
+// Confirmed deletes leave every stash (review round 15 S2): a later void of the clear must not give back an item whose
+// delete already succeeded, nor its taken upload. Returns the archived paths of confirmed tasks' archive records (S5:
+// their files go through the file-delete queue now).
+export function forgetStashedIds(kind, ids) {
+  const gone = new Set((ids || []).filter(Boolean));
+  const paths = [];
+  if (!gone.size || (kind !== "task-delete" && kind !== "history-delete")) return paths;
+  const isTask = kind === "task-delete", upKind = isTask ? "task" : "history", field = isTask ? "tasks" : "logs";
+  for (const s of readClearStashes()) {
+    let changed = false;
+    const items = s[field].filter(x => !gone.has(x?.id));
+    const uploads = s.uploads.filter(e => !(e?.kind === upKind && gone.has(e.id)));
+    if (items.length !== s[field].length || uploads.length !== s.uploads.length) changed = true;
+    const archives = { ...(s.archives || {}) };
+    if (isTask) for (const id of Object.keys(archives)) if (gone.has(id)) { paths.push(...stashArchivePaths({ archives: { [id]: archives[id] } })); delete archives[id]; changed = true; }
+    if (changed) writeClearStash(s.at, { ...s, [field]: items, uploads, archives });
+  }
+  return paths;
+}
+// An archive that finished while a clear held its task (review round 15 S5): recorded in the stash of the clear whose
+// task-delete intent for that task is still pending (by its queue time). Says whether it was recorded; false (no such
+// clear, no stash, or no room): the caller queues the uploaded files for deletion, as before.
+// `record`: { task: the archived version (null when every upload failed), paths: the uploaded paths }.
+export function recordStashArchive(taskId, record) {
+  if (!taskId) return false;
+  const intent = getFailedSyncs().find(e => e.kind === "task-delete" && e.id === taskId);
+  if (!intent) return false;
+  const s = readClearStash(intent.ts || 0);
+  if (!s) return false;
+  const prev = s.archives?.[taskId];
+  const paths = [...new Set([...(Array.isArray(prev?.paths) ? prev.paths : []), ...(record?.paths || [])])];
+  return writeClearStash(s.at, { ...s, archives: { ...(s.archives || {}), [taskId]: { task: record?.task || prev?.task || null, paths } } });
+}
+// What a voided clear's stash gives back (review round 15 S1), or null while ANY of its intents (task or History, at
+// its queue time) is still pending: that clear is not settled yet, and its remaining group's own void or confirm decides
+// (a task group voided first must not give back the stash while its History group still holds the entries back). Items
+// queued for deletion again by ANOTHER clear or delete (another queue time) stay deleted; archive records of such tasks
+// move to that clear's stash, or, if it has none, their paths are returned as `orphanPaths` (to delete).
+export function stashGiveBack(stash) {
+  if (!stash || intentsPendingAt(stash.at)) return null;
+  const deletingTasks = pendingDeleteIds("task-delete", { exceptAt: stash.at });
+  const deletingLogs = pendingDeleteIds("history-delete", { exceptAt: stash.at });
+  const { tasks, logs } = stashedItems(stash, { deletingTasks, deletingLogs });
+  const archives = {}, orphanPaths = [];
+  for (const [id, rec] of Object.entries(stash.archives || {})) {
+    if (!deletingTasks.has(id)) { archives[id] = rec; continue; }
+    if (!recordStashArchive(id, rec)) orphanPaths.push(...stashArchivePaths({ archives: { [id]: rec } }));
+  }
+  return { uploads: stash.uploads || [], tasks, logs, archives, orphanPaths, favorites: stash.favorites || null };
 }
 // The local items a voided clear's stash gives back: its tasks and History entries plus the data of the upload entries
 // it took, each id once, none that is queued for deletion again (a later delete of the same id).
