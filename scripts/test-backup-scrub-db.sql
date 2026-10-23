@@ -8,8 +8,18 @@ do $t$
 declare
   out text := '';
   u constant text := 'user:__scrub_test';
-  v_bk uuid; v_bk2 uuid; v_ctid tid; n int; r json; h jsonb; ok boolean;
+  v_bk uuid; v_bk2 uuid; v_ctid tid; n int; r json; h jsonb; ok boolean; v_tok text; v_acc uuid;
 begin
+  -- The fixture scope's token. Before P1's M1 a signed 'user:<x>' subject falls through to its own scope; from M1 the
+  -- verifier fails closed on it, so a member account whose scope is u is seeded and its token minted (rolled back with
+  -- the rest; EXECUTE keeps the file parsing without M1).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'insert into proxima_auth.users (username, role, scope) values ($1, ''member'', $2) returning id'
+      into v_acc using substring(u from 6), u;
+    execute 'select proxima_auth.mint_token($1)' into v_tok using v_acc;
+  else
+    v_tok := _sign_session_token(u, now() + interval '5 minutes');
+  end if;
   insert into app_secrets (key, value) values ('auto_backups', '{"enabled": false}')
     on conflict (key) do update set value = excluded.value;
   insert into tasks (id, device_id, status, start_time, outputs) values
@@ -134,7 +144,7 @@ begin
       returning id into v_bk2;
     -- Deleted after the backup was taken: the delete trigger queues its scrub (a live row is never scrubbed, 20261022210000).
     delete from tasks where id = 'sx-r';
-    r := restore_my_backup_phase2(_sign_session_token(u, now() + interval '5 minutes'), v_bk2);
+    r := restore_my_backup_phase2(v_tok, v_bk2);
     out := out || case when r->>'ok' = 'true' and not exists (select 1 from backup_scrub_queue where username = u)
       and not exists (select 1 from tasks where id = 'sx-r')
       then 'ok restore-drains-first; ' else format('FAIL restore-drains-first %s; ', r) end;

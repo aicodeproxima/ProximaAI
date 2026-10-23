@@ -23,7 +23,10 @@ Reusable scripts are in `scripts/browser/`.
 | Account modal ids | `#acct-current-password`, `#acct-new-password`, `#acct-confirm-password`, `#acct-new-username`, `#acct-backup-code`, `#acct-type-it-again`, `#acct-email-address`, `#acct-verification-code` |
 Never type the owner's password or key. A minted token (`_sign_session_token('admin:'||username, <exp>)`) is also
 revoked when exp − 12 h is before `app_secrets.admin_sessions_valid_after` (bumped by every password change or
-backup-code unlock; 20:36 UTC on 2026-10-20), so a short token only works until the first such bump; after it, any
+backup-code unlock; 20:36 UTC on 2026-10-20). From P1's M1 (20261023100000) that row is frozen: the epoch is
+`proxima_auth.users.sessions_valid_after` of the account's row (owner: `role = 'owner'`), and a token is revoked when
+exp − 12 h is at or before it; a sign-in, unlock or account change shows as that row's `updated_at`, no longer as
+`app_secrets.admin_login_lockout.updated_at`. So a short token only works until the first such bump; after it, any
 working token lives about 12 h and only "sign out everywhere" ends it — ask the owner first. Preferred: the owner signs
 in to the Chrome tab, then drive the app.
 

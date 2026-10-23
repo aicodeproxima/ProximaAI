@@ -6,6 +6,8 @@ do $t$
 declare
   out text := '';
   v_public text; v_kept int; v_ro int;
+  -- From P1's M1 the new unlock_with_backup_code is an account RPC too (like verify_admin): 14 then, 13 before.
+  v_p1 constant boolean := to_regprocedure('public.unlock_with_backup_code(text,text,text)') is not null;
 begin
   -- 1. No security definer function of schema public is executable through PUBLIC.
   select string_agg(p.proname, ',' order by p.proname) into v_public
@@ -18,10 +20,10 @@ begin
    where n.nspname = 'public' and p.proname in ('change_my_password', 'delete_my_backup_phase2', 'get_my_account',
            'list_my_backups_phase2', 'rename_my_account', 'restore_my_backup_phase2', 'set_admin_backup_code',
            'set_admin_credentials_rehash', 'set_my_account', 'set_my_wavespeed_key', 'snapshot_my_data_phase2',
-           'unlock_admin_with_backup_code', 'verify_admin')
+           'unlock_admin_with_backup_code', 'unlock_with_backup_code', 'verify_admin')
      and has_function_privilege('anon', p.oid, 'EXECUTE') and has_function_privilege('authenticated', p.oid, 'EXECUTE')
      and has_function_privilege('service_role', p.oid, 'EXECUTE');
-  out := out || case when v_kept = 13 then 'ok callers-kept; ' else format('FAIL callers-kept %s; ', v_kept) end;
+  out := out || case when v_kept = case when v_p1 then 14 else 13 end then 'ok callers-kept; ' else format('FAIL callers-kept %s; ', v_kept) end;
   select count(*) into v_ro from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where p.prosecdef and n.nspname = 'public' and has_function_privilege('supabase_read_only_user', p.oid, 'EXECUTE');
   out := out || case when v_ro = 0 then 'ok read-only-none; ' else format('FAIL read-only-none %s; ', v_ro) end;

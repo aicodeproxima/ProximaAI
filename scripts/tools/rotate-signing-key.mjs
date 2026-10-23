@@ -80,12 +80,39 @@ async function dbAccepts(token) {
 }
 const dbHas = async (k) => !!(await retry(() => sql("select (value->>'key') = " + lit(k) + " as ok from public.app_secrets where key = 'session_signing_key'")))[0]?.ok;
 
+// The owner and how to mint its probe, state-agnostic (docs/P1-AUTH-DESIGN.md §4 step 2): from P1's M1 the owner is
+// proxima_auth.users role='owner' (app_secrets' account rows are frozen there, so a rename during P1 would make an
+// app_secrets name mint a revoked token); before M1, or after its rollback, app_secrets. The probe is minted by
+// proxima_auth.mint_token(owner id) when it exists ('admin:<name>' until M3, 'u:<id>' from M3), else by
+// _sign_session_token('admin:'||name), and must pass _verify_session_token before it is used.
+async function readOwner() {
+  const [st] = await retry(() => sql("select to_regclass('proxima_auth.users') is not null as has_users, to_regprocedure('proxima_auth.mint_token(uuid)') is not null as has_mint"));
+  const keyCols = "(select value->>'key' from public.app_secrets where key = 'session_signing_key') as k, exists (select 1 from public.app_secrets where key = 'session_signing_key_previous') as has_prev";
+  const [acct] = await retry(() => sql(st?.has_users
+    // sessions_valid_after: tokens issued at or before it are revoked.
+    ? `select u.username as u, u.id::text as id, u.sessions_valid_after as after, ${keyCols} from proxima_auth.users u where u.role = 'owner'`
+    : `select (select value->>'username' from public.app_secrets where key = 'admin_username') as u, null::text as id, (select (value->>'at')::bigint from public.app_secrets where key = 'admin_sessions_valid_after') as after, ${keyCols}`));
+  if (!acct?.u || !acct?.k || acct.k.length < 32) throw new Error("database: the owner account or session_signing_key is missing");
+  const mintSql = st.has_mint && acct.id ? `proxima_auth.mint_token(${lit(acct.id)}::uuid)`
+    : `public._sign_session_token(${lit("admin:" + acct.u)}, now() + interval '12 hours 2 minutes')`;
+  return { acct, mintSql, source: st.has_users ? "proxima_auth.users" : "app_secrets", minter: st.has_mint && acct.id ? "mint_token" : "_sign_session_token" };
+}
+// A probe token signed by the database's current key, dry-checked with _verify_session_token before any use.
+async function mintProbe(mintSql) {
+  const [row] = await retry(() => sql(`select x.t, public._verify_session_token(x.t) as s from (select ${mintSql} as t) x`));
+  if (!row?.t || !row?.s) throw new Error("the minted probe token does not pass _verify_session_token");
+  return row;
+}
+
 async function main() {
   // ── Preflight ──
-  const [acct] = await retry(() => sql("select (select value->>'username' from public.app_secrets where key = 'admin_username') as u, (select value->>'key' from public.app_secrets where key = 'session_signing_key') as k, exists (select 1 from public.app_secrets where key = 'session_signing_key_previous') as has_prev, (select (value->>'at')::bigint from public.app_secrets where key = 'admin_sessions_valid_after') as after"));
-  if (!acct?.u || !acct?.k || acct.k.length < 32) throw new Error("database: admin_username or session_signing_key missing");
-  const subject = "admin:" + acct.u, curKey = acct.k;
+  const { acct, mintSql, source, minter } = await readOwner();
+  const curKey = acct.k;
   secrets.push(curKey);
+  // The subject the database mints for the owner right now ('admin:<name>' before M3, 'u:<id>' after); the locally
+  // signed old-/current-key tokens below use the same subject.
+  const subject = (await mintProbe(mintSql)).s;
+  console.log(`Preflight: owner read from ${source}; probe minted by ${minter} and accepted by _verify_session_token.`);
   const envs = (await retry(() => vercel("GET", `/v9/projects/${PROJECT}/env`))).envs || [];
   // Every SESSION_SIGNING_KEY row (one per environment set) gets the new key, and exactly one of them must serve
   // production: otherwise stop and list them (review round 2: editing the wrong row would break the proxy later).
@@ -180,8 +207,9 @@ async function main() {
   }
   // The live proxy must accept the new key now; if it does not, the database goes straight back to the old key (Vercel
   // still accepts it as previous), so there is never an outage.
-  const [probe] = await retry(() => sql(`select public._sign_session_token(${lit(subject)}, now() + interval '12 hours 2 minutes') as t`));
-  if ((await proxyBalance(probe.t)) !== 200) {
+  let probe;
+  try { probe = await mintProbe(mintSql); } catch (e) { probe = { t: null }; console.error("    probe:", clean(e)); }
+  if (!probe.t || (await proxyBalance(probe.t)) !== 200) {
     console.error("    The live proxy does not accept the new key: putting the database back to the old key…");
     try { await sql(`update public.app_secrets set value = jsonb_set(value, '{key}', to_jsonb(${lit(oldKey)}::text)), updated_at = now() where key = 'session_signing_key';`); }
     catch (e) { console.warn("    revert failed or its reply was lost:", clean(e)); }
@@ -205,7 +233,7 @@ async function main() {
 
   // ── 4) Proof ──
   console.log("4/4 Proof…");
-  const [m] = await retry(() => sql(`select public._sign_session_token(${lit(subject)}, now() + interval '12 hours 2 minutes') as t`));
+  const m = await mintProbe(mintSql);
   const proof = {
     dbRefusesOld: !(await dbAccepts(tokenWith(oldKey, subject))),
     dbAcceptsNew: await dbAccepts(m.t),

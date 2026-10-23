@@ -6,10 +6,19 @@ do $t$
 declare
   out text := '';
   u constant text := 'user:__rs_test';
-  v_tok text; v_m1 uuid; v_m2 uuid; r json;
+  v_tok text; v_acc uuid; v_m1 uuid; v_m2 uuid; r json;
   holds_g boolean; holds_hg boolean; holds_a boolean;
 begin
-  v_tok := _sign_session_token(u, now() + interval '5 minutes');
+  -- The fixture scope's token. Before P1's M1 a signed 'user:<x>' subject falls through to its own scope; from M1 the
+  -- verifier fails closed on it, so a member account whose scope is u is seeded and its token minted (rolled back with
+  -- the rest; EXECUTE keeps the file parsing without M1).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'insert into proxima_auth.users (username, role, scope) values ($1, ''member'', $2) returning id'
+      into v_acc using substring(u from 6), u;
+    execute 'select proxima_auth.mint_token($1)' into v_tok using v_acc;
+  else
+    v_tok := _sign_session_token(u, now() + interval '5 minutes');
+  end if;
 
   -- 1. Switch OFF: restoring M1 scrubs the replaced generation G (and its History entry) from M2 right away.
   begin

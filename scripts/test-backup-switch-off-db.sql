@@ -7,7 +7,7 @@ do $t$
 declare
   out text := '';
   u constant text := 'user:__scrub_test';
-  v_tok text; v_b uuid; v_p uuid; v_q uuid; r json; n int; ok boolean; h jsonb;
+  v_tok text; v_own text; v_acc uuid; v_b uuid; v_p uuid; v_q uuid; r json; n int; ok boolean; h jsonb;
 begin
   insert into app_secrets (key, value) values ('auto_backups', '{"enabled": true}')
     on conflict (key) do update set value = excluded.value;
@@ -17,7 +17,19 @@ begin
   insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot)
     values (u, 'manual', 1, 0, (select jsonb_agg(row_to_json(t)) from tasks t where t.id = 'sz-a'), '[]')
     returning id into v_b;
-  v_tok := _sign_session_token(u, now() + interval '5 minutes');
+  -- The fixture scope's token. Before P1's M1 a signed 'user:<x>' subject falls through to its own scope; from M1 the
+  -- verifier fails closed on it, so a member account whose scope is u is seeded and its token minted (rolled back with
+  -- the rest; EXECUTE keeps the file parsing without M1).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'insert into proxima_auth.users (username, role, scope) values ($1, ''member'', $2) returning id'
+      into v_acc using substring(u from 6), u;
+    execute 'select proxima_auth.mint_token($1)' into v_tok using v_acc;
+    -- The Automatic backups switch is global and the owner's alone in P1 (42501 for a member): the owner flips it.
+    execute 'select proxima_auth.mint_token(id) from proxima_auth.users where role = ''owner''' into v_own;
+  else
+    v_tok := _sign_session_token(u, now() + interval '5 minutes');
+    v_own := v_tok;
+  end if;
 
   -- 1. A restore (switch on) keeps a pre-restore backup and marks the tombstones it left.
   begin
@@ -40,7 +52,7 @@ begin
 
   -- 3. Switching off answers false.
   begin
-    out := out || case when set_auto_backups(v_tok, false) = false then 'ok switch-off; ' else 'FAIL switch-off; ' end;
+    out := out || case when set_auto_backups(v_own, false) = false then 'ok switch-off; ' else 'FAIL switch-off; ' end;
   exception when others then out := out || format('FAIL switch-off %s; ', sqlstate); end;
 
   -- 4. It queues one all-tombstones scrub for the account.
@@ -77,7 +89,7 @@ begin
       values (u, 'manual', 0, 2, '[]', (select jsonb_agg(row_to_json(x)) from history x where x.id in ('sz-H', 'sz-G')))
       returning id into v_q;
     update history set tasks = '[{"id":"sz-k","status":"completed","cost":1,"outputs":["https://h/k1.png"]}]', total_cost = 1 where id = 'sz-H';
-    perform set_auto_backups(v_tok, false);
+    perform set_auto_backups(v_own, false);
     perform _drain_backup_scrubs(u);
     select history_snapshot into h from data_backups where id = v_q;
     out := out || case when (select jsonb_array_length(e->'tasks') from jsonb_array_elements(h) e where e->>'id' = 'sz-H') = 1

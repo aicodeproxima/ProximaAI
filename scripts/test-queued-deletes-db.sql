@@ -9,7 +9,11 @@ declare
   u constant text := 'user:__qd_test';
   v_tok text; r json; v_bk uuid; v_marker bigint;
 begin
-  update app_secrets set value = jsonb_set(value, '{username}', '"__qd_test"') where key = 'admin_username';
+  if to_regclass('proxima_auth.users') is null then   -- from P1's M1 the app_secrets admin rows are frozen; the owner row is the account
+    update app_secrets set value = jsonb_set(value, '{username}', '"__qd_test"') where key = 'admin_username';
+  else
+    execute 'update proxima_auth.users set username = $1, scope = ''user:'' || $1 where role = ''owner''' using '__qd_test';
+  end if;
   v_tok := _sign_session_token('admin:__qd_test', now() + interval '12 hours 5 minutes');
   insert into tasks (id, device_id, status, start_time, outputs) values
     ('qd-1', u, 'completed', 1000, '[]'), ('qd-2', u, 'completed', 1000, '[]'), ('qd-3', u, 'completed', 1000, '[]');
@@ -40,7 +44,9 @@ begin
   begin
     begin perform delete_queued_rows(_sign_session_token(u, now() + interval '5 minutes'), 'task', array['qd-2'], 9e12::bigint);
           out := out || 'FAIL guards non-admin; ';
-    exception when insufficient_privilege then null; end;
+    exception when insufficient_privilege then null;   -- before P1's M1 (42501)
+              when raise_exception then                -- from M1 the verifier fails closed on a non-account subject
+                if sqlerrm <> 'malformed session token' then raise; end if; end;
     begin perform delete_queued_rows(v_tok, 'settings', array['x'], 9e12::bigint); out := out || 'FAIL guards kind; ';
     exception when others then null; end;
     begin perform delete_queued_rows(v_tok, 'task', array(select 'x' || g from generate_series(1, 201) g), 9e12::bigint);
@@ -74,12 +80,20 @@ begin
      where p.pronamespace = 'public'::regnamespace and p.proname in ('restore_my_backup_phase2', 'delete_queued_rows', 'rename_my_account')   -- rename: review round 7
        and not (position('_verify_session_token(p_session_token)' in substr(p.prosrc, position('last_restore_at'' for' in p.prosrc))) > 0);
     insert into tasks (id, device_id, status, start_time, outputs) values ('qd-6', u, 'completed', 1000, '[]');
-    update app_secrets set value = jsonb_set(value, '{username}', '"__qd_renamed"') where key = 'admin_username';
+    if to_regclass('proxima_auth.users') is null then   -- from P1's M1 the app_secrets admin rows are frozen; the owner row is the account
+      update app_secrets set value = jsonb_set(value, '{username}', '"__qd_renamed"') where key = 'admin_username';
+    else
+      execute 'update proxima_auth.users set username = $1, scope = ''user:'' || $1 where role = ''owner''' using '__qd_renamed';
+    end if;
     begin
       r := delete_queued_rows(v_old_tok, 'task', array['qd-6'], 9e12::bigint);
       v_bad := coalesce(v_bad || ',', '') || 'answered';
     exception when others then null; end;
-    update app_secrets set value = jsonb_set(value, '{username}', '"__qd_test"') where key = 'admin_username';
+    if to_regclass('proxima_auth.users') is null then   -- from P1's M1 the app_secrets admin rows are frozen; the owner row is the account
+      update app_secrets set value = jsonb_set(value, '{username}', '"__qd_test"') where key = 'admin_username';
+    else
+      execute 'update proxima_auth.users set username = $1, scope = ''user:'' || $1 where role = ''owner''' using '__qd_test';
+    end if;
     out := out || case when v_bad is null and exists (select 1 from tasks where id = 'qd-6') then 'ok recheck-after-lock; '
                        else format('FAIL recheck-after-lock %s; ', v_bad) end;
   exception when others then out := out || format('FAIL recheck-after-lock %s %s; ', sqlstate, sqlerrm); end;
@@ -114,7 +128,9 @@ begin
     reset role;
     begin perform generations_live(_sign_session_token(u, now() + interval '5 minutes'), array['x']);
           v_live := v_live || array['non-admin-answered'];
-    exception when insufficient_privilege then null; end;
+    exception when insufficient_privilege then null;   -- before P1's M1 (42501)
+              when raise_exception then                -- from M1: the verifier fails closed on a non-account subject
+                if sqlerrm <> 'malformed session token' then raise; end if; end;
     out := out || case when (select array_agg(x order by x) from unnest(v_live) x) = array['qd-hlive', 'qd-hrest', 'qd-row']
       then 'ok generations-live; ' else format('FAIL generations-live %s; ', v_live) end;
   exception when others then reset role; out := out || format('FAIL generations-live %s %s; ', sqlstate, sqlerrm); end;

@@ -38,6 +38,57 @@ Three critics, 25 findings, all accepted. Where a finding offered options, the c
 | 24 | M1 rollback copies `last_verified_at` back; the proof calls set_my_account | §7 |
 | 25 | Owner row snapshot unchanged; backup pause per account; topic shared until P4 stated | §4, §9.1 cases 18, 20, §10 |
 
+## Review round 2: the M1 build (2026-10-23)
+Critics of the built M1 (12 findings). The M1 author fixed these; #7 and #11 are the client's (C0).
+
+| # | Change | Section(s) |
+|---|---|---|
+| 1 | M1's rollback also takes `lock table proxima_auth.users in exclusive mode` before its copy-back; precondition "both owner devices idle" in its header | §7 |
+| 2, 8 | test-backup-scrub, test-backup-switch-off and test-restore-scrub work with and without M1 (a member row for the fixture scope + mint_token; the owner flips the global switch) | §9.3 |
+| 3, 12 | Post-apply check and the prepared re-copy shipped as files, covering the name, email, email_verified, last_verified_at, the lock flag and the backup pause too; proof scripts/test-mu-recopy.sql. **Superseded in review round 17:** the re-copy and its proof are deleted; the frozen guard refuses old-code writes and the check is read-only | §2 |
+| 4 | bcrypt-hash.mjs and page-map point at proxima_auth.users from M1 | §2 |
+| 5 | verify_admin and unlock_with_backup_code take a per-name advisory lock before the lookup, for every typed name | §4, §8, §9.1 case 0b |
+| 6 | unlock_with_backup_code is granted to service_role too (exactly like verify_admin); test-public-execute expects 14 with M1 | §2, §9.3 |
+| 9 | The throttle check creates and locks the IP row on a key's first attempt, so the IP row is always locked first | §6, §8, §9.1 case 0b |
+| 10 | §9.2 gates checked in as scripts/test-mu-p1-catalog.sql | §9.2 |
+| 11 | C0 decision recorded: the old server's `locked` keeps switching to unlock mode and `backup_locked` keeps its text | §5 |
+
+## Review round 16: M1 findings (2026-10-23)
+#3 belongs to the RLS/webhook suites' owners and #5/#6 to the client; #4's test half is the RLS session's (it fixes
+test-rls-rename.sql itself). The M1 author fixed #1 and #2 and wrote #4's design note.
+
+| # | Change | Section(s) |
+|---|---|---|
+| 1 | A NULL (or empty) password or backup code skipped bcrypt for a live account, so one request told a stranger whether a name exists (~6 ms against ~290 ms) and counted near-free attempts. verify_admin and unlock_with_backup_code now compute `crypt(coalesce(secret, ''), row hash) = row hash and secret is not null` unconditionally, then branch: exactly one bcrypt per attempt for every input; answers, counters and lock order unchanged. Proof: §9.1 case 7b (NULL, empty, unknown-name NULL and wrong secret each take at least 40% of the wrong-secret call's time and answer the same body) | §4, §9.1 case 7b |
+| 2 | The post-apply check and the re-copy could not tell an old-code write after the seed from new-code state, so following the M1 header undid a stranger's lockout (or an unlock, Account change or new-code rename) made after M1. M1 now records `proxima_auth.m1_seed_snapshot` (md5 per frozen key, at seed time); the check compares only keys whose md5 changed, in the direction the re-copy applies; the re-copy copies only those keys' fields, never lowers a counter or the epoch, keeps a lock or pause, and copies a changed name only when no data row is left in the current scope. Timestamps were rejected: an old-code call blocked on M1's lock stamps its own, earlier, transaction start. Proof: scripts/test-mu-recopy.sql scenarios (a) stranger lockout, (b) old-code writes, (c) both, (d) an unmoved rename. **Superseded in review round 17** (the re-copy still got merges wrong): m1_seed_snapshot stays, now read only by the read-only check; the frozen guard refuses the old writer | §2, §7 |
+| 4 | Design note: sync_topic's "identical at the switch" holds only when no rename, password change or unlock happened between M1 and M2 | §4 |
+
+## Review round 17: the frozen guard (2026-10-23)
+#2, #4 and #5 all came from old-code writes to the frozen app_secrets `admin_*` rows after M1's seed (a call that was
+waiting on M1's lock), which the post-apply re-copy then tried to merge into the owner row and got wrong. A three-way
+merge of two writers (old code into app_secrets, new code into proxima_auth.users) cannot be made safe: no rule tells an
+old-code write that must win from a new-code change made after it. The root fix refuses the old writer instead, which is
+exact: from M1 on nothing may write those rows, so there is nothing to merge. #1, #3 and #6 are client findings
+(src/App.jsx clear stashes), handled outside M1.
+
+| # | Change | Section(s) |
+|---|---|---|
+| 1 | Client: a voided clear dropped an earlier Reset's stash merged into it | (client, not M1) |
+| 2 | Superseded by the frozen guard: the re-copy reverted later new-code changes once a frozen key had changed. M1 now creates `proxima_auth.m1_frozen_guard()` and two triggers on public.app_secrets right after the seed (BEFORE INSERT OR UPDATE OR DELETE per row when OLD.key or NEW.key is one of the 9 frozen keys; BEFORE TRUNCATE always; errcode 55000, message `app_secrets admin rows are frozen since P1 M1; write proxima_auth.users`). An old-code call blocked on M1's lock fails at its first write after the commit and rolls back whole. `scripts/mu-p1-post-apply-recopy.sql` is deleted; the post-apply check is read-only and expects `same: true` always | §2, §4, §7, §9.4 |
+| 3 | Client: a voided later clear dropped an earlier clear's moved stash | (client, not M1) |
+| 4 | Superseded by the frozen guard: the re-copy was not idempotent after a new-code change of a field old code had written | §2 |
+| 5 | Superseded by the frozen guard: the re-copy never applied an old-code unlock or successful sign-in after the seed (the old call now fails instead of half-landing in app_secrets) | §2 |
+| 6 | Client: a moved-from stash was dropped when the clear it moved to was voided at replay | (client, not M1) |
+
+## Review round 18 (2026-10-23)
+#1 is the RLS session's (its M2), #3 is a client finding; the M1 author fixed #2.
+
+| # | Change | Section(s) |
+|---|---|---|
+| 1 | M2's precondition (the owner row must still give the frozen rows' topic text) could no longer be met after a password change, backup-code unlock or rename in the M1-only window, because the frozen guard now refuses any realignment of those rows. The RLS session fixes M2: the topic may rotate once at M2 (no equality precondition; its post-check accepts the topic computed from the owner row), and devices re-read it through `checkSession` | §4 (sync_topic), M2 (RLS session) |
+| 2 | M4 drops the frozen guard and `m1_seed_snapshot`, and M4's rollback does not recreate them (their seed md5s cannot be re-captured), so M1's rollback aborted after a full rollback M4 → … → M1. M1's rollback now runs either way: its compare-and-swap checks the guard's md5 only when the function exists (a present guard with a different body still aborts), and it drops both triggers, the function and the snapshot with IF EXISTS. The copy-back is unchanged. Proof: scripts/test-mu-rollback.sql steps 4-5 (M1, then M4's drops, then the rollback: no P1 object left, owner-row change copied back) | §4 step 9, §7 |
+| 3 | Client: a clear's stash that followed a plain delete was dropped as confirmed when that delete was voided inline | (client, not M1) |
+
 ## 1. Inventory
 
 ### 1.1 Counts
@@ -220,17 +271,22 @@ create table proxima_auth.signin_throttle (
   name_keys text[] not null default '{}'                -- short hmacs of the failing names, capped at guard+1 entries
 );
 create type proxima_auth.account as (id uuid, username text, role text, scope text);
+create table proxima_auth.m1_seed_snapshot (           -- review round 16 #2; M4 drops it with the frozen guard (the M1 rollback too)
+  key text primary key,                                 -- a frozen app_secrets key the seed read
+  value_md5 text not null                               -- md5(value::text) at seed time; never the value
+);
 ```
 
 - **Grants.** There is no browser access to the tables. `revoke all on proxima_auth.users, auth_config,
-  signin_throttle from public, anon, authenticated, service_role;` plus `alter table … enable row level security` with no
+  signin_throttle, m1_seed_snapshot from public, anon, authenticated, service_role;` plus `alter table … enable row level security` with no
   policies, as a belt. proxima_auth keeps `USAGE` for anon/authenticated, because the policies need session_scope. That
   is why the tables carry the explicit revokes.
 - **Function grants.** Every new function gets `revoke execute … from public, anon, authenticated, service_role`, then
   grants back only what it needs: a revoke from PUBLIC alone leaves the default ACL's direct grants in `public` (§1.1).
   All helpers live in `proxima_auth`, which has no default ACL: current_account, issue_session, mint_token, `_reauth`,
   `_revoke_sessions` and the throttle helper `_throttle`. The only new `public` function is unlock_with_backup_code,
-  granted back to anon and authenticated (like verify_admin). current_account, issue_session and mint_token stay
+  granted back to anon, authenticated and service_role, exactly like verify_admin (review round 2 #6: a server-side
+  caller such as proxy-1 or a P5 sign-in function uses the service role). current_account, issue_session and mint_token stay
   executable by postgres only; session_scope runs current_account as definer. `create or replace` on an existing
   function keeps its ACL, so the rewritten functions keep today's grants.
 - **Seed (owner row only)**, in M1, from app_secrets. M1 first takes `lock table public.app_secrets in share row
@@ -254,18 +310,43 @@ create type proxima_auth.account as (id uuid, username text, role text, scope te
     settings has 1 legacy non-`user:` device row, which is left alone);
   - `count(*) = 1 where role='owner'`.
 
+  In the same block, under the same lock, the seed records `md5(value::text)` of each of the 9 frozen account rows it
+  read (admin_username, admin_password_hash, admin_backup_code_hash, admin_email, admin_email_verified,
+  admin_last_verified_at, admin_sessions_valid_after, admin_login_lockout, admin_backup_attempts) in
+  `proxima_auth.m1_seed_snapshot` (review round 16 #2). Only the read-only post-apply check reads it; M4 drops it with
+  the frozen guard.
+
   Every live `admin:` token stays valid (R5).
-- **Post-apply check** (right after M1 commits, read-only): the frozen app_secrets hash, code hash, epoch (`at - 1`) and
-  counters still equal the owner row. A call that was already running old code when M1 took the lock can still write
-  the frozen rows after the commit. If they differ, re-copy the changed fields from app_secrets into the owner row
-  (one `--write` statement, prepared with M1).
+- **Frozen guard** (review round 17 #2/#4/#5). Right after the seed, in the same transaction, M1 creates
+  `proxima_auth.m1_frozen_guard()` (plpgsql, `search_path ''`, not security definer, owner-only: EXECUTE revoked from
+  public, anon, authenticated and service_role; a trigger needs no EXECUTE when it fires) and two triggers on
+  public.app_secrets: `app_secrets_m1_frozen`, BEFORE INSERT OR UPDATE OR DELETE FOR EACH ROW, raising when OLD.key or
+  NEW.key is one of the same 9 frozen keys the snapshot covers (one constant list in the M1 generator), and
+  `app_secrets_m1_frozen_truncate`, BEFORE TRUNCATE, raising always. Errcode `55000`, message `app_secrets admin rows
+  are frozen since P1 M1; write proxima_auth.users`. Row security and grants are unchanged; every other key
+  (auto_backups, session_signing_key(_previous)) stays writable.
+  **Why:** a call that was already running old code when M1 took the lock (a sign-in, unlock, password, code, email or
+  rename change) reaches its first app_secrets write after the commit. Before round 17 such a write landed, and a
+  post-apply re-copy tried to merge it into the owner row. That is a three-way merge of two writers (old code into
+  app_secrets, new code into proxima_auth.users), and it cannot be made safe: a field old code wrote after the seed
+  and that new code changed later has no rule for which side wins (rounds 16 and 17 found three ways it went wrong:
+  reverted passwords and unlocks, a non-idempotent re-copy, an old unlock never applied). Refusing the old writer is
+  exact: the trigger raises at its first frozen-row write (an `insert … on conflict do nothing` too: the BEFORE trigger
+  runs first), so the whole old call rolls back and changes nothing; the client shows an error and a retry runs the new
+  code. Nothing is ever left to copy, so the re-copy (`scripts/mu-p1-post-apply-recopy.sql`) is deleted.
+- **Post-apply check** (right after M1 commits, and any time until M4; READ-ONLY): `node scripts/tools/sb-query.mjs
+  -f scripts/mu-p1-post-apply-check.sql`. It prints one row: `same` (every frozen key's `md5(value::text)` still
+  equals `m1_seed_snapshot`, and both guard triggers exist, call the guard and are enabled), `changed_keys` (never a
+  value) and `guard` (`on`, or how many of the 2 triggers are in place). `same` is true always; anything else means
+  something bypassed or removed the guard: stop and investigate. There is no re-copy.
 - **What stays in app_secrets for rollback:** all 10 rows, untouched by P1 at run time:
   - admin_username, admin_password_hash, admin_backup_code_hash, admin_email(_verified), admin_sessions_valid_after,
-    admin_login_lockout and admin_backup_attempts are frozen at M1;
+    admin_login_lockout and admin_backup_attempts are frozen at M1 (the frozen guard refuses every write of them);
   - auto_backups stays authoritative and the only copy (P4 moves it);
   - session_signing_key stays the signing key.
 
-  The rollback copies the owner row back into the frozen rows (§7), so nothing changed during P1 is lost. The rows
+  The rollback drops the frozen guard first and then copies the owner row back into the frozen rows (§7), so nothing
+  changed during P1 is lost. The rows
   retire in P5.
 
 **Agreed with the RLS session (2026-10-23):** users.scope is written only by M1's seed (the owner row,
@@ -340,13 +421,15 @@ revoked'`.
 
 **Sign-in answers are generic.** A disabled or deleted row counts as unknown everywhere a name is typed, and P1 never
 writes to a disabled or deleted row from a sign-in or unlock. Every attempt runs exactly one bcrypt: against the row's
-hash when the row is live and its secret is checked, otherwise against `auth_config.dummy_hash`.
+hash when the row is live and its secret is checked, otherwise against `auth_config.dummy_hash`. A NULL or empty
+secret is no exception: it pays the same bcrypt (`crypt(coalesce(secret, ''), hash)`) before it is refused (review
+round 16 #1).
 
 | Function | P1 behaviour |
 |---|---|
 | `_verify_session_token` | As in §3. Its existing messages are unchanged; unknown subjects now get `malformed session token`. |
-| `verify_admin(username, password)` | IP throttle first (§6). The row is found by `lower(username)` and locked FOR UPDATE (lock order: IP row → account row). **Unknown, disabled or deleted name:** `crypt(p, dummy_hash)`, answer `{ok:false, reason:'invalid'}`. **Locked account:** the password is **not** checked; dummy bcrypt for equal timing; the attempt counts on the IP throttle; answer `invalid`, byte-identical to a wrong password. **Wrong password:** counts on the account (3 → locked) unless the IP is blocked (§6); answer `invalid`, no attempts_left. **Right password:** counters reset; `issue_session`; returns `{ok, token, expires_at, username, account_id, role, scope}`. The token is `admin:` for the owner until M3 (§3). The legacy sha256 branch and `not_provisioned` are removed. |
-| `unlock_with_backup_code(username, code, new_pw)` **new** | Throttle, then the row by `lower(username)`, FOR UPDATE. **Unknown, disabled or deleted name, or no code on the row:** dummy bcrypt, answer `invalid`. **Pause running** (`backup_locked_until > now()`): the code is **not** checked; dummy bcrypt; counted on the IP; answer `invalid`, byte-identical to a wrong code. **Wrong code:** per-row counter (5 wrong → 15-min pause), answer `invalid` (no attempts_left, no retry_after). **Right code:** login and backup counters reset, the optional new bcrypt(12) password is stored, **this account's** epoch is bumped, and a fresh token comes from issue_session. |
+| `verify_admin(username, password)` | IP throttle first (§6). Then `pg_advisory_xact_lock(hashtextextended('proxima-signin:' \|\| lower(coalesce(username, '')), 0))`, taken for **every** typed name, known or not, so lock waits never tell a stranger whether a name exists (review round 2 #5). The row is then found by `lower(username)` and locked FOR UPDATE (lock order: IP row → per-name advisory lock → account row). **Unknown, disabled or deleted name:** `crypt(p, dummy_hash)`, answer `{ok:false, reason:'invalid'}`. **Locked account:** the password is **not** checked; dummy bcrypt for equal timing; the attempt counts on the IP throttle; answer `invalid`, byte-identical to a wrong password. **Wrong password:** counts on the account (3 → locked) unless the IP is blocked (§6); answer `invalid`, no attempts_left. **Right password:** counters reset; `issue_session`; returns `{ok, token, expires_at, username, account_id, role, scope}`. The token is `admin:` for the owner until M3 (§3). The legacy sha256 branch and `not_provisioned` are removed. |
+| `unlock_with_backup_code(username, code, new_pw)` **new** | Throttle, then the same per-name advisory lock as verify_admin, then the row by `lower(username)`, FOR UPDATE. **Unknown, disabled or deleted name, or no code on the row:** dummy bcrypt, answer `invalid`. **Pause running** (`backup_locked_until > now()`): the code is **not** checked; dummy bcrypt; counted on the IP; answer `invalid`, byte-identical to a wrong code. **Wrong code:** per-row counter (5 wrong → 15-min pause), answer `invalid` (no attempts_left, no retry_after). **Right code:** login and backup counters reset, the optional new bcrypt(12) password is stored, **this account's** epoch is bumped, and a fresh token comes from issue_session. |
 | `unlock_admin_with_backup_code(code, new_pw)` (old) | Kept for stale service-worker bundles and for rollback. It maps to the owner row only, with the same body as the new one (so it also answers `invalid` during a pause). Dropped at M4 once edge logs show 0 calls for 24 h; otherwise in P5. |
 | `_reauth_admin(pw)` → `proxima_auth._reauth(account, pw)` | Keeps today's order: a locked account is refused (`locked`) **before** crypt. Otherwise per-row counting, same rule (3 → locked). The caller already holds the account's token, so `locked` reveals nothing new. Not browser-callable. |
 | `_revoke_admin_sessions()` → `proxima_auth._revoke_sessions(account)` | Per-row epoch, as in §3. |
@@ -362,7 +445,7 @@ hash when the row is live and its secret is checked, otherwise against `auth_con
 | list/delete/purge/restore/snapshot backup RPCs | Same, and the fall-through to the subject is removed in every spelling. |
 | `_rows_keep_owner` (trigger) | `v_live := (select scope from proxima_auth.users where role='owner')`. Identical in P1; P4 (RLS) generalizes it. |
 | `session_scope` (**M2, RLS session**) | Dual format via current_account. Keeps the `not admin-scoped` message for non-account subjects (test-rls-* expect it). |
-| `sync_topic` (**M2, RLS session**) | Reads the owner row's username and epoch instead of app_secrets. It hashes `sessions_valid_after + 1`, which equals app_secrets' `at` at the switch (§2), so the topic string is identical and no device loses pings (to agree with the RLS session). If M2 slips, the topic just stops rotating on a password change (harmless). P4 makes it per account. |
+| `sync_topic` (**M2, RLS session**) | Reads the owner row's username and epoch instead of app_secrets. It hashes `sessions_valid_after + 1`, which equals app_secrets' `at` at the switch (§2), so the topic string is identical and no device loses pings (to agree with the RLS session) — **only if no rename, password change or unlock happened between M1 and M2** (review round 16 #4). In the M1-only window those write only proxima_auth.users and do not rotate the topic, because sync_topic still reads the frozen app_secrets rows until M2; at M2 the topic then changes once, and devices pick it up on their next reconcile (`checkSession`, every 20 s). So M2 should follow M1 promptly. If M2 slips, the topic just stops rotating on a rename or password change (harmless). P4 makes it per account. |
 | `issue_session` (**M3**) | The only function M3 rewrites: it signs `'u:'||id` for every role. |
 
 ### Migration order (versions above 20261022350000; placeholders)
@@ -372,7 +455,8 @@ hash when the row is live and its secret is checked, otherwise against `auth_con
 1. **M1 `2026102300xx10_mu_p1_accounts.sql`**:
    - **compare-and-swap:** the file records the md5 of `pg_get_functiondef` for every function it replaces (captured
      when M1 is authored) and aborts if any live md5 differs; the author then re-captures and re-reviews;
-   - locks app_secrets, creates the schema objects in §2 and seeds the owner;
+   - locks app_secrets, creates the schema objects in §2 and seeds the owner, then creates the frozen guard (§2) on
+     app_secrets' 9 account rows;
    - adds current_account, issue_session, mint_token, `_reauth`, `_revoke_sessions`, `_throttle` (all in proxima_auth)
      and public.unlock_with_backup_code, with the §2 grants;
    - rewrites every function in the table above except the M2/M3 rows;
@@ -380,7 +464,8 @@ hash when the row is live and its secret is checked, otherwise against `auth_con
 
    The owner still gets `admin:` tokens. Rollback file: `supabase/rollback/2026102300xx10_mu_p1_accounts.rollback.sql`,
    which records M1's post-apply md5 set (§7). **Apply checklist:** C0 confirmed live; both owner devices idle and off
-   the Account screen; post-apply check (§2) run right after.
+   the Account screen; the read-only post-apply check (§2) run right after (it must print `same: true`; an old-code
+   call that still waited on the lock has failed against the frozen guard and changed nothing).
    **Freeze:** from M1 authoring until M4, the ~30 functions M1 replaces are frozen. Announced by message to the RLS
    and webhook sessions: any change to them in that period goes through P1's files.
 2. **Same commit as M1:**
@@ -415,6 +500,11 @@ hash when the row is live and its secret is checked, otherwise against `auth_con
    script-minted `admin:` token (§3):
    - replaces the `admin:` branches (explicit `revoked` in the verifier, removed from current_account);
    - drops set_admin_credentials_rehash, and the old unlock if it shows no calls;
+   - drops the frozen guard (the triggers `app_secrets_m1_frozen` and `app_secrets_m1_frozen_truncate`, then
+     `proxima_auth.m1_frozen_guard()`; review round 17) together with `proxima_auth.m1_seed_snapshot` (only M1's
+     read-only post-apply check reads it; review round 16 #2). By then no old-code call can still be in flight, and
+     nothing in P1's code writes those rows; they retire in P5. M4 drops both triggers before the function. M4's
+     rollback does not recreate the guard or the snapshot: M1's rollback runs without them (§7; review round 18 #2);
    - the RLS session drops its session_scope branch in the same window.
 
 The P1 gate (§9) runs `sql-tx.mjs M1 M2 M3 --test scripts/test-mu-auth.sql` before M1 is applied, then the suite alone
@@ -430,6 +520,9 @@ after each live step, checked against the per-stage table in §9.1.
     `backup_locked` is unchanged (only the old server sends it).
   - `accountError` (:350): re-auth still answers `invalid`/`locked` for the signed-in account; adds `rate_limited` →
     "Too many name checks. Try again in an hour."
+- **C0 decision (review round 2 #11):** the design wins. The old server's `locked` keeps switching LoginScreen to
+  unlock mode, and `backup_locked` keeps its own text. Only the old server sends them, so the new server's generic
+  answers are unaffected; the C0 code follows this (agent B's change).
 - **C1** (after M1):
   - `unlockWithBackupCode(username, code, newPassword)` (supabase.js:814) calls `unlock_with_backup_code`. On PGRST202
     (function missing, i.e. after a rollback) it falls back to the old RPC.
@@ -471,7 +564,7 @@ after each live step, checked against the per-stage table in §9.1.
   speed with no lock. Counting keeps the 3-try lock as the guessing limit everywhere; the block's job is to slow name
   spraying and to never refuse a right password.
 - **A success does not reset the IP counter**, so one valid account cannot launder guesses at others.
-- **Rows** are one per key (no global hot row). A stale row (window over 1 day) is deleted opportunistically:
+- **Rows** are one per key (no global hot row). The check at the start of an attempt creates the key's row (0 failures) when it has none, within the row budget, and locks it, so the IP row is the first lock of every attempt (§8). A stale row (window over 1 day) is deleted opportunistically:
   `limit 20 … for update skip locked`. **Row budget:** when the table holds `throttle_max_rows` (10 000) rows, new keys
   are not inserted; the mode drops to `observe` with a LOG line.
 - **Shared-key guard:** each row keeps short hmacs of the names that failed from it in the window (capped at
@@ -511,16 +604,35 @@ after each live step, checked against the per-stage table in §9.1.
 
 ## 7. Rollback and how it is proven exact
 - **Order:** M4 → M3 → M2 (RLS) → M1b → M1, each with its own `supabase/rollback/<v>.rollback.sql`.
+  - M4's rollback restores the `admin:` branches and the functions M4 dropped, but **not** the frozen guard or
+    `m1_seed_snapshot` (their seed md5s cannot be re-captured, and nothing writes the frozen rows after M4). M1's
+    rollback runs whether or not M4 dropped them (review round 18 #2).
   - M3's rollback restores issue_session's owner `admin:` path. `u:` tokens stay accepted, because M1 still verifies
     them. Nobody is signed out.
   - **M2's rollback refuses while M3 is live** (to agree with the RLS session): it aborts if
     `proxima_auth.issue_session`'s body has no `'admin:'` (M3 removed it). Rolling M2 back first would restore a
     session_scope that refuses every `u:` token.
-- **M1's rollback**, in one transaction:
+- **M1's rollback**, in one transaction. **Precondition** (as M1's apply checklist): both owner devices idle: off the
+  Account screen, no sign-in or unlock in progress.
   0. **Guards.** Abort if any function outside the set this rollback drops or recreates references
      `proxima_auth.users`, `current_account`, `auth_config` or `issue_session` (that is M2 still live, or anything new).
      Abort if any function M1 replaced differs from the post-apply md5 set recorded with M1 (compare-and-swap: someone
      changed it during P1; re-capture before rolling back).
+     Then `lock table public.app_secrets in share row exclusive mode; lock table proxima_auth.users in exclusive mode;`
+     (review round 2 #1). Since M1 every account write goes to proxima_auth.users, so without the second lock a
+     new-code rename, password, code or email change could commit between the copy-back's read and the drop and be
+     lost (a rename would strand the data in `'user:'||new`). EXCLUSIVE lets reads go on and makes every new-code
+     writer wait; after the commit it fails against the dropped table and the client retries against the restored
+     functions. scripts/test-mu-rollback.sql asserts the lock is held.
+     The rollback's set (the functions it may drop or recreate) includes `proxima_auth.m1_frozen_guard()`, whose
+     message names `proxima_auth.users`, and its post-apply md5 is in the compare-and-swap set. It is the one entry
+     that may be absent (M4 dropped it); when present, a different body still aborts (review round 18 #2).
+  0b. **Drop the frozen guard FIRST** (review round 17): `drop trigger if exists app_secrets_m1_frozen` and
+     `app_secrets_m1_frozen_truncate on public.app_secrets`, then `drop function if exists
+     proxima_auth.m1_frozen_guard()`, so the copy-back can write the account rows (IF EXISTS: after M4 they are
+     already gone; the copy-back works either way). DROP TRIGGER takes app_secrets in ACCESS EXCLUSIVE mode until the commit
+     (a fraction of a second: reads wait too); with both owner devices idle no account write is in flight to deadlock
+     with it, and a deadlock would only abort the rollback (nothing half-done).
   1. Copy the owner row back into the frozen app_secrets rows:
      - username, password hash, backup code hash, email and email_verified;
      - `admin_last_verified_at = {at: owner.last_verified_at}` when it is not null;
@@ -534,7 +646,8 @@ after each live step, checked against the per-stage table in §9.1.
      difference: `_verify_session_token` gains a single line that refuses `u:%` subjects with `session token revoked`.
      Without it, the old code would pass a `u:` token through unchecked, and the 7 fall-through functions would act on
      scope `'u:<uuid>'`. With it, those devices are signed out once and sign in again with `admin:` tokens.
-  3. Drop the new functions, the throttle and auth_config tables, `proxima_auth.account`, and `proxima_auth.users`.
+  3. Drop the new functions (the guard went in 0b), the seed snapshot (`m1_seed_snapshot`, IF EXISTS: M4 may have dropped it), the throttle and auth_config tables,
+     `proxima_auth.account`, and `proxima_auth.users`.
      After the copy-back it holds nothing that app_secrets lacks; members are impossible before P5.
 - **Proof** (`scripts/test-mu-p1-rollback-before.sql` + `scripts/test-mu-p1-rollback.sql`, written with M1, plus the RLS
   session's M2 and its rollback). One `sql-tx.mjs` run, all rolled back:
@@ -548,23 +661,35 @@ after each live step, checked against the per-stage table in §9.1.
   It then asserts:
   - every md5 equals the capture, except `_verify_session_token`, which equals the md5 of the documented
     capture-plus-guard text;
-  - no P1 object remains;
+  - no P1 object remains (the frozen guard's function and both triggers included);
+  - for an account untouched between M1 and its rollback, app_secrets (the frozen rows included) is byte-identical to
+    before M1, values and `updated_at`; while M1 is live the guard refuses a frozen-row write, and the copy-back still
+    lands the in-P1 changes (scripts/test-mu-rollback.sql: app-secrets-identical, frozen-guard-on-in-p1, name-copied …);
   - grants are identical;
   - the restored `verify_admin` signs in with the new password under the new name;
   - a token issued before the in-P1 password change is revoked, and the token the change returned is valid;
   - the lockout count reads 2;
-  - email, email_verified and last_verified_at read back as set.
+  - email, email_verified and last_verified_at read back as set;
+  - after M4's drops (both guard triggers, then the guard function, then `m1_seed_snapshot`), M1's rollback still
+    completes: no P1 object remains, bodies and ACLs equal the capture, and an owner-row change made before it is
+    copied back (scripts/test-mu-rollback.sql: m4-drops-guard-and-snapshot, rollback-after-m4-copied-back; review
+    round 18 #2).
 
   The existing suites then run unchanged against the rolled-back state.
 
 ## 8. Concurrency and non-interference notes
-- **Sign-ins of different accounts share no lock.** Each takes its IP row, then its own account row.
-- **The lock order** extends the plan's: IP throttle row → account row → restore marker → tasks → history → favorites →
+- **Sign-ins of different accounts share no lock.** Each takes its IP row, then its own name's advisory lock, then its
+  own account row.
+- **The lock order** extends the plan's: IP throttle row → per-name advisory lock (sign-in and unlock only, every typed
+  name) → account row → restore marker → tasks → history → favorites →
   tombstones → backups. Only rename and the password RPCs take the account row, and none of them is called from a
-  path that already holds the marker. M1 alone takes app_secrets first (§2), once.
+  path that already holds the marker. The throttle check creates the IP row when a key has none yet and locks it, so
+  the IP row is taken first on a key's first attempt too (review round 2 #9); with the throttle `off` no row is
+  taken. Rename and the password RPCs never take the advisory lock, and a sign-in holding it never waits on anything
+  they hold before the account row, so no cycle forms. M1 alone takes app_secrets first (§2), once.
 - **Timeouts:** `anon` has `statement_timeout=3s`. Every sign-in or unlock attempt costs exactly one bcrypt(12) of
-  about 0.25 s (the row's hash or the dummy, never both, never none), blocked IP included. Contention on one account's
-  row only queues that account's own devices.
+  about 0.25 s (the row's hash or the dummy, never both, never none), blocked IP included. Contention on one name's
+  advisory key (or one account's row) only queues attempts at that name, known or not.
 
 ## 9. Test plan
 ### 9.1 `scripts/test-mu-auth.sql`
@@ -577,6 +702,7 @@ Every case uses its own documentation IP so no case trips another's throttle. Ca
 | # | Label(s) | Asserts |
 |---|---|---|
 | 0 | seed | users rows, data rows, the owner snapshot and the auth_config switch. |
+| 0b | signin-lock-every-name / throttle-row-first | verify_admin and unlock_with_backup_code leave this backend holding the per-name advisory lock for an unknown name and for an existing one (none held before); a first-ever right password from a new key leaves its IP throttle row in place (created and locked by the check). |
 | 1 | account-shape / topic-owner-only | get_my_account(A) returns id = A, role member, scope `user:__mu_a`, the old fields, and `sync_topic` null; the owner's (mint_token) has a topic. |
 | 2 | auto-backups-owner-only | A member's get_auto_backups and set_auto_backups(false) raise 42501; the owner's get works. |
 | 3 | signin-B | verify_admin(B) mints `u:<B>.…`, the server's spelling of the name, and current_account → B's scope. |
@@ -584,6 +710,7 @@ Every case uses its own documentation IP so no case trips another's throttle. Ca
 | 5 | lock-A-only / locked-generic | 3 wrong for A → A locked; then A's right and a wrong password give byte-identical `invalid`; B signs in; B's counter is 0. |
 | 6 | unlock-A-only / unlock-revokes-A / unlock-keeps-B | A wrong code counts on A only; the right code + new password unlocks A; A's old token is revoked; B's epoch, counter and token are untouched. |
 | 7 | unlock-generic | An unknown name, C (no code), a wrong code for B and D's (disabled) right code give byte-identical `invalid`; D's row unchanged. |
+| 7b | one-bcrypt-every-input | Review round 16 #1. Member E with cost-12 hashes. verify_admin and unlock_with_backup_code as anon with a NULL and an empty secret on E, a NULL secret on an unknown name and a wrong secret on E: the same `invalid` body, and every call takes at least 40% of the wrong-secret call's time (one cost-12 bcrypt is ~0.29 s; the bug answered in ~6 ms). The NULL and empty attempts still count on E. |
 | 8 | pwchange-A-only / pwchange-revokes-old | A's change revokes A's earlier token and returns a working `u:A` token; B's epoch and token are unchanged. |
 | 9 | reauth-lock-C-only | 3 wrong *current* passwords (Settings) lock C only (`locked`, re-auth keeps it). |
 | 10 | A-never-touches-B | With A's token: delete_queued_rows and clear_queued_rows naming B's ids leave both B rows; delete_my_backup_phase2(B's backup) leaves it; list_my_backups omits it; purge_my_backups_of(B's ids) leaves B's backup snapshot unchanged (md5); restore_my_backup_phase2(B's backup) answers `backup_not_found`; snapshot_my_data_phase2('manual') writes username `user:__mu_a`; set_my_wavespeed_key lands in `user:__mu_a`; nothing lands under `u:%`. |
@@ -618,7 +745,8 @@ follows from it: `relation "proxima_auth.users" does not exist`, `relation "prox
 case that fails early reports only its first label. When everything passes, the line holds 36 labels.
 
 ### 9.2 Gates added with M1/M3
-These live in a sibling `scripts/test-mu-p1-catalog.sql` (and inside M3's precondition block):
+These live in `scripts/test-mu-p1-catalog.sql` (checked in with M1, review round 2 #10; without M1 it prints a skip
+line; the pre-M1 anon/authenticated EXECUTE list is embedded, captured 2026-10-23) and inside M3's precondition block:
 - **Semantic:** every `public` function other than `_verify_session_token` whose body calls
   `_verify_session_token(p_session_token)` also calls `proxima_auth.current_account`.
 - **No fall-through**, case-insensitive: no body matches `(?i)else\s+(\w+\s*:=\s*)?v_subject`.
@@ -626,6 +754,9 @@ These live in a sibling `scripts/test-mu-p1-catalog.sql` (and inside M3's precon
   from M4); in `proxima_auth`, only current_account and session_scope (until M4) and issue_session (until M3);
 - after M3, no body in `public` or `proxima_auth` matches `(?i)'admin:'\s*\|\|`;
 - `has_table_privilege` is false for anon, authenticated and service_role on all three proxima_auth tables;
+- **Frozen guard** (review round 17): `proxima_auth.m1_frozen_guard()` is executable by postgres only (no PUBLIC,
+  anon, authenticated or service_role) with `search_path ''`, and its two triggers on public.app_secrets exist, call
+  it and are enabled (`app_secrets_m1_frozen` tgtype 31, `app_secrets_m1_frozen_truncate` tgtype 34);
 - **Execute:** no function other than verify_admin and unlock_with_backup_code is newly executable by anon or
   authenticated (compared with the pre-M1 ACL snapshot); mint_token, issue_session and current_account are executable
   by postgres only; no new function is executable through PUBLIC.
@@ -639,9 +770,17 @@ These live in a sibling `scripts/test-mu-p1-catalog.sql` (and inside M3's precon
 - **They must change with M1 (fixture lines only, assertions unchanged unless named):**
   - **Swap the owner name in app_secrets** → swap the owner row in `proxima_auth.users` (`username` and `scope`
     together): test-queued-deletes-db.sql:12/77/82, test-paths-in-use-db.sql:13 and test-rls-rename.sql:15.
+  - **No frozen-row write with M1** (review round 17): the frozen guard refuses every write of the 9 account rows, so a
+    suite that still writes one while `proxima_auth.users` exists fails with `55000 app_secrets admin rows are frozen
+    since P1 M1`. Such a write must run only when `to_regclass('proxima_auth.users') is null` (its users-row branch is
+    already there). Measured 2026-10-23 with the guard: test-paths-in-use-db.sql:13 (admin_username),
+    test-queued-deletes-db.sql:12, :82 and :90 (admin_username), test-rls-phase0.sql:85-87 and test-rls-tables.sql:210-212
+    (admin_sessions_valid_after) still write unconditionally and fail with M1 (they pass without it). The first two
+    are P1 fixture files, the last two the RLS session's: open, by message.
   - **Mint `user:<x>` subjects and rely on the fall-through scope** → seed a users row for `<x>` and use
     `proxima_auth.mint_token`: test-backup-scrub-db.sql:137, test-backup-switch-off-db.sql:20 and
-    test-restore-scrub-db.sql:12.
+    test-restore-scrub-db.sql:12. Done with M1 (review round 2 #2/#8), state-agnostic through `to_regclass` and
+    EXECUTE. test-backup-switch-off flips Automatic backups with an owner token, because the switch is owner-only in P1.
   - **`user:` refusal fixtures** (test-paths-in-use-db.sql:39-42, case 3, and test-queued-deletes-db.sql:39-43, case 3)
     expect `insufficient_privilege` (42501) today. The fail-closed verifier answers `malformed session token` (P0001)
     before the function's own check, so the expected outcome changes to "raises `malformed session token`". The
@@ -654,7 +793,8 @@ These live in a sibling `scripts/test-mu-p1-catalog.sql` (and inside M3's precon
     relies on the strict rule; none was found in the files above, and the M1 author re-checks with a grep for
     `valid_after` across `scripts/test-*.sql`.
   - **test-public-execute-db.sql:17-24:** add unlock_with_backup_code to the callers-kept list in M1 (expected count
-    13 → 14). At M4, remove set_admin_credentials_rehash (and unlock_admin_with_backup_code if dropped) and set the
+    13 → 14; done state-agnostically: 14 when `to_regprocedure('public.unlock_with_backup_code(text,text,text)')`
+    exists, 13 before). At M4, remove set_admin_credentials_rehash (and unlock_admin_with_backup_code if dropped) and set the
     count to match.
 - **Robustness edits:** read the owner from `proxima_auth.users where role='owner'` instead of app_secrets
   `admin_username` (correct today, wrong after any rename during P1). Files: test-rls-tables:8, test-rls-phase0:7,
@@ -664,6 +804,21 @@ These live in a sibling `scripts/test-mu-p1-catalog.sql` (and inside M3's precon
 - **Retired:** the historical rollback proofs of already-applied phases (test-rls-phase0-rollback.sql and
   test-rls-rollback{,-before}.sql) drop or rewrite proxima_auth objects. After M1 they are meaningful only after P1's
   own rollback, so they are marked retired rather than kept in the green set.
+
+### 9.4 `scripts/test-mu-frozen-guard.sql` (review round 17; replaces test-mu-recopy.sql)
+One DO block, always rolled back; without M1 it prints a skip line, with M1 (prepended, or applied) all ok. Built by
+the M1 generator's `build-frozen-test.mjs`, which embeds the post-apply check verbatim, the one frozen-key list, the
+guard message and the pre-M1 bodies it runs; `gen.mjs` fails the build when any of them drifts.
+
+| Label | Asserts |
+|---|---|
+| guard-objects | the guard function is a trigger function, `search_path ''`, not security definer, no EXECUTE for PUBLIC, anon, authenticated or service_role; both triggers on public.app_secrets call it, are enabled and have tgtype 31 / 34. |
+| check-same-after-m1 | the check reads `same = true`, no changed key, guard `on`. |
+| frozen-refuse-row-writes | each of the 9 keys refuses an insert, an `on conflict do nothing` insert and an upsert, and an update and a delete where its row exists, with 55000 and the guard's message; renaming a key into the set (session_signing_key → admin_last_verified_at) or out of it (admin_username) is refused. |
+| frozen-refuse-truncate | `truncate public.app_secrets` is refused (lock_timeout 10 s, inside a subtransaction that aborts at once). |
+| others-writable | a scratch key takes insert, update and delete; session_signing_key and auto_backups take an update. |
+| old-body-after-commit | the pre-M1 verify_admin (wrong password), change_my_password (with an owner `admin:` token), set_my_account and unlock_admin_with_backup_code, created verbatim under `pg_temp` scratch names, and the still-live old helper `_revoke_admin_sessions` run after M1, as a call blocked on M1's lock runs after the commit: each raises 55000 at its first app_secrets write, and app_secrets (md5 over keys, values, updated_at) and the owner row are unchanged. |
+| check-same-after-new-code | a stranger's 3 wrong sign-ins (owner locked), unlock_with_backup_code with a new password, a sign-in plus change_my_password, rename_my_account and set_my_account, all new code as anon with tokens: after each the check still reads `same = true` with no changed key. |
 
 ## 10. Risks and open questions
 **Owner ruling, 2026-10-23: all seven recommendations approved** (verbatim: "approve all just get with your partner to

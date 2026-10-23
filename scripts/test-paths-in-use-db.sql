@@ -10,7 +10,11 @@ declare
   base constant text := 'https://x.supabase.co/storage/v1/object/public/generations/';
   v_tok text; r text[];
 begin
-  update app_secrets set value = jsonb_set(value, '{username}', '"__paths_test"') where key = 'admin_username';
+  if to_regclass('proxima_auth.users') is null then   -- from P1's M1 the app_secrets admin rows are frozen; the owner row is the account
+    update app_secrets set value = jsonb_set(value, '{username}', '"__paths_test"') where key = 'admin_username';
+  else
+    execute 'update proxima_auth.users set username = $1, scope = ''user:'' || $1 where role = ''owner''' using '__paths_test';
+  end if;
   v_tok := _sign_session_token('admin:__paths_test', now() + interval '12 hours 5 minutes');
   insert into tasks (id, device_id, status, start_time, source_image_url, outputs) values
     ('pu-t1', u, 'completed', 1000, base || 'uploads/user___paths_test/s1.png', jsonb_build_array(base || 'user___paths_test/o1.png')),
@@ -38,7 +42,9 @@ begin
   begin
     perform paths_in_use(_sign_session_token(u, now() + interval '5 minutes'), array['x']);
     out := out || 'FAIL non-admin; ';
-  exception when insufficient_privilege then out := out || 'ok non-admin; ';
+  exception when insufficient_privilege then out := out || 'ok non-admin; ';   -- before P1's M1 (42501)
+            when raise_exception then                 -- from M1 the verifier fails closed on a non-account subject
+              out := out || case when sqlerrm = 'malformed session token' then 'ok non-admin; ' else format('FAIL non-admin %s; ', sqlstate) end;
             when others then out := out || format('FAIL non-admin %s; ', sqlstate); end;
 
   -- 4. Empty asks answer empty; more than 200 paths are refused.

@@ -7,8 +7,8 @@
 --   with P1:    node scripts/tools/sql-tx.mjs <M1> [<M2 RLS>] [<M3>] --test scripts/test-mu-auth.sql
 --   after P1:   node scripts/tools/sql-tx.mjs --test scripts/test-mu-auth.sql
 -- Expected result per stage: design §9.1 (M1 alone: only scope-header-A fails; M1+M2 onward: all ok).
--- Fixtures: usernames '__mu_a', '__mu_b', '__mu_c', '__mu_d' (disabled); ids 00000000-0000-4000-8000-0000000000a1/b1/
--- c1/d1; task ids 'mu-*'; documentation IPs 192.0.2.x / 198.51.100.x / 203.0.113.x / 2001:db8::/32, one per case so no
+-- Fixtures: usernames '__mu_a', '__mu_b', '__mu_c', '__mu_d' (disabled), '__mu_e' (cost-12 hashes, case 7b only); ids
+-- 00000000-0000-4000-8000-0000000000a1/b1/c1/d1/e1; task ids 'mu-*'; documentation IPs 192.0.2.x / 198.51.100.x / 203.0.113.x / 2001:db8::/32, one per case so no
 -- case trips another's throttle. The owner row is touched only inside this rolled-back block (case 14 moves its epoch
 -- and restores it; case 21 gives it a known cost-4 hash and code). No real hash, key, code or token is selected or
 -- printed; failure details are cut so the result line stays under sb-query's 2000-char cut.
@@ -35,6 +35,8 @@ declare
   ip_x constant text := '{"x-forwarded-for":"192.0.2.46","cf-connecting-ip":"192.0.2.46"}';
   ip_y constant text := '{"x-forwarded-for":"192.0.2.47","cf-connecting-ip":"192.0.2.47"}';
   ip_g constant text := '{"x-forwarded-for":"192.0.2.48","cf-connecting-ip":"192.0.2.48"}';
+  ip_z constant text := '{"x-forwarded-for":"192.0.2.50","cf-connecting-ip":"192.0.2.50"}';
+  ip_z2 constant text := '{"x-forwarded-for":"192.0.2.51","cf-connecting-ip":"192.0.2.51"}';
   ip_bad constant text := '{"x-forwarded-for":"not-an-ip","cf-connecting-ip":"not-an-ip"}';
   ip6_1 constant text := '{"cf-connecting-ip":"2001:db8:0:0::1"}';
   ip6_2 constant text := '{"cf-connecting-ip":"2001:db8:0:0::2"}';
@@ -62,6 +64,45 @@ begin
     ta := proxima_auth.mint_token(a); tb := proxima_auth.mint_token(b); tc := proxima_auth.mint_token(c);
     out := out || case when v_owner_id is not null and v_own_snap is not null then 'ok seed; ' else 'FAIL seed no-owner; ' end;
   exception when others then out := out || format('FAIL seed %s; ', left(sqlerrm, 60)); end;
+
+  -- 0b. Equal locking for every typed name (review #5, the lock-contention timing oracle): verify_admin and
+  --     unlock_with_backup_code take the transaction advisory lock hashtextextended('proxima-signin:'||lower(name), 0)
+  --     before the account lookup, for an unknown name exactly as for an existing one. None of the four keys is held
+  --     before (no earlier case typed these names); each is held by this backend after. Review #9: the IP throttle row
+  --     is created and locked by the check at the start of the attempt, so a first-ever right password from a new key
+  --     leaves the row in place (IP row -> advisory lock -> account row). The probes' counts on A and B are undone.
+  begin
+    perform set_config('request.headers', ip_z, true);
+    select count(*) into n from unnest(array['__mu_adv_nobody', '__mu_a', '__mu_adv_nobody2', '__mu_b']) x, pg_locks l
+     where l.locktype = 'advisory' and l.pid = pg_backend_pid() and l.objsubid = 1
+       and l.classid::bigint = (hashtextextended('proxima-signin:' || lower(x), 0) >> 32) & 4294967295
+       and l.objid::bigint = hashtextextended('proxima-signin:' || lower(x), 0) & 4294967295;
+    set local role anon;
+    r := verify_admin('__mu_adv_nobody', 'whatever-123');
+    r2 := verify_admin('__MU_A', 'wrong-password-adv');
+    r3 := unlock_with_backup_code('__mu_adv_nobody2', 'whatever-code-000000', null);
+    r4 := unlock_with_backup_code('__mu_b', 'not-the-code-adv-0000', null);
+    reset role;
+    update proxima_auth.users set login_failed = 0 where id = a;
+    update proxima_auth.users set backup_failed = 0 where id = b;
+    select count(*) into n2 from unnest(array['__mu_adv_nobody', '__mu_a', '__mu_adv_nobody2', '__mu_b']) x
+     where exists (select 1 from pg_locks l
+                    where l.locktype = 'advisory' and l.pid = pg_backend_pid() and l.objsubid = 1 and l.granted
+                      and l.classid::bigint = (hashtextextended('proxima-signin:' || lower(x), 0) >> 32) & 4294967295
+                      and l.objid::bigint = hashtextextended('proxima-signin:' || lower(x), 0) & 4294967295);
+    out := out || case when n = 0 and n2 = 4 and r->>'reason' = 'invalid' and r2->>'reason' = 'invalid'
+                         and r3->>'reason' = 'invalid' and r4->>'reason' = 'invalid'
+      then 'ok signin-lock-every-name; ' else format('FAIL signin-lock-every-name before=%s after=%s; ', n, n2) end;
+    perform set_config('request.headers', ip_z2, true);
+    s := encode(extensions.hmac('192.0.2.51', (select throttle_key from proxima_auth.auth_config), 'sha256'), 'hex');
+    n := (select count(*) from proxima_auth.signin_throttle where ip_key = s);
+    set local role anon;
+    r := verify_admin('__mu_b', pb);
+    reset role;
+    out := out || case when n = 0 and (r->>'ok')::boolean
+                         and exists (select 1 from proxima_auth.signin_throttle where ip_key = s and failures = 0)
+      then 'ok throttle-row-first; ' else format('FAIL throttle-row-first before=%s %s; ', n, coalesce(r->>'reason', 'ok')) end;
+  exception when others then reset role; out := out || format('FAIL signin-lock-every-name %s; ', left(sqlerrm, 60)); end;
 
   -- 1. get_my_account returns the account's id, role and scope (and still the fields the Account screen reads). In P1
   --    the one sync topic is the owner's: a member gets sync_topic = null, the owner gets the topic.
@@ -171,7 +212,49 @@ begin
       then 'ok unlock-generic; ' else format('FAIL unlock-generic %s|%s|%s; ', left(r::text, 18), left(r2::text, 18), left(r4::text, 18)) end;
   exception when others then reset role; out := out || format('FAIL unlock-generic %s; ', left(sqlerrm, 60)); end;
 
-  -- 8. A's password change bumps only A's epoch: A's old token is revoked, A's new one works, B's token stays valid.
+  -- 7b. Exactly one bcrypt per attempt for EVERY input (review round 16 #1, the NULL-secret timing oracle): verify_admin
+  --     and unlock_with_backup_code called as anon with a NULL and an empty secret on an existing name, a NULL secret
+  --     on an unknown name, and a wrong secret on the existing name answer the same body, and every call takes at least
+  --     40% of the wrong-secret call's time (one bcrypt at cost 12 is ~0.29 s; a skipped bcrypt takes a few ms).
+  --     Fixture '__mu_e' (id ...e1) has cost-12 hashes like the dummy hash and the live owner hashes; its counts are
+  --     undone afterwards.
+  declare
+    e uuid := '00000000-0000-4000-8000-0000000000e1';
+    t0 timestamptz; el numeric[]; bodies jsonb[]; lbl text[] := array['va-null', 'va-empty', 'va-unknown-null', 'va-wrong',
+                                                                        'ub-null', 'ub-empty', 'ub-unknown-null', 'ub-wrong'];
+    bad text := '';
+  begin
+    insert into proxima_auth.users (id, username, role, scope, password_hash, backup_code_hash, sessions_valid_after)
+    values (e, '__mu_e', 'member', 'user:__mu_e', extensions.crypt('mu-pass-E-0005', extensions.gen_salt('bf', 12)),
+            extensions.crypt('mu-backup-code-E-000005', extensions.gen_salt('bf', 12)), 0);
+    perform set_config('request.headers', '{"x-forwarded-for":"192.0.2.52","cf-connecting-ip":"192.0.2.52"}', true);
+    set local role anon;
+    t0 := clock_timestamp(); r := verify_admin('__mu_e', null);                 el[1] := extract(epoch from clock_timestamp() - t0); bodies[1] := r::jsonb;
+    t0 := clock_timestamp(); r := verify_admin('__mu_e', '');                   el[2] := extract(epoch from clock_timestamp() - t0); bodies[2] := r::jsonb;
+    t0 := clock_timestamp(); r := verify_admin('__mu_e_nobody', null);          el[3] := extract(epoch from clock_timestamp() - t0); bodies[3] := r::jsonb;
+    t0 := clock_timestamp(); r := verify_admin('__mu_e', 'wrong-password-E1');  el[4] := extract(epoch from clock_timestamp() - t0); bodies[4] := r::jsonb;
+    t0 := clock_timestamp(); r := unlock_with_backup_code('__mu_e', null, null);            el[5] := extract(epoch from clock_timestamp() - t0); bodies[5] := r::jsonb;
+    t0 := clock_timestamp(); r := unlock_with_backup_code('__mu_e', '', null);              el[6] := extract(epoch from clock_timestamp() - t0); bodies[6] := r::jsonb;
+    t0 := clock_timestamp(); r := unlock_with_backup_code('__mu_e_nobody', null, null);     el[7] := extract(epoch from clock_timestamp() - t0); bodies[7] := r::jsonb;
+    t0 := clock_timestamp(); r := unlock_with_backup_code('__mu_e', 'not-the-code-E-0000', null); el[8] := extract(epoch from clock_timestamp() - t0); bodies[8] := r::jsonb;
+    reset role;
+    for i in 1..8 loop
+      if bodies[i] is distinct from bodies[case when i <= 4 then 4 else 8 end] or bodies[i]->>'reason' is distinct from 'invalid' then
+        bad := bad || lbl[i] || ':body ';
+      end if;
+      if el[i] < 0.4 * el[case when i <= 4 then 4 else 8 end] then
+        bad := bad || format('%s:%sms ', lbl[i], round(el[i] * 1000));
+      end if;
+    end loop;
+    ok := (select login_failed = 3 and login_locked_at is not null and backup_failed = 3 from proxima_auth.users where id = e);
+    update proxima_auth.users set login_failed = 0, login_locked_at = null, backup_failed = 0 where id = e;
+    out := out || case when bad = '' and ok
+      then format('ok one-bcrypt-every-input (va wrong %sms, ub wrong %sms, min %sms); ', round(el[4] * 1000), round(el[8] * 1000),
+                  round((select min(x) from unnest(el) x) * 1000))
+      else format('FAIL one-bcrypt-every-input %s counted=%s (va wrong %sms, ub wrong %sms); ', bad, ok, round(el[4] * 1000), round(el[8] * 1000)) end;
+  exception when others then reset role; out := out || format('FAIL one-bcrypt-every-input %s; ', left(sqlerrm, 60)); end;
+
+  -- 8.A's password change bumps only A's epoch: A's old token is revoked, A's new one works, B's token stays valid.
   begin
     ta_old := proxima_auth.mint_token(a);
     select sessions_valid_after into v_ep from proxima_auth.users where id = b;
@@ -329,6 +412,8 @@ begin
   --     B's token and rows are untouched. After 5 taken answers in the hour, A's next try answers 'rate_limited' even for
   --     a free name; the limit is A's alone (B's try still gets 'username_taken').
   begin
+    -- A row of A's to move (case 10's clear_queued_rows cleared every A row that existed when it was queued).
+    insert into tasks (id, device_id, status, start_time, outputs) values ('mu-a-r', sa, 'completed', 1000, '[]');
     perform set_config('request.headers', ip_u, true);
     set local role anon;
     r := rename_my_account(ta, pa3, '__MU_B');
@@ -337,7 +422,7 @@ begin
     t2 := r2->>'token';
     out := out || case when r->>'reason' = 'username_taken' and (r2->>'ok')::boolean
                          and (select scope = 'user:__mu_a2' and username = '__mu_a2' from proxima_auth.users where id = a)
-                         and exists (select 1 from tasks where id = 'mu-a-1' and device_id = 'user:__mu_a2')
+                         and exists (select 1 from tasks where id = 'mu-a-r' and device_id = 'user:__mu_a2')
                          and (select count(*) from tasks where id in ('mu-b-1', 'mu-b-2') and device_id = sb) = 2
                          and (get_my_account(tb)->>'ok')::boolean and get_my_account(t2)->>'scope' = 'user:__mu_a2'
       then 'ok rename-A-only; ' else format('FAIL rename-A-only %s %s; ', r->>'reason', coalesce(r2->>'reason', 'ok')) end;
