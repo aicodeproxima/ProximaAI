@@ -204,15 +204,17 @@ begin
   exception when sqlstate '28000' then r := r || text 'PASS authenticated no-header insert refused';
             when others then r := r || format('FAIL authenticated no-header insert: %s %s', sqlstate, sqlerrm); end;
 
-  -- H. MUST DENY: revoked (password change / backup unlock bump admin_sessions_valid_after) -> the very next statement fails
+  -- H. MUST DENY: revoked (a password change / backup unlock bumps the epoch: app_secrets admin_sessions_valid_after
+  --    before P1's M1, the owner row from M1, which freezes the app_secrets rows) -> the very next statement fails
   execute 'reset role';
   insert into public.history (id, device_id) values (p || '_history_h', s);   -- a row the revoked update would touch
-  insert into public.app_secrets (key, value)
-    values ('admin_sessions_valid_after', jsonb_build_object('at', extract(epoch from now())::bigint + 60))
-    on conflict (key) do update set value = excluded.value;
   if to_regclass('proxima_auth.users') is not null then   -- from M1 the verifier reads the owner row's epoch
     execute 'update proxima_auth.users set sessions_valid_after = $1 where role = ''owner'''
       using extract(epoch from now())::bigint + 60;
+  else
+    insert into public.app_secrets (key, value)
+      values ('admin_sessions_valid_after', jsonb_build_object('at', extract(epoch from now())::bigint + 60))
+      on conflict (key) do update set value = excluded.value;
   end if;
   execute 'set local role anon';
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);

@@ -9,6 +9,8 @@ declare
   t_good text; t_forged text; t_exp text; t_nonadmin text; v_topic text; v text;
   m0 int; m1 int; pl jsonb; r text[] := '{}';
   msgs int;
+  users_live boolean := to_regclass('proxima_auth.users') is not null;   -- P1's M1 is applied
+  topic_on_users boolean;                                                -- P1's M2 is applied
 begin
   -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
   if to_regclass('proxima_auth.users') is not null then
@@ -82,14 +84,23 @@ begin
   r := r || format('%s writes still land and delete', case when msgs = 0 and exists (select 1 from public.sync_tombstones where id = p || '_t') then 'PASS' else 'FAIL' end);
 
   -- The topic rotates with a password change / backup unlock (valid_after bump); the old token is then revoked too.
-  insert into public.app_secrets (key, value)
-    values ('admin_sessions_valid_after', jsonb_build_object('at', extract(epoch from now())::bigint + 60))
-    on conflict (key) do update set value = excluded.value;
-  if to_regclass('proxima_auth.users') is not null then   -- from M1 the verifier reads the owner row's epoch
+  -- The epoch is app_secrets' admin_sessions_valid_after before P1's M1 and the owner row's from M1 (M1 freezes the
+  -- app_secrets rows: a write raises 55000). sync_topic hashes the owner row only from M2, so in the M1-only window the
+  -- topic stays until M2, and the suite asserts that.
+  topic_on_users := users_live and pg_get_functiondef('proxima_auth.sync_topic()'::regprocedure) ~ 'proxima_auth\.users';
+  if users_live then   -- from M1 the verifier reads the owner row's epoch
     execute 'update proxima_auth.users set sessions_valid_after = $1 where role = ''owner'''
       using extract(epoch from now())::bigint + 60;
+  else
+    insert into public.app_secrets (key, value)
+      values ('admin_sessions_valid_after', jsonb_build_object('at', extract(epoch from now())::bigint + 60))
+      on conflict (key) do update set value = excluded.value;
   end if;
-  r := r || format('%s valid_after bump rotates the topic', case when proxima_auth.sync_topic() <> v_topic then 'PASS' else 'FAIL' end);
+  if users_live and not topic_on_users then
+    r := r || format('%s valid_after bump leaves the topic until M2 (sync_topic still hashes the frozen rows)', case when proxima_auth.sync_topic() = v_topic then 'PASS' else 'FAIL' end);
+  else
+    r := r || format('%s valid_after bump rotates the topic', case when proxima_auth.sync_topic() <> v_topic then 'PASS' else 'FAIL' end);
+  end if;
   execute 'set local role anon';
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
   begin perform proxima_auth.session_scope(false); r := r || text 'FAIL revoked returned';
