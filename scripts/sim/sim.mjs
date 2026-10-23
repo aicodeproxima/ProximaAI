@@ -33,6 +33,18 @@
 //     Reset, and the History delete of an entry a delete emptied), recorded at its queue time once its intents are
 //     queued, took effect: the id is absent from the cloud after quiescence, unless a restore ran after that queue time
 //     (the restore wins: CLAUDE.md "A restore wins over every delete queued before it").
+//  I6 (task B12c; at each external delete and at the end): a generation that is ALIVE never has its files or its
+//     WaveSpeed result deleted. At the delete: "alive" = the cloud holds it (a tasks row or an item of a History entry)
+//     and no user delete removed it (no server delete record, or one a later restore legitimised). At the end (after
+//     quiescence): "alive" = the cloud, any live page's state (tasks or History items) or any browser's IndexedDB holds
+//     it; every file / prediction deleted during the run whose generation is alive then is reported ("I6-end").
+//  I7 (task B12c; at the end): a generation GONE FOR GOOD by a user delete (the server's delete record stands, no restore
+//     legitimised it or removed it after, and nothing holds it any more: cloud, pages, IndexedDB) has its WaveSpeed
+//     result and every file only gone-for-good generations use either deleted or queued (a browser's
+//     proximaai-ws-deletes / proximaai-file-deletes), after quiescence (several flushes and restore-aware passes). Still
+//     held (proximaai-held-purges-v2) or nowhere is reported. "I7-info": a generation whose only delete attempts were
+//     voided or dropped by a restore that then removed it (by_restore): its files stay by design (App.jsx 2382-2385: "a
+//     restore never deletes files, so neither does this").
 //  CRASH: a mirrored flow threw (a real code path that throws, or a mirror bug) - investigated like a violation.
 //  LIVELOCK: quiescence did not finish within its bound.
 import { FakeServer } from "./server.mjs";
@@ -103,6 +115,87 @@ export class Sim {
     this.reloads = [];
     this.seenI1 = new Set();
     this.requests = new Map();  // "task:t1" -> [{ what, at }]: deletes the user asked for (I5)
+    this.extDeletes = [];       // { what: "file" | "ws", key, gens, step } (I6, I7)
+    this.server.onExternalDelete = (what, key, gens) => this.onExternalDelete(what, key, gens);
+  }
+  // ─── I6 at the delete ───
+  standingUserDelete(id) { const r = this.server.delRec.get(`task:${id}`); return !!r && !r.legit; }
+  onExternalDelete(what, key, gens) {
+    this.extDeletes.push({ what, key, gens, step: this.step });
+    const alive = gens.filter(g => this.server.present("task", g) && !this.standingUserDelete(g));
+    if (alive.length) this.violate("I6", `${what === "ws" ? "WaveSpeed result" : "file"} of [${alive}] deleted while the cloud holds ${alive.length > 1 ? "them" : "it"} and no user delete removed ${alive.length > 1 ? "them" : "it"}`);
+  }
+  // Where a generation is alive at the end: "cloud", "page A1#0", "IndexedDB A", or null.
+  aliveWhere(id) {
+    if (this.server.present("task", id)) return "cloud";
+    for (const s of SLOTS) {
+      const p = this.pages[s];
+      if (p.st.tasks.some(t => t.id === id) || p.st.logs.some(l => (l.tasks || []).some(i => i?.id === id))) return `page ${p.label}`;
+    }
+    // A copy only in IndexedDB (no page shows it) of a generation the cloud lacks and holds a task tombstone of (a user's or
+    // a restore's) is a leftover the next load removes (syncReconcile.js planTaskSync: tombstoned and absent), not a kept
+    // generation: e.g. a voided Reset's stored-only give-back (App.jsx 5806) of a generation another device deleted for
+    // good, or a restore removed, before that Reset's void.
+    const tomb = this.server.tomb.get(id);
+    if (this.standingUserDelete(id) || (tomb && tomb.kind === "task")) return null;
+    for (const b of Object.values(this.browsers)) {
+      if (b.idb.tasks.has(id) || [...b.idb.history.values()].some(l => (l.tasks || []).some(i => i?.id === id))) return `IndexedDB ${b.name}`;
+    }
+    return null;
+  }
+  // I6-end and I7 (after quiescence).
+  checkFiles() {
+    const srv = this.server;
+    const reported = new Set();
+    for (const d of this.extDeletes) {
+      const where = d.gens.map(g => [g, this.aliveWhere(g)]).filter(([, w]) => w);
+      const k = `${d.what}:${d.key}`;
+      if (!where.length || reported.has(k)) continue;
+      reported.add(k);
+      this.violate("I6-end", `${d.what === "ws" ? "WaveSpeed result" : "file"} of [${where.map(([g]) => g)}] deleted but the generation is alive after quiescence (${[...new Set(where.map(([, w]) => w.replace(/#\d+/, "")))].join(", ")})`);
+    }
+    // Queues and holds across both browsers.
+    const queued = { ws: new Set(), file: new Set() }, held = { ws: new Set(), file: new Set() };
+    for (const b of Object.values(this.browsers)) {
+      const js = (k) => { try { return JSON.parse(b.ls.getItem(k) || "{}") || {}; } catch { return {}; } };
+      for (const p of Object.keys(js("proximaai-ws-deletes"))) queued.ws.add(p);
+      for (const p of Object.keys(js("proximaai-file-deletes"))) queued.file.add(p);
+      for (const key of ["proximaai-held-purges-v2", "proximaai-held-purges"]) for (const g of Object.values(js(key))) {
+        for (const p of Object.keys(g?.files || {})) held.file.add(p);
+        for (const p of Object.keys(g?.ws || {})) held.ws.add(p);
+      }
+    }
+    const goneForGood = new Map();   // id -> "user" | "restore"
+    for (const key of this.created.keys()) {
+      if (!key.startsWith("task:")) continue;
+      const id = key.slice(5);
+      if (this.aliveWhere(id)) continue;
+      const rec = srv.delRec.get(key), rr = srv.restoreRemoved.get(key);
+      // A user delete that only NAMED an id a restore had already removed (the cloud lost it first: wasPresent false) leaves
+      // the restore as its end.
+      const restoreFirst = rr != null && rec && rec.wasPresent === false && rr <= rec.at;
+      if (rec && !rec.legit && !(rr != null && rr > rec.at) && !restoreFirst) goneForGood.set(id, "user");
+      else if (rr != null && (this.actions.get(key) || []).length) goneForGood.set(id, "restore");
+    }
+    const fate = (kind, k, deleted) => deleted ? null : queued[kind].has(k) ? null : held[kind].has(k) ? "still held" : "neither queued nor held";
+    for (const [pid, e] of srv.preds) {
+      const how = goneForGood.get(e.tid);
+      if (!how) continue;
+      const f = fate("ws", pid, !!e.deleted);
+      if (!f) continue;
+      if (how === "user") this.violate("I7", `the WaveSpeed result of ${e.tid}, deleted for good by the user, is ${f} after quiescence (delete attempts here: [${(this.actions.get(`task:${e.tid}`) || []).join(", ")}])`);
+      else this.violate("I7-info", `the WaveSpeed result of ${e.tid} stays: a restore removed it (by_restore) while its delete was undecided, voided or not yet sent; ${f}`);
+    }
+    for (const [path, f0] of srv.files) {
+      if (!f0.gens.length) continue;
+      const hows = f0.gens.map(g => goneForGood.get(g));
+      if (hows.some(h => !h)) continue;
+      const f = fate("file", path, !!f0.deleted);
+      if (!f) continue;
+      const kind = path.startsWith("uploads/") ? "upload" : "archived output";
+      if (hows.every(h => h === "user")) this.violate("I7", `the ${kind} file of [${f0.gens}], deleted for good by the user, is ${f} after quiescence`);
+      else this.violate("I7-info", `the ${kind} file of [${f0.gens}] stays: a restore removed ${f0.gens.length > 1 ? "one of them" : "it"} (by_restore) while its delete was undecided, voided or not yet sent; ${f}`);
+    }
   }
   newId(prefix) { return `${prefix}${++this.ids}`; }
   trace(s) { if (this.traceOn) this.lines.push(s); }
@@ -206,7 +299,7 @@ export class Sim {
         for (const id of tids) this.created.set(`task:${id}`, { who: page.label });
       })); break;
       case "bulkDel": if (usable) {
-        const c = page.st.tasks.map(t => t.id); if (!c.length) break;
+        const c = page.st.tasks.filter(t => t.status === "completed" || t.status === "failed").map(t => t.id); if (!c.length) break;   // the toolbar selects finished ones (App.jsx 3972)
         const pick = c.filter(() => R() < 0.5); if (!pick.length) pick.push(c[Math.floor(R() * c.length)]);
         await this.run(page, () => page.deleteSelectedTasks(pick));
       } break;
@@ -310,6 +403,7 @@ export class Sim {
   }
   checkEnd() {
     const srv = this.server;
+    this.checkFiles();
     for (const d of this.diffI4()) this.violate("I4", d);
     // I1-end: a user-deleted id still in the cloud after quiescence (the damage stayed).
     for (const [key, rec] of srv.delRec) {
@@ -381,7 +475,7 @@ export async function runOps(ops, { net = "fifo", traceOn = false, quiesce = tru
       sim.lines.push(`# cloud at the end: ${sim.server.describe()}`);
       for (const s of SLOTS) { const p = sim.pages[s]; sim.lines.push(`# ${p.label}: tasks [${p.st.tasks.map(t => t.id)}] History [${p.st.logs.map(l => `${l.id}(${(l.tasks || []).map(i => i.id).join(" ")})`)}]`); }
     }
-    return { violations: sim.violations, lines: sim.lines, server: sim.server, stats: { messages: sim.net.seq, ids: sim.ids, reloads: Object.values(sim.gens).reduce((a, b) => a + b, 0) - SLOTS.length, ...sim.server.counts } };
+    return { violations: sim.violations, lines: sim.lines, server: sim.server, sim, stats: { messages: sim.net.seq, ids: sim.ids, reloads: Object.values(sim.gens).reduce((a, b) => a + b, 0) - SLOTS.length, ...sim.server.counts } };
   } finally {
     Date.now = realNow; Math.random = realRandom;
     CURRENT.browser = null; ACTIVE = null;

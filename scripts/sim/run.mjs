@@ -5,7 +5,8 @@
 //   node scripts/sim/run.mjs --minutes 10 --steps 200 --net all     as many seeds as fit in 10 minutes, every network mode
 //   node scripts/sim/run.mjs --seed 176 --steps 120 --trace         one seed, full trace (no shrinking)
 // Options: --start S (first seed, 1) --net fifo|window|any|all (fifo) --workers K (min(12, cpus-1)) --chunk C (seeds per job, 25)
-// --shrink N (groups to shrink, 8) --budget B (runs per shrink, 300) --json FILE (the summary as JSON).
+// --shrink N (groups to shrink, 8) --budget B (runs per shrink, 300) --json FILE (the summary as JSON)
+// --server v1|v2 (the fake server's rules, v1 = live today; v2 = migration 20261023500000, see server.mjs).
 // Exit code 0 always (it is a search tool); the summary says what was found.
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { cpus } from "node:os";
@@ -17,9 +18,11 @@ const SELF = fileURLToPath(import.meta.url);
 if (!isMainThread) {
   const { runOps, genOps } = await import("./sim.mjs");
   const { shrink, explain } = await import("./shrink.mjs");
+  const { setServerRule } = await import("./server.mjs");
   // A persistent worker: it runs jobs until told to stop (one module graph per worker; storage.js instances are pooled,
   // so memory stays bounded however many seeds it runs). A one-off job comes as workerData.
   const handle = async (job) => {
+  setServerRule(job.server || "v1");
   if (job.mode === "seeds") {
     const out = [], totals = {};
     for (let s = job.from; s < job.to; s++) {
@@ -40,6 +43,7 @@ if (!isMainThread) {
   else parentPort.on("message", async (job) => { if (job === "stop") process.exit(0); parentPort.postMessage(await handle(job)); });
 } else {
   const { signature, NET_MODES } = await import("./sim.mjs");
+  const { SERVER_RULES } = await import("./server.mjs");
   const args = process.argv.slice(2);
   const opt = (name, dflt) => { const i = args.indexOf(`--${name}`); return i >= 0 ? (args[i + 1] ?? true) : dflt; };
   const steps = Number(opt("steps", 200)), start = Number(opt("start", 1)), chunk = Number(opt("chunk", 25));
@@ -49,6 +53,9 @@ if (!isMainThread) {
   const netOpt = String(opt("net", "fifo"));
   const modes = netOpt === "all" ? NET_MODES : [netOpt];
   const shrinkN = Number(opt("shrink", 8)), budget = Number(opt("budget", 300));
+  const server = String(opt("server", "v1"));
+  if (!SERVER_RULES.includes(server)) { console.error(`unknown --server ${server} (${SERVER_RULES.join("|")})`); process.exit(2); }
+  console.log(`server rule ${server}`);
   // Persistent workers for the seed sweep (one per pump); one-off workers for shrink / trace jobs.
   const persistent = () => {
     const w = new Worker(SELF);
@@ -64,14 +71,14 @@ if (!isMainThread) {
   });
 
   if (opt("trace", false)) {
-    const r = await runJob({ mode: "trace", seed: Number(opt("seed", start)), steps, net: modes[0] });
+    const r = await runJob({ mode: "trace", seed: Number(opt("seed", start)), steps, net: modes[0], server });
     console.log(r.text);
     console.log("\n# server log (last 400 events)\n" + r.events.join("\n"));
     process.exit(0);
   }
 
   const t0 = Date.now();
-  const summary = { steps, modes, runs: {}, totals: {}, groups: {}, wallMs: 0 };
+  const summary = { steps, modes, server, runs: {}, totals: {}, groups: {}, wallMs: 0 };
   for (const [mi, net] of modes.entries()) {
     const modeDeadline = minutes ? t0 + (minutes * 60_000 * (mi + 1)) / modes.length : Infinity;
     let next = start;
@@ -83,7 +90,7 @@ if (!isMainThread) {
       while (next < end && Date.now() < modeDeadline) {
         const from = next, to = Math.min(end, next + chunk);
         next = to;
-        const r = await w.run({ mode: "seeds", from, to, steps, net });
+        const r = await w.run({ mode: "seeds", from, to, steps, net, server });
         summary.runs[net] += r.out.length;
         for (const [k, v] of Object.entries(r.totals)) summary.totals[k] = (summary.totals[k] || 0) + v;
         for (const { seed, violations } of r.out) for (const v of violations) {
@@ -103,8 +110,8 @@ if (!isMainThread) {
   const groups = Object.entries(summary.groups).sort((a, b) => b[1].count - a[1].count);
   console.log(`${groups.length} violation signature(s)`);
   for (const [key, g] of groups) console.log(`  ${String(g.count).padStart(5)}  ${key}\n         seeds ${g.seeds.join(",")}`);
-  const picks = groups.filter(([, g]) => g.code !== "I2-info").slice(0, shrinkN);
-  const shrunk = await Promise.all(picks.map(([key, g]) => runJob({ mode: "shrink", seed: g.seed, steps, net: g.net, sig: g.sig, budget })
+  const picks = groups.filter(([, g]) => !g.code.endsWith("-info")).slice(0, shrinkN);   // I2-info, I7-info: by design, not shrunk
+  const shrunk = await Promise.all(picks.map(([key, g]) => runJob({ mode: "shrink", seed: g.seed, steps, net: g.net, sig: g.sig, budget, server })
     .then(r => ({ key, g, r })).catch(e => ({ key, g, err: String(e) }))));
   for (const { key, g, r, err } of shrunk) {
     console.log(`\n════ ${key}\n     seed ${g.seed} (${g.count} hits)`);

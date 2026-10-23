@@ -13,7 +13,8 @@
 // IndexedDB: storage.js's IndexedDB functions cannot run in Node (no `window.indexedDB`), so the few the App flows use
 // (saveTask(s), deleteTasks, addHistoryEntry, deleteHistoryEntries, allStoredTasks, allStoredHistory, getHistory,
 // getCompletedTasks) are mirrored here over a per-browser Map, applied synchronously (blind spot: IndexedDB write order
-// against the awaits around it).
+// against the awaits around it). storage.js storedEvidenceIds (task B12b, the reconcile pass's shared evidence) is given
+// readers over this Map (app.mjs reconcile), so every tab of a browser sees the same store.
 import { libUrl } from "./lib.mjs";
 
 const STORAGE_URL = libUrl("storage.js");

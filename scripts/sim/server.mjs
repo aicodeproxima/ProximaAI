@@ -18,12 +18,33 @@
 //     flipped to by_restore, the marker set at the END, the replaced rows scrubbed (20261023100000:1157-1258);
 //   - the "no tombstone for a rowless id" gap AS IT IS TODAY: delete_queued_rows tombstones a rowless task id only if a
 //     live History item holds it (or a tombstone names it); a rowless History id gets nothing.
+// SERVER RULE (setServerRule, run.mjs --server): "v1" (default) = the live rules above; "v2" = migration
+// 20261023500000_tombstone_rowless_scoped: delete_queued_rows and _clear_kind tombstone EVERY named id without a row
+// (task and History kind; "do nothing" when a tombstone exists), and _clear_kind turns a by_restore tombstone of a named
+// task id into a user one, as delete_queued_rows does. Its scope rules (tombstones per account) need no model here: the
+// sim has one account.
 // Not modelled: RLS/scopes/rename, favorites/settings rows (only the marker), tasks_keep_finished (every task here is
-// completed), outputs/files, WaveSpeed, form holds, id-less legacy History items.
+// completed), form holds (pull_form_holds answers none), id-less legacy History items, ws_deleted_predictions.
+// FILES AND WAVESPEED (task B12c): the bucket `generations` (path -> { owners, deleted }) and WaveSpeed's predictions
+// (prediction id -> { tid, deleted }) are created when a generation starts (outside the network: its upload / submit is
+// not what the simulator searches). The flushes reach them through the modelled calls: predictions_in_use (a tasks row
+// holding the prediction id, supabase.js predictionsInUseRemote), generations_live (20261023100000:937-963: a tasks row,
+// or an item of a History entry without a USER task tombstone), paths_in_use (20261023100000:969-1000: the path inside a
+// tasks row's inputs / outputs or a History entry's source / items), the WaveSpeed delete (POST predictions/delete:
+// answers the ids it deleted now) and the Storage remove (names what it removed) + HEAD (404 once gone). Every delete
+// that runs calls `onExternalDelete` (the simulator's invariant I6).
 //
 // The LEDGER (used by the invariants, scripts/sim/sim.mjs) records every user delete the server performed or was asked
 // to perform for an id (the rowless gap included: a delete call answered "deleted" for a named id), every id a restore
 // brought back, and every id a restore removed.
+
+let RULE = process.env.SIM_SERVER || "v1";
+export const SERVER_RULES = ["v1", "v2"];
+export function setServerRule(r) {
+  if (!SERVER_RULES.includes(r)) throw new Error(`unknown server rule ${r} (${SERVER_RULES.join("|")})`);
+  RULE = r;
+}
+export const serverRule = () => RULE;
 
 const clone = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
 const itemIdsOf = (e) => (Array.isArray(e?.tasks) ? e.tasks.map(i => i?.id).filter(Boolean) : []);
@@ -46,15 +67,78 @@ export class FakeServer {
     this.itemDropped = new Map();    // "task:x" -> at: a user delete removed the History entry that was x's only copy (no row)
     this.restores = [];         // { at, backupId, backupAt }
     this.events = [];           // short human-readable server log (trace)
-    this.counts = { voided: 0, deletes: 0, clears: 0, restores: 0, uploads: 0, backups: 0 };   // coverage of a run
+    this.counts = { voided: 0, deletes: 0, clears: 0, restores: 0, uploads: 0, backups: 0, fileDeletes: 0, wsDeletes: 0 };   // coverage of a run
+    // Task B12c: the bucket and WaveSpeed (see the header). path -> { gens: [generation ids using it], entry: History
+    // entry id or null, deleted: false | { at, by } }; prediction id -> { tid, deleted }.
+    this.files = new Map();
+    this.preds = new Map();
+    this.onExternalDelete = null;   // (what: "file" | "ws", key, gens) => void, set by the simulator (I6)
   }
+  // ─── files and WaveSpeed (task B12c) ───
+  // A generation's batch starts: its upload (shared by the batch and its History entry), each generation's own archived
+  // output (if it has one) and its WaveSpeed prediction exist from now on.
+  registerGeneration(entryId, gens) {
+    for (const g of gens) {
+      for (const p of g.paths || []) {
+        const f = this.files.get(p) || { gens: [], entry: null, deleted: false };
+        if (!f.gens.includes(g.id)) f.gens.push(g.id);
+        if (g.entryPath === p) f.entry = entryId;
+        this.files.set(p, f);
+      }
+      if (g.pred) this.preds.set(g.pred, { tid: g.id, deleted: false });
+    }
+  }
+  // supabase.js predictionsInUseRemote: prediction id -> the id of the tasks row holding it (as [[pid, rowId]]).
+  predictionsInUse(ids) {
+    const want = new Set(ids || []), out = [];
+    for (const t of this.tasks.values()) if (t.taskId && want.has(t.taskId)) out.push([t.taskId, t.id]);
+    return out;
+  }
+  // generations_live (20261023100000:937-963): a tasks row, or an item of a History entry with no USER task tombstone.
+  generationsLive(ids) {
+    return (ids || []).filter(x => x && (this.tasks.has(x) || (this.liveItem(x) && !this.userTomb(x))));
+  }
+  // paths_in_use (20261023100000:969-1000): the path inside a tasks row's inputs / outputs or a History entry's inputs /
+  // items (position(p in ...)).
+  pathsInUse(paths) {
+    const rows = [...this.tasks.values()].map(t => JSON.stringify([t.sourceImageUrl ?? null, t.sourceImageUrls ?? null, t.outputs ?? null, t.endFrameUrl ?? null]));
+    const logs = [...this.history.values()].map(e => JSON.stringify([e.sourceImageUrl ?? null, e.sourceImageUrls ?? null, e.tasks ?? null]));
+    return (paths || []).filter(p => p && [...rows, ...logs].some(s => s.includes(p)));
+  }
+  // POST api/v3/predictions/delete: answers the ids it deleted now (unknown or already deleted: skipped silently).
+  wsDelete(ids) {
+    const out = [];
+    for (const id of ids || []) {
+      const e = this.preds.get(id);
+      if (!e || e.deleted) continue;
+      e.deleted = { at: this.now() };
+      out.push(id);
+      this.counts.wsDeletes++;
+      this.log(`WaveSpeed deleted ${id} (generation ${e.tid})`);
+      this.onExternalDelete?.("ws", id, [e.tid]);
+    }
+    return out;
+  }
+  // storage remove([path]) (names what it removed) and the HEAD of its public URL (404 once gone).
+  storageRemove(path) {
+    const f = this.files.get(path);
+    if (!f || f.deleted) return [];
+    f.deleted = { at: this.now() };
+    this.counts.fileDeletes++;
+    this.log(`storage removed ${path} (generations ${f.gens}${f.entry ? `, entry ${f.entry}` : ""})`);
+    this.onExternalDelete?.("file", path, f.gens.slice());
+    return [path];
+  }
+  headStatus(path) { const f = this.files.get(path); return !f || f.deleted ? 404 : 200; }
   now() { return this.clock.now; }
   log(s) { this.events.push(`[${this.now()}] ${s}`); if (this.events.length > 400) this.events.shift(); }
 
   // ─── ledger ───
-  recordDelete(kind, id, via) {
+  // `wasPresent` (task B12c): whether the cloud held the id when the call ran (false: a delete that only named an id the
+  // cloud had already lost, e.g. to a restore; I7 then counts the restore as its end).
+  recordDelete(kind, id, via, wasPresent = true) {
     if (!id) return;
-    this.delRec.set(`${kind}:${id}`, { at: this.now(), legit: false, via });
+    this.delRec.set(`${kind}:${id}`, { at: this.now(), legit: false, via, wasPresent });
   }
   // Is this id present in the cloud right now? task: a tasks row or an item of a History entry; history: an entry.
   // A client confirmed a delete of these ids for the group queued at `at` (a "deleted" answer, a clear settled by the
@@ -202,6 +286,7 @@ export class FakeServer {
     if (this._voided(queuedAt)) { this.log(`delete_queued_rows ${kind} [${list}] @${queuedAt}: VOIDED (marker ${this.marker})`); return { ok: true, voided: true, deleted: 0 }; }
     let n = 0;
     this.counts.deletes++;
+    const before = new Set(list.filter(id => this.present(kind, id)));
     if (kind === "task") {
       for (const id of list) if (this._deleteTaskRow(id)) n++;
       for (const id of list) {
@@ -210,19 +295,21 @@ export class FakeServer {
       }
       for (const id of list) {
         if (this.tomb.has(id) || this.tasks.has(id)) continue;
-        if (this.liveItem(id)) this.tomb.set(id, { kind: "task", byRestore: false, at: this.now() });
+        if (RULE === "v2" || this.liveItem(id)) this.tomb.set(id, { kind: "task", byRestore: false, at: this.now() });   // v2: every named rowless id
       }
       for (const [hid, e] of [...this.history]) if (itemIdsOf(e).some(x => list.includes(x))) this._touchHistory(hid);
     } else {
       for (const id of list) if (this._deleteHistoryRow(id)) n++;
+      if (RULE === "v2") for (const id of list) if (!this.tomb.has(id) && !this.history.has(id)) this.tomb.set(id, { kind: "history", byRestore: false, at: this.now() });
     }
-    for (const id of list) this.recordDelete(kind, id, "delete_queued_rows");
+    for (const id of list) this.recordDelete(kind, id, "delete_queued_rows", before.has(id));
     this.log(`delete_queued_rows ${kind} [${list}] @${queuedAt}: deleted ${n}`);
     return { ok: true, voided: false, deleted: n };
   }
   // _clear_kind (20261022310000:18-84)
   _clearKind(kind, upto, ids) {
     const named = new Set((ids || []).filter(Boolean));
+    const before = new Set([...named].filter(x => this.present(kind, x)));
     let n = 0;
     if (kind === "task") {
       const gone = [];
@@ -232,6 +319,8 @@ export class FakeServer {
       for (const e of this.history.values()) {
         for (const x of itemIdsOf(e)) if ((e.createdAt <= upto || named.has(x)) && !this.tasks.has(x)) orphans.add(x);
       }
+      const itemOrphans = new Set(orphans);   // items of live History entries: present
+      if (RULE === "v2") for (const x of named) if (!this.tasks.has(x)) orphans.add(x);   // v2: named rowless ids too (flip + tombstone)
       for (const o of orphans) {
         const t = this.tomb.get(o);
         if (t && t.kind === "task" && t.byRestore) this.tomb.set(o, { kind: "task", byRestore: false, at: this.now() });
@@ -244,10 +333,12 @@ export class FakeServer {
         if (its.every(x => set.has(x)) && (e.tasks || []).every(i => i?.id)) { this._deleteHistoryRow(hid); this.recordDelete("history", hid, "clear-task-drop"); }
         else this._touchHistory(hid);
       }
-      for (const id of new Set([...gone, ...orphans, ...named])) this.recordDelete("task", id, "clear_kind");
+      const hit = new Set([...gone, ...itemOrphans]);
+      for (const id of new Set([...gone, ...orphans, ...named])) this.recordDelete("task", id, "clear_kind", hit.has(id) || before.has(id));
     } else if (kind === "history") {
       for (const [id, e] of [...this.history]) if (e.createdAt <= upto || named.has(id)) { if (this._deleteHistoryRow(id)) n++; this.recordDelete("history", id, "clear_kind"); }
-      for (const id of named) this.recordDelete("history", id, "clear_kind");
+      if (RULE === "v2") for (const id of named) if (!this.tomb.has(id) && !this.history.has(id)) this.tomb.set(id, { kind: "history", byRestore: false, at: this.now() });
+      for (const id of named) this.recordDelete("history", id, "clear_kind", before.has(id));
     }
     return n;
   }
