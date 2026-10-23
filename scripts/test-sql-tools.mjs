@@ -86,7 +86,7 @@ test("buildApplyScript: quotes the recorded text with a tag the file does not us
 
 // Round 11 R1: a file counts as recorded by version OR name; older unrecorded files are refused unless --allow-old.
 const { planApply, isRefusal, parseArgs: parseApplyArgs, LEGACY_MAX } = await import("./tools/apply-migration.mjs");
-const { transactionControl, parseArgs: parseTxArgs } = await import("./tools/sql-tx.mjs");
+const { transactionControl, checkFiles, splitSql, parseArgs: parseTxArgs } = await import("./tools/sql-tx.mjs");
 const rows = [
   { version: "20261020145422", name: "sync_tombstones" },
   { version: "20261022300000", name: "newest_one" },
@@ -234,6 +234,39 @@ revoke all on function public.f(int) from public;
 select case when true then 1 end;
 comment on function public.f(int) is 'never commits';`;
   assert.equal(transactionControl(sql), null);
+});
+
+// Round 14 T4(a): the begin atomic exemption opened for any CREATE containing "begin atomic" (a view column alias, a
+// table column), so a stray top-level END (it COMMITS) passed. It opens only after a FUNCTION/PROCEDURE header.
+test("transactionControl: begin atomic opens only after a CREATE FUNCTION/PROCEDURE header", () => {
+  assert.equal(transactionControl("create view v as select begin atomic from t; end;"), "end");
+  assert.equal(transactionControl("create table t (begin atomic); end;"), "end");
+  assert.equal(transactionControl("create function f(begin atomic) returns int language sql as $$ select 1 $$; end;"), "end");
+  assert.equal(transactionControl("create or replace function f(a int) returns int language sql\nbegin atomic\n  select a + 1;\nend;"), null);
+  assert.equal(transactionControl("create procedure p() language sql begin atomic insert into t values (1); end; select 1;"), null);
+  assert.equal(transactionControl("create function f() returns table (a int) language sql begin atomic select 1; end;"), null);
+});
+
+// Round 14 T4(b): PREPARE TRANSACTION ends the transaction block too.
+test("transactionControl: prepare transaction refused", () => {
+  assert.equal(transactionControl("select 1; prepare transaction 'x';"), "prepare transaction");
+  assert.equal(transactionControl("PREPARE  TRANSACTION 'x'"), "prepare transaction");
+});
+
+// Round 14 T4(c): main() scanned each file alone but runs them concatenated, so a comment opened in one file and
+// closed in the next hid nothing from the per-file scan but changed what runs.
+test("checkFiles: the concatenated body is scanned and unterminated files are refused", () => {
+  const A = { name: "a.sql", sql: "create table t1(a int);\n/* note" };
+  const B = { name: "b.sql", sql: "*/ commit; insert into t1 values (1);" };
+  assert.match(checkFiles([A, B]), /refused/);
+  assert.match(checkFiles([A, { name: "t.sql", sql: "select 1;" }]), /a\.sql.*inside a comment/);
+  assert.match(checkFiles([{ name: "q.sql", sql: "select 'abc;" }]), /inside a quote/);
+  assert.match(checkFiles([{ name: "e.sql", sql: "select E'abc\\'" }]), /inside a quote/);
+  assert.match(checkFiles([{ name: "d.sql", sql: "do $x$ begin null; end;" }]), /inside a dollar/);
+  assert.match(checkFiles([{ name: "c.sql", sql: "select 1; commit;" }]), /transaction control "commit"/);
+  assert.equal(checkFiles([{ name: "m.sql", sql: "create table a(); -- trailing comment" }, { name: "t.sql", sql: "do $$ begin null; end $$;" }]), null);
+  assert.equal(splitSql("select 1 /* x").open, "comment");
+  assert.equal(splitSql("select 1; -- x").open, null);
 });
 
 test("sql-tx parseArgs: --test required, unknown flags refused", () => {

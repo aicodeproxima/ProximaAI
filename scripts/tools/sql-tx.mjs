@@ -19,8 +19,9 @@ const SB_QUERY = path.join(path.dirname(fileURLToPath(import.meta.url)), "sb-que
 // Splits SQL into top-level code (comments dropped, string literals and identifiers blanked, dollar-quoted bodies
 // replaced by " $$ ") and the dollar-quoted bodies. Same reading as sql-guard.mjs scan() (not exported there):
 // nested block comments, E'..' backslash escapes, no dollar-quote opened inside an identifier.
+// open: null, or "comment" / "quote" / "dollar" when the text ends inside one (round 14 T4c).
 export function splitSql(sql) {
-  let code = "", i = 0;
+  let code = "", i = 0, open = null;
   const bodies = [];
   while (i < sql.length) {
     const c = sql[i], two = sql.slice(i, i + 2);
@@ -30,6 +31,7 @@ export function splitSql(sql) {
       while (j < sql.length && depth > 0) {
         if (sql.startsWith("/*", j)) { depth++; j += 2; } else if (sql.startsWith("*/", j)) { depth--; j += 2; } else j++;
       }
+      if (depth > 0) open = "comment";
       i = j; code += " "; continue;
     }
     if (c === "'" || c === '"') {
@@ -40,23 +42,32 @@ export function splitSql(sql) {
         if (sql[j] === c) { if (sql[j + 1] === c) { j += 2; continue; } break; }
         j++;
       }
+      if (j >= sql.length) open = "quote";
       i = j + 1; code += ` ${c}${c} `; continue;
     }
     const tag = c === "$" && !/[a-z0-9_$\u0080-￿]/i.test(sql[i - 1] || "")
       && /^\$([a-z_\u0080-￿][a-z0-9_\u0080-￿]*)?\$/i.exec(sql.slice(i));
     if (tag) {
       const end = sql.indexOf(tag[0], i + tag[0].length);
+      if (end < 0) open = "dollar";
       bodies.push(sql.slice(i + tag[0].length, end < 0 ? sql.length : end));
       i = end < 0 ? sql.length : end + tag[0].length; code += " $$ "; continue;
     }
     code += c; i++;
   }
-  return { code, bodies };
+  return { code, bodies, open };
 }
 
 // Statements that would end sql-tx's always-abort transaction early and so commit what came before (round 11 R2).
-// SAVEPOINT, RELEASE and ROLLBACK TO keep the transaction open and are allowed.
-const TOP_TX = /^(begin|start\s+transaction|commit|end|rollback(?!\s+(work\s+|transaction\s+)?to\b)|abort)\b/;
+// SAVEPOINT, RELEASE and ROLLBACK TO keep the transaction open and are allowed. PREPARE TRANSACTION ends the block too
+// (round 14 T4b); COMMIT/ROLLBACK PREPARED start with commit/rollback.
+const TOP_TX = /^(begin|start\s+transaction|prepare\s+transaction|commit|end|rollback(?!\s+(work\s+|transaction\s+)?to\b)|abort)\b/;
+
+// Round 14 T4a: a SQL-standard body opens only after a CREATE [OR REPLACE] FUNCTION|PROCEDURE header: "begin atomic"
+// must follow a closing parenthesis with no parenthesis in between (the parameter list or a RETURNS TABLE (...),
+// then routine options such as RETURNS int LANGUAGE sql). A view column alias, a table column or a parameter named
+// "begin atomic" does not open it.
+const ATOMIC_HEADER = /^create (or replace )?(function|procedure)\b[\s\S]*?\)[^()]*?\bbegin atomic\b/;
 
 // Returns the first top-level transaction-control statement in sql ("commit", "end", ...) or null.
 // Dollar-quoted bodies are not scanned (round 12 F2/F6): PostgreSQL refuses transaction control inside DO blocks and
@@ -67,7 +78,7 @@ const TOP_TX = /^(begin|start\s+transaction|commit|end|rollback(?!\s+(work\s+|tr
 // a preceding "begin atomic" is not transaction control. Round 13 B1: the exemption opens only for a segment that
 // starts with CREATE, contains "begin atomic" and is not already closed in that segment (an empty body
 // "begin atomic end"); it covers the body's statements and ends at the first segment that is just "end". Any other
-// top-level "end" (it COMMITS) is refused.
+// top-level "end" (it COMMITS) is refused. Round 14 T4a narrowed the CREATE to a FUNCTION/PROCEDURE header.
 export function transactionControl(sql) {
   const { code } = splitSql(String(sql || "").toLowerCase());
   let atomic = false;
@@ -76,17 +87,35 @@ export function transactionControl(sql) {
     if (atomic && t === "end") { atomic = false; continue; }
     const m = t.match(TOP_TX);
     if (m) return m[0];
-    if (!atomic && /^create\b/.test(t) && /\bbegin atomic\b/.test(t) && !/\bbegin atomic end$/.test(t)) atomic = true;
+    if (!atomic && ATOMIC_HEADER.test(t) && !/\bbegin atomic end$/.test(t)) atomic = true;
   }
   return null;
 }
 
-// files: [{ name, sql }] in run order (migrations first, test last).
+// files: [{ name, sql }] in run order (migrations first, test last). joinFiles is the part between "begin;" and GUARD.
+export function joinFiles(files) {
+  return files.map(f => `-- sql-tx: ${f.name}\n${f.sql.replace(/\s+$/, "")}`).join("\n\n");
+}
+
 export function buildScript(files) {
-  const parts = ["begin;"];
-  for (const f of files) parts.push(`-- sql-tx: ${f.name}\n${f.sql.replace(/\s+$/, "")}`);
-  parts.push(GUARD);
-  return parts.join("\n\n") + "\n";
+  return ["begin;", joinFiles(files), GUARD].join("\n\n") + "\n";
+}
+
+// Returns a refusal message or null. Round 14 T4c: the files run concatenated, so a file must not end inside a
+// comment, a quote or a dollar body (it would swallow the next file's start), and the concatenated body is scanned
+// exactly as buildScript joins it.
+export function checkFiles(files) {
+  for (const f of files) {
+    const { open } = splitSql(f.sql);
+    if (open) return `refused: ${f.name} ends inside a ${open}; it would run into the next file`;
+  }
+  for (const f of files) {
+    const tc = transactionControl(f.sql);
+    if (tc) return `refused: ${f.name} has transaction control "${tc}"; it would end the always-abort transaction and commit`;
+  }
+  const tc = transactionControl(joinFiles(files));
+  if (tc) return `refused: the joined files have transaction control "${tc}"; it would end the always-abort transaction and commit`;
+  return null;
 }
 
 // sb-query wraps errors as "SQL HTTP <status>: <body, cut at 2000 chars>", the body being JSON {"message": "..."}.
@@ -158,10 +187,8 @@ async function main(argv) {
     try { files.push({ name: f, sql: fs.readFileSync(f, "utf8") }); }
     catch (e) { console.error(`cannot read ${f}: ${e.message}`); return 2; }
   }
-  for (const f of files) {
-    const tc = transactionControl(f.sql);
-    if (tc) { console.error(`refused: ${f.name} has transaction control "${tc}"; it would end the always-abort transaction and commit`); return 2; }
-  }
+  const refusal = checkFiles(files);
+  if (refusal) { console.error(refusal); return 2; }
   const tmp = path.join(os.tmpdir(), `sql-tx-${process.pid}-${Date.now()}.sql`);
   fs.writeFileSync(tmp, buildScript(files));
   let r;
