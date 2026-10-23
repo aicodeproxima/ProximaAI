@@ -201,7 +201,7 @@ await test("#3 (p2): a local-only x in an unanswered clear: nothing is sent; a r
   // Review round 24 #1: the void leaves x undecided (still held); the next pass, which read the cloud after the restore,
   // finds x kept here (the give-back) and cancels its held deletes.
   S.releaseHeldPurges(Date.now(), { restoreKnownAt: S.knownRestoreAt(), task: { present: [], local: ["x"], complete: true }, history: { present: [], local: [], complete: true } });
-  assert.equal(mem.has("proximaai-held-purges-v2"), false, "nothing left held");
+  assert.equal(mem.has("proximaai-held-purges-v3"), false, "nothing left held");
   assert.deepEqual([F.dueFileDeletes(S.readFileDeletes(), Date.now() + 1e9), W.dueDeletes(S.readWsDeletes(), Date.now() + 1e9)], [[], []], "with its files and result");
 });
 await test("#3: confirmed -> released into both queues, due now (the previous layout)", () => {
@@ -214,7 +214,7 @@ await test("#3: confirmed -> released into both queues, due now (the previous la
   assert.deepEqual(W.dueDeletes(S.readWsDeletes(), Date.now()).flat(), ["pred-x"]);
   const e = S.readWsDeletes()["pred-x"];
   assert.deepEqual([e.tid, e.attempts, e.running, typeof e.next], ["x", 0, false, "number"]);
-  assert.equal(mem.has("proximaai-held-purges-v2"), false);
+  assert.equal(mem.has("proximaai-held-purges-v3"), false);
 });
 await test("#3: one group, x confirmed and y voided: a shared file stays, y's files stay, x's go once its superseded confirm is decided", () => {
   const T = 20_000;
@@ -240,7 +240,7 @@ await test("#3: a confirm answered before its group's void is final then: its ow
   // Review round 24 #1/#5: y is undecided until a pass after the restore: the cloud holds y (the restore kept it).
   S.releaseHeldPurges(Date.now(), { restoreKnownAt: S.knownRestoreAt(), task: { present: ["y"], local: [], complete: true }, history: { present: [], local: [], complete: true } });
   assert.deepEqual(dueNow(), { files: ["scope/x-out.png"], ws: ["pred-x"] }, "y alive: its files and the shared one stay");
-  assert.equal(mem.has("proximaai-held-purges-v2"), false);
+  assert.equal(mem.has("proximaai-held-purges-v3"), false);
 });
 await test("#3 (p1): another tab's call in flight for x keeps the held items; its 'deleted' at T1 releases its own group only", () => {
   const T1 = 30_000, T2 = 40_000, x = gen("x");
@@ -270,7 +270,7 @@ await test("#3: the restore brought x back (pass releases it): its files and res
   S.sharedDeleteState("task", { cloudIds: new Set(["x"]), sinceSeq: S.confirmSeqNow(), restoreKnownAt: rk, evidence: { present: [], complete: true } });
   S.releaseHeldPurges(Date.now(), { restoreKnownAt: rk, task: { present: ["x"], local: [], complete: true }, history: { present: [], local: [], complete: true } });
   assert.deepEqual(dueNow(), { files: [], ws: [] });
-  assert.equal(mem.has("proximaai-held-purges-v2"), false);
+  assert.equal(mem.has("proximaai-held-purges-v3"), false);
 });
 await test("#3: History-owned paths follow the entry's own History delete (its queue time)", () => {
   const T = 60_000, H = 60_500;

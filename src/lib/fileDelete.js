@@ -81,6 +81,17 @@ export function liveFormPaths(pubs, now) {
   }
   return out;
 }
+// Task B14 (review round 27 #7): the generation ids and prediction ids that live publications of rows not uploaded yet
+// name (form-inputs:<browser>:unsent; storage.js unsentGenerations). Lapsed ones, like lapsed form holds, name nothing.
+export function liveUnsent(pubs, now) {
+  const ids = new Set(), predictions = new Set();
+  for (const p of pubs || []) {
+    if (!p || !Number.isFinite(p.at) || now - p.at > FORM_HOLD_ALIVE_MS) continue;
+    for (const x of Array.isArray(p.ids) ? p.ids : []) if (typeof x === "string" && x) ids.add(x);
+    for (const x of Array.isArray(p.predictions) ? p.predictions : []) if (typeof x === "string" && x) predictions.add(x);
+  }
+  return { ids, predictions };
+}
 // Acted on only once this device's rows are loaded and the first cloud sync merged the other device's: before that,
 // nothing shows which queued paths a kept generation uses again.
 export const fileFlushReady = ({ loaded, synced }) => !!loaded && !!synced;

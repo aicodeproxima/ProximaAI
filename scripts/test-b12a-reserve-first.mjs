@@ -55,7 +55,7 @@ const test = async (name, fn) => {
   finally { Date.now = realNow; cap = Infinity; failKeys.clear(); }
 };
 const need = (mod, name) => { assert.equal(typeof mod[name], "function", `${name} exists`); return mod[name]; };
-const HELD = "proximaai-held-purges-v2", LEGACY = "proximaai-held-purges";
+const HELD = "proximaai-held-purges-v3", LEGACY = "proximaai-held-purges";   // task B14 (round 27 #4): v3
 const BASE = "https://x.supabase.co/storage/v1/object/public/generations/";
 const OLD = Date.now() - 10 * 60 * 1000;
 const gen = (id, extra = {}) => ({ id, taskId: `pred-${id}`, status: "completed", startTime: OLD, outputs: [`${BASE}scope/${id}-out.png`],
@@ -395,11 +395,13 @@ await test("#4: an entry that HAS its own History delete (or an id-less item) st
 });
 
 // ─── 4. #5: a new key, migrated once; a previous build never sees the new holds ───
-await test("#5: holds are written under proximaai-held-purges-v2, never under the previous build's key", () => {
+// Task B14 (review round 27 #4) rewrote this from v2: the holds moved again (THE KEY RULE), so neither older key is written.
+await test("#5: holds are written under proximaai-held-purges-v3, never under a previous build's key", () => {
   assert.ok(S.holdPurgeDeletes(9000, { files: { "scope/a.png": ["a"] } }));
   assert.deepEqual(Object.keys(heldNow()), ["9000"]);
   assert.equal(mem.has(LEGACY), false);
-  assert.match(st, /const HELD_PURGE_KEY = "proximaai-held-purges-v2";/);
+  assert.equal(mem.has("proximaai-held-purges-v2"), false);
+  assert.match(st, /const HELD_PURGE_KEY = "proximaai-held-purges-v3";/);
 });
 await test("#5: the previous key's items move into the new key once (merged), then the old key goes; a refused write keeps them", () => {
   const migrate = need(S, "migrateLegacyHeldPurges");

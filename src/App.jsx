@@ -10,14 +10,14 @@ import { getSession, setSession, clearSession, onSessionExpired } from "./lib/se
 import useUpdateAvailable from "./lib/updateCheck.js";
 import VersionInfo from "./lib/VersionInfo.jsx";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
 import { SNAPSHOT_SLACK_MS, serverNow } from "./lib/serverClock.js";
 import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry as rawSyncHistoryEntry, syncTask as rawSyncTask, syncTasksBatch as rawSyncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch as rawSyncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, serverTimeRemote, deleteHistoryRemote, upsertQueuedHistory as rawUpsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds, taskRowsPresentRemote } from "./lib/supabase.js";
 import { planDeleteStage, ownedPaths, publicUrlOf, pathsInUse, relinkHold, elsewherePurge, entriesWithout } from "./lib/purge.js";
-import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue, sameFormSet } from "./lib/fileDelete.js";
+import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue, sameFormSet, liveUnsent } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
@@ -1511,11 +1511,14 @@ export default function ProximaApp() {
   // are re-applied (S5) and a Reset's favorites come back (S3). Returns { favorites: the local setting restored | null }.
   // `held` (round 17): what an inline voided branch has just put back in memory (the refs do not see it yet), so those
   // versions win: `tasks` (id -> task, also the base its archives re-apply onto) and `logs` (ids).
+  // Task B14 (review round 27 #3): the stashes whose give-back is still being written to IndexedDB (dropped after it).
+  const givingBackRef = useRef(new Set());
   const applyClearStashes = (which, held = {}) => {
     let any = false, favorites = null;
     const heldTasks = held.tasks || new Map(), heldLogs = held.logs || new Set();
     for (const s of readClearStashes()) {
       if (!which(s.at)) continue;
+      if (givingBackRef.current.has(s.at)) continue;   // its give-back is being written; it is dropped after that
       const back = stashGiveBack(s);
       if (!back) continue;   // an intent of this clear is still pending: its own void or confirm decides
       any = true;
@@ -1523,13 +1526,14 @@ export default function ProximaApp() {
       const { tasks, logs } = back;
       const haveTasks = new Set([...tasksRef.current.map(t => t.id), ...heldTasks.keys()]), haveLogs = new Set([...logsRef.current.map(l => l.id), ...heldLogs]);
       const backTasks = tasks.filter(t => !haveTasks.has(t.id)), backLogs = logs.filter(l => !haveLogs.has(l.id));
+      const writes = [];
       if (backTasks.length) {
         setTasks(prev => { const have = new Set(prev.map(t => t.id)); const add = backTasks.filter(t => !have.has(t.id)); return add.length ? [...prev, ...add] : prev; });
-        saveTasks(backTasks);
+        writes.push(saveTasks(backTasks));
       }
       if (backLogs.length) {
         setLogs(prev => { const have = new Set(prev.map(l => l.id)); const add = backLogs.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
-        for (const l of backLogs) addHistoryEntry(l);
+        for (const l of backLogs) writes.push(addHistoryEntry(l));
       }
       reapplyArchives(back.archives, new Map([...heldTasks, ...backTasks.map(t => [t.id, t])]));
       // Task B8b (review round 21 #3): an archive record of a task confirmed deleted after this clear is never re-applied
@@ -1540,7 +1544,12 @@ export default function ProximaApp() {
       // the restore that voided this clear may have removed those generations too, so the next pass that read the cloud
       // after it decides their files and WaveSpeed results (kept if they came back or this browser keeps them).
       applyRelinks([...heldTasks.values(), ...backTasks]);   // task B13a (round 26 #6): relinks already ready, applied to them now
-      dropGivenBackStash(s);   // task B5: the part still pending at a time its ids moved to stays for that one
+      // Task B5: the part still pending at a time its ids moved to stays for that one. Task B14 (review round 27 #3): dropped
+      // only once the give-back is in IndexedDB: until then the stash is this browser's other trace of those generations,
+      // which another tab's pass reads (storedKeptIds) next to IndexedDB (storedEvidenceIds); between the two, neither held
+      // them and that pass could decide a given-back generation gone.
+      givingBackRef.current.add(s.at);
+      Promise.allSettled(writes).then(() => { dropGivenBackStash(s); givingBackRef.current.delete(s.at); });
     }
     if (any) setFailedSyncCount(getFailedSyncs().length);
     return { favorites };
@@ -1814,6 +1823,7 @@ export default function ProximaApp() {
   }
   const draftFormRef = useRef(null);   // the Generate form's inputs, read by flushFileDeletes (declared before draftForm)
   const cloudFormPubRef = useRef(null);   // this browser's last cloud form publication {at, paths} (review wf_ec400a67-988 #6)
+  const cloudUnsentPubRef = useRef(null);   // and of its rows not uploaded yet {at, paths: items} (task B14, review round 27 #5/#7)
   const [failedSyncCount, setFailedSyncCount] = useState(0);
 
   // ─── AUTH HANDLERS ───
@@ -2437,9 +2447,9 @@ export default function ProximaApp() {
         // waiting for a restore's evidence (storage.js heldPurgeRule), when nothing here or in the cloud keeps it.
         const userTaskTombstones = ids.taskTombstones instanceof Set && restoreRemoved ? [...ids.taskTombstones].filter(id => !restoreRemoved.has(id)) : [];
         const evidence = { restoreKnownAt,
-          task: { present: [...(ids.tasks || []), ...(cloudItemIds || [])], local: keptTaskIds, deleted: userTaskTombstones,
+          task: { present: [...(ids.tasks || []), ...(cloudItemIds || [])], local: keptTaskIds, deleted: userTaskTombstones, tombstoned: [...tombT],
             complete: ids.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared },
-          history: { present: [...(ids.history || [])], local: keptLogIds, deleted: ids.historyTombstones instanceof Set ? [...ids.historyTombstones] : [],
+          history: { present: [...(ids.history || [])], local: keptLogIds, deleted: ids.historyTombstones instanceof Set ? [...ids.historyTombstones] : [], tombstoned: [...tombH],
             complete: ids.history instanceof Set && !!shared } };
         if (evidence.task.complete && (remote.history || []).length >= HISTORY_PULL_LIMIT) {
           const candidates = heldGoneCandidates(evidence);
@@ -2983,6 +2993,13 @@ export default function ProximaApp() {
         const live = tids.length ? await generationsLiveRemote(tids) : new Set();
         if (!live) return;
         for (const p of due) if (queue[p]?.tid && live.has(queue[p].tid)) held.push(p);
+        // Task B14 (review round 27 #7): nor one that rows not uploaded yet name, another browser's (its published
+        // form-inputs:<browser>:unsent) or this browser's (its failed-sync queue): that generation may still land, e.g. a
+        // History-only one a voided Reset or Clear Outputs planned from its item. Unreadable: nothing is sent this pass.
+        const pubs = isSupabaseConfigured() ? await pullFormHolds() : [];
+        if (pubs === null) return;
+        const unsent = liveUnsent([...pubs, { at: Date.now(), ...unsentGenerations() }], Date.now());
+        for (const p of due) if (unsent.predictions.has(p) || (queue[p]?.tid && unsent.ids.has(String(queue[p].tid)))) held.push(p);
         if (held.length) writeWsDeletes(holdHeldIds(readWsDeletes(), held, Date.now()));
       }
       // Task B13b (found by the simulator): only ids the checks above saw are sent. The send re-reads the queue, and an id
@@ -3365,10 +3382,18 @@ export default function ProximaApp() {
   useEffect(() => {
     const publish = () => {
       publishFormPaths([...pathsInUse([draftFormRef.current])]);
-      const now = Date.now(), mine = [...new Set([...liveFormPaths(readFormPublications(), now), ...unsentUploadPaths()])];
+      const now = Date.now(), mine = [...liveFormPaths(readFormPublications(), now)];
       if (isSupabaseConfigured() && formPublishDue(cloudFormPubRef.current, mine, now)) {
         syncSetting("form-inputs:" + browserId(), { at: now, paths: mine })
           .then(() => { cloudFormPubRef.current = { at: now, paths: mine }; }).catch(() => {});
+      }
+      // Task B14 (review round 27 #5/#7): this browser's rows not uploaded yet, in their own row (a previous build's tab
+      // rewrites form-inputs:<browser> without them; it never writes this key, which the server treats as a form hold:
+      // kept out of backups, Reset and restores). Paths, generation ids and prediction ids (storage.js unsentGenerations).
+      const un = unsentGenerations(), unItems = [...un.paths, ...un.ids.map(i => `id:${i}`), ...un.predictions.map(p => `p:${p}`)];
+      if (isSupabaseConfigured() && formPublishDue(cloudUnsentPubRef.current, unItems, now)) {
+        syncSetting(`form-inputs:${browserId()}:unsent`, { at: now, paths: un.paths, ids: un.ids, predictions: un.predictions })
+          .then(() => { cloudUnsentPubRef.current = { at: now, paths: unItems }; }).catch(() => {});
       }
     };
     publish();
@@ -3378,7 +3403,7 @@ export default function ProximaApp() {
     const bye = (e) => {
       if (e.persisted) return;
       forgetFormPaths();
-      const now = Date.now(), mine = [...new Set([...liveFormPaths(readFormPublications(), now), ...unsentUploadPaths()])];
+      const now = Date.now(), mine = [...liveFormPaths(readFormPublications(), now)];
       if (isSupabaseConfigured() && cloudFormPubRef.current && !sameFormSet(cloudFormPubRef.current.paths, mine)) {
         setPageExiting(true);
         syncSetting("form-inputs:" + browserId(), { at: now, paths: mine }).catch(() => {});
@@ -5705,7 +5730,14 @@ export default function ProximaApp() {
                       // it back and no purge of its files or result. Never deleting what the owner did not delete wins.
                       const unnamedHistoryOnly = historyOnly.filter(g => !localLogIds.has(g.batchId)).map(g => g.id);
                       if (cr.ok && unnamedHistoryOnly.length) {
-                        const withRow = isSupabaseConfigured() ? await taskRowsPresentRemote(unnamedHistoryOnly) : new Set();
+                        // Task B14 (review round 27 #2): a failed read is retried (a frozen tab or a killed socket resumes)
+                        // before the all-assumed fallback below, which would release the files of a generation whose row
+                        // is still to come.
+                        let withRow = isSupabaseConfigured() ? null : new Set();
+                        for (let i = 0; i < 3 && withRow === null; i++) {
+                          if (i) await new Promise(r => setTimeout(r, 2000));
+                          withRow = await taskRowsPresentRemote(unnamedHistoryOnly);
+                        }
                         const assumedIds = withRow ? unnamedHistoryOnly.filter(id => withRow.has(id)) : unnamedHistoryOnly;
                         const assumedSet = new Set(assumedIds);
                         if (assumedIds.length) { markAssumedConfirms("task-delete", assumedIds, queuedAt); confirmIntents("task-delete", assumedIds, queuedAt, { assumed: true }); }

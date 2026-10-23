@@ -55,7 +55,7 @@ const gen = (id, extra = {}) => ({ id, taskId: `pred-${id}`, status: "completed"
 const pathsOf = (id) => [`scope/${id}-out.png`, `uploads/scope/${id}-src.png`];
 const filesQueued = () => Object.keys(S.readFileDeletes()).sort();
 const wsQueued = () => Object.keys(S.readWsDeletes()).sort();
-const heldNow = () => JSON.parse(mem.get("proximaai-held-purges-v2") || "{}");
+const heldNow = () => JSON.parse(mem.get("proximaai-held-purges-v3") || "{}");
 const heldPaths = () => [...new Set(Object.values(heldNow()).flatMap(g => Object.keys(g.files || {})))].sort();
 const heldWs = () => [...new Set(Object.values(heldNow()).flatMap(g => Object.keys(g.ws || {})))].sort();
 // A reconcile pass's decision step (App.jsx reconcileWithCloud): the evidence its reads give, the restore it knew before them.
@@ -118,7 +118,7 @@ await test("#3 (r24 p1-flight-lapse): A's clear answered, A frozen >60 s, B drop
   A.sharedDeleteState("task", { cloudIds: new Set(), sinceSeq: A.confirmSeqNow(), restoreKnownAt: rk, evidence: { present: [], complete: true } });
   A.releaseHeldPurges();
   assert.deepEqual([filesQueued(), wsQueued()], [pathsOf("x").sort(), ["pred-x"]], "paths and prediction end up queued");
-  assert.equal(mem.has("proximaai-held-purges-v2"), false);
+  assert.equal(mem.has("proximaai-held-purges-v3"), false);
 });
 await test("#3: a pass after the restore decides an owner whose call lapsed and that the cloud lacks, without its confirm (A dead)", async () => {
   const T = 1_800_000_000_000;
@@ -157,7 +157,7 @@ await test("#1 (r24 probe1 A): bulk delete held at T, restoreGuard drops x, the 
   assert.deepEqual([filesQueued(), wsQueued()], [[], []], "that pass decides nothing");
   pass(T + 60_000);                                                         // the next pass: x absent from rows, History, this browser
   assert.deepEqual([filesQueued(), wsQueued()], [pathsOf("x").sort(), ["pred-x"]], "deleted after the pass");
-  assert.equal(mem.has("proximaai-held-purges-v2"), false);
+  assert.equal(mem.has("proximaai-held-purges-v3"), false);
 });
 await test("#1 (r24 probe1 B): the delete answered 'voided' inline, the restore lacked x -> queued after the pass", () => {
   const T2 = 1_761_300_000_000;
@@ -177,7 +177,7 @@ await test("#1: a restore that DID bring x back (a task row, or an item of a res
     S.restoreGuard({ last_restore_at: T + 60_000 });
     pass(T + 60_000, ev);
     assert.deepEqual([filesQueued(), wsQueued()], [[], []], label);
-    assert.equal(mem.has("proximaai-held-purges-v2"), false, `${label}: cancelled`);
+    assert.equal(mem.has("proximaai-held-purges-v3"), false, `${label}: cancelled`);
   }
 });
 await test("#1: a clear stash or a queued upload of x on this browser keeps it alive at the pass", () => {
@@ -219,7 +219,7 @@ await test("#5: the same, but the restore kept L: the shared paths stay (a live 
   S.sharedDeleteState("task", { cloudIds: new Set(), sinceSeq: S.confirmSeqNow(), restoreKnownAt: rk, evidence: { present: [], complete: true } });
   pass(rk, { logs: ["L"] });
   assert.deepEqual([filesQueued(), wsQueued()], [[], ["pred-x"]], "kept while L is alive");
-  assert.equal(mem.has("proximaai-held-purges-v2"), false);
+  assert.equal(mem.has("proximaai-held-purges-v3"), false);
 });
 await test("#5: L alive while x is still undecided: the path is kept at once; L gone while x is superseded: it waits", () => {
   sharedSetup();
@@ -251,7 +251,7 @@ await test("#2/#4 (r24 p2): the file queue write fails at the release -> the fil
   S.releaseHeldPurges();
   assert.equal(filesQueued().length, paths.length, "the next release queues them");
   assert.equal(wsQueued().length, preds.length);
-  assert.equal(mem.has("proximaai-held-purges-v2"), false);
+  assert.equal(mem.has("proximaai-held-purges-v3"), false);
 });
 await test("#2/#4: the WaveSpeed queue write fails -> the predictions stay held, the files go", () => {
   const T = 1_763_100_000_000;
@@ -416,7 +416,8 @@ await test("#1 wiring: the reconcile decides the holds with its evidence after i
   // Task B13a (simulator G): rewritten: the restore's own removals are no longer present (a generation the restore removed
   // did not come back); tombstones are still required read for a complete decision.
   // Task B13b (simulator D): rewritten: each part also carries the ids the cloud says were deleted (`deleted`).
-  assert.match(rec, /task: \{ present: \[\.\.\.\(ids\.tasks \|\| \[\]\), \.\.\.\(cloudItemIds \|\| \[\]\)\], local: keptTaskIds, deleted: userTaskTombstones,\s*complete: ids\.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared \}/);
+  // Task B14 (review round 27 #1): + the tombstones the pass read (rewritten anchor; tested in test-b14-round27.mjs).
+  assert.match(rec, /task: \{ present: \[\.\.\.\(ids\.tasks \|\| \[\]\), \.\.\.\(cloudItemIds \|\| \[\]\)\], local: keptTaskIds, deleted: userTaskTombstones, tombstoned: \[\.\.\.tombT\],\s*complete: ids\.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared \}/);
   assert.match(rec, /history: \{ present: \[\.\.\.\(ids\.history \|\| \[\]\)\], local: keptLogIds, deleted: [^\n]*,\s*complete: ids\.history instanceof Set && !!shared \}/);
   assert.ok(rec.indexOf("const restoreKnownAt = knownRestoreAt();") < rec.indexOf("await Promise.all([pullAllRemoteData(), pullCloudIds()])"), "known before the reads");
 });

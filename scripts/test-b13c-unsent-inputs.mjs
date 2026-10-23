@@ -69,11 +69,15 @@ await test("the file flush classifies such a path as held by a form (never delet
   assert.equal(F.classifyPath("uploads/s/in.png", { owned: new Set(), forms, remote: new Set() }), "form");
 });
 
-await test("wiring: the cloud publication (heartbeat and pagehide) carries the queued uploads' paths", () => {
+// Task B14 (review round 27 #5) rewrote this: the queued uploads' paths are published in their own row
+// (form-inputs:<browser>:unsent, which a previous build's tab never overwrites), not inside form-inputs:<browser>.
+await test("wiring: the cloud publication carries the queued uploads' paths (in the :unsent row)", () => {
   const eff = between("// This tab's Generate form inputs, published for every tab's file flush", "const mediaDuration = url =>");
-  const mine = eff.match(/mine = \[\.\.\.new Set\(\[\.\.\.liveFormPaths\(readFormPublications\(\), now\), \.\.\.unsentUploadPaths\(\)\]\)\]/g) || [];
-  assert.equal(mine.length, 2, "publish() and bye() both add the queued uploads' paths");
-  assert.ok(!/mine = \[\.\.\.liveFormPaths\(readFormPublications\(\), now\)\];/.test(eff), "no publication without them");
+  assert.match(eff, /const un = unsentGenerations\(\)/);
+  assert.match(eff, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths,/);
+  assert.equal(S.unsentGenerations().paths.length, 0, "an empty queue publishes no paths");
+  S.addFailedSync({ kind: "task", id: "t2", data: { id: "t2", sourceImageUrl: url("uploads/s/in.png") } });
+  assert.deepEqual(S.unsentGenerations().paths, ["uploads/s/in.png"]);
 });
 
 await test("wiring: this browser's own flush holds them too", () => {

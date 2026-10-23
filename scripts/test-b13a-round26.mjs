@@ -46,7 +46,7 @@ const test = async (name, fn) => {
 const need = (mod, name) => { assert.equal(typeof mod[name], "function", `${name} exists`); return mod[name]; };
 const BASE = "https://x.supabase.co/storage/v1/object/public/generations/";
 const gen = (id, extra = {}) => ({ id, taskId: `pred-${id}`, status: "completed", startTime: Date.now() - 600_000, outputs: [`${BASE}s/${id}.png`], ...extra });
-const FAILED = "proximaai-failed-syncs", HELD = "proximaai-held-purges-v2", CONFIRMED = "proximaai-confirmed-deletes";
+const FAILED = "proximaai-failed-syncs", HELD = "proximaai-held-purges-v3", CONFIRMED = "proximaai-confirmed-deletes";
 const filesQueued = () => Object.keys(A.readFileDeletes()).sort();
 const wsQueued = () => Object.keys(A.readWsDeletes()).sort();
 const heldNow = () => JSON.parse(mem.get(HELD) || "{}");
@@ -120,7 +120,8 @@ await test("#2: a cleared generation whose row arrives late is deleted again; on
   // App.jsx: a scoped read of the unnamed ids' rows right after the clear decides which are assumed; a failed read
   // assumes all.
   const h = between("const unnamedHistoryOnly = historyOnly.filter(", "const { note: purgedNote }");
-  assert.match(h, /if \(cr\.ok && unnamedHistoryOnly\.length\) \{\s*const withRow = isSupabaseConfigured\(\) \? await taskRowsPresentRemote\(unnamedHistoryOnly\) : new Set\(\);/);
+  // Task B14 (review round 27 #2) rewrote this: the read is retried before the all-assumed fallback (test-b14-round27.mjs).
+  assert.match(h, /if \(cr\.ok && unnamedHistoryOnly\.length\) \{[\s\S]{0,900}?withRow = await taskRowsPresentRemote\(unnamedHistoryOnly\);/);
   assert.match(h, /const assumedIds = withRow \? unnamedHistoryOnly\.filter\(id => withRow\.has\(id\)\) : unnamedHistoryOnly;/);
   assert.match(h, /markAssumedConfirms\("task-delete", assumedIds, queuedAt\); confirmIntents\("task-delete", assumedIds, queuedAt, \{ assumed: true \}\);/);
   assert.match(h, /if \(plainIds\.length\) confirmIntents\("task-delete", plainIds, queuedAt\);/);

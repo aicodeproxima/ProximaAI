@@ -37,7 +37,7 @@ const BASE = "https://x.supabase.co/storage/v1/object/public/generations/";
 const gen = (id) => ({ id, taskId: `pred-${id}`, status: "completed", startTime: Date.now() - 600_000, sourceImageUrl: `${BASE}uploads/scope/${id}-src.png`, outputs: [`${BASE}scope/${id}-out.png`] });
 const filesQueued = () => Object.keys(S.readFileDeletes()).sort();
 const wsQueued = () => Object.keys(S.readWsDeletes()).sort();
-const held = () => JSON.parse(mem.get("proximaai-held-purges-v2") || "{}");
+const held = () => JSON.parse(mem.get("proximaai-held-purges-v3") || "{}");
 const heldPaths = () => Object.values(held()).flatMap(g => Object.keys(g.files || {})).sort();
 // A delete of `x` reserved at T (its files and WaveSpeed result held), then cancelled by a restore.
 const deleteThenVoid = (x, T) => {
@@ -82,7 +82,8 @@ await test("wiring: no put-back cancels holds any more (keepGivenBack removed; e
   assert.ok(!/const keepGivenBack|keepGivenBack\s*\(/.test(src), "keepGivenBack is gone (no definition, no call)");
   assert.ok(!/releaseHeldPurges\([^)]*alive/.test(src), "no release with an alive set");
   const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
-  assert.match(apply, /applyRelinks\(\[\.\.\.heldTasks\.values\(\), \.\.\.backTasks\]\);[^\n]*\n\s*dropGivenBackStash\(s\);/);
+  // Task B14 (review round 27 #3) rewrote the anchor: the stash is dropped after the give-back's IndexedDB writes.
+  assert.match(apply, /applyRelinks\(\[\.\.\.heldTasks\.values\(\), \.\.\.backTasks\]\);[\s\S]*?Promise\.allSettled\(writes\)\.then\(\(\) => \{ dropGivenBackStash\(s\);/);
 });
 
 await test("wiring: a shared IndexedDB copy of an id the cloud tombstones (or this pass removes) is not evidence", () => {

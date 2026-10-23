@@ -581,6 +581,24 @@ export function unsentUploadPaths() {
     return pathsInUse(getFailedSyncs().filter(f => (f?.kind === "task" || f?.kind === "history") && f.data && typeof f.data === "object").map(f => f.data));
   } catch { return new Set(); }
 }
+// Task B14 (review round 27 #5/#7): what this browser's queued, not yet uploaded rows hold, published in its own settings row
+// (App.jsx: form-inputs:<browser>:unsent, a key no previous build writes): their paths, the ids of the generations they
+// carry (task rows and the items of History entries) and those generations' prediction ids. Another device's WaveSpeed
+// flush holds a prediction it names: the generation may still land (a frozen phone's queue) and keep its result.
+export function unsentGenerations() {
+  const ids = new Set(), predictions = new Set();
+  try {
+    for (const f of getFailedSyncs()) {
+      const d = f?.data;
+      if (!d || typeof d !== "object" || (f.kind !== "task" && f.kind !== "history")) continue;
+      for (const g of f.kind === "task" ? [d] : (Array.isArray(d.tasks) ? d.tasks : [])) {
+        if (typeof g?.id === "string" && g.id) ids.add(g.id);
+        if (typeof g?.taskId === "string" && g.taskId) predictions.add(g.taskId);
+      }
+    }
+  } catch {}
+  return { paths: [...unsentUploadPaths()], ids: [...ids], predictions: [...predictions] };
+}
 // One id per browser, shared by its tabs: the key of this browser's cloud form publication (review wf_ec400a67-988 #6).
 export function browserId() {
   try {
@@ -1101,8 +1119,13 @@ export function inFlightIds(kind) {
 // Task B13b (simulator class D) decides an undecided owner "gone" from a user tombstone the pass read (heldPurgeRule) under
 // this key without moving it: a previous build reading it only waits where this one sends (it never cancels such an
 // item), and once sent the item has left the hold.
-const HELD_PURGE_KEY = "proximaai-held-purges-v2";
-const LEGACY_HELD_PURGE_KEY = "proximaai-held-purges";   // rounds 23-24 (a79a43c, d0b3af6): migrated, never written
+// Task B14 (review round 27 #4) applied this rule again: the owner ruling of 2026-10-23 (the restore's own removals are not
+// "present", a voided put-back no longer cancels, IndexedDB copies of tombstoned ids are not kept) makes a previous build
+// (bf37422) CANCEL items this build sends, so the holds moved from v2 to v3; both older keys are migrated and read only
+// as guards (heldDeleteRefs).
+const HELD_PURGE_KEY = "proximaai-held-purges-v3";
+// Previous builds' keys, oldest first: v1 (rounds 23-24: a79a43c, d0b3af6), v2 (rounds 25-26: bf37422, 3d14d8a).
+const LEGACY_HELD_PURGE_KEYS = ["proximaai-held-purges", "proximaai-held-purges-v2"];
 const HISTORY_OWNER = "history:";
 const readHeldPurges = () => {
   try { const v = JSON.parse(localStorage.getItem(HELD_PURGE_KEY) || "{}"); return plainObject(v) ? v : {}; } catch { return {}; }
@@ -1114,8 +1137,11 @@ const writeHeldPurges = (m) => {
 // removes the old key, only once the new key's write was stored (a full localStorage keeps them where they are, for the
 // next start). Idempotent. Runs when this module loads.
 export function migrateLegacyHeldPurges() {
+  for (const key of LEGACY_HELD_PURGE_KEYS) migrateHeldPurgesFrom(key);
+}
+function migrateHeldPurgesFrom(legacyKey) {
   try {
-    const raw = localStorage.getItem(LEGACY_HELD_PURGE_KEY);
+    const raw = localStorage.getItem(legacyKey);
     if (raw == null) return;
     let old = {};
     try { const v = JSON.parse(raw); if (plainObject(v)) old = v; } catch {}
@@ -1133,7 +1159,7 @@ export function migrateLegacyHeldPurges() {
       m[k] = { files, ws, ...(Number.isFinite(h) ? { h } : {}) };
     }
     writeHeldPurges(m);
-    localStorage.removeItem(LEGACY_HELD_PURGE_KEY);
+    localStorage.removeItem(legacyKey);
   } catch {}
 }
 migrateLegacyHeldPurges();
@@ -1528,9 +1554,11 @@ function heldPurgeRule(now, evidence, { probe = null } = {}) {
   const seen = (kind, id) => {
     const e = evidence?.[kind === "task-delete" ? "task" : "history"];
     if (!e || e.complete !== true) return "wait";
-    const s = sets[kind] || (sets[kind] = { present: toIdSet(e.present), local: toIdSet(e.local) });
+    const s = sets[kind] || (sets[kind] = { present: toIdSet(e.present), local: toIdSet(e.local), tomb: toIdSet(e.tombstoned) });
     stored = stored || storedKeptIds();
-    const keptHere = (kind === "task-delete" ? stored.task : stored.history).has(id);
+    // Task B14 (review round 27 #1): a queued upload or a stash's copy of an id the pass read as tombstoned (a user's
+    // delete or the restore's own removal; `tombstoned`) is not kept: the server never inserts a tombstoned id.
+    const keptHere = !s.tomb.has(id) && (kind === "task-delete" ? stored.task : stored.history).has(id);
     const d = s.present.has(id) || s.local.has(id) || keptHere ? "alive" : "gone";
     if (probe) probe(kind, id, d);
     return d;
@@ -1693,9 +1721,11 @@ export function heldDeleteRefs() {
   const paths = new Set(), predictions = new Set();
   // Task B12a (review round 25 #5): the holds a tab still on the previous build wrote under its key after this page's
   // migration guard the flushes too (read only: that build decides them).
-  let legacy = {};
-  try { const v = JSON.parse(localStorage.getItem(LEGACY_HELD_PURGE_KEY) || "{}"); if (plainObject(v)) legacy = v; } catch {}
-  for (const g of [...Object.values(readHeldPurges()), ...Object.values(legacy)]) {
+  const legacy = [];
+  for (const key of LEGACY_HELD_PURGE_KEYS) {
+    try { const v = JSON.parse(localStorage.getItem(key) || "{}"); if (plainObject(v)) legacy.push(...Object.values(v)); } catch {}
+  }
+  for (const g of [...Object.values(readHeldPurges()), ...legacy]) {
     if (!plainObject(g)) continue;
     for (const p of Object.keys(plainObject(g.files) ? g.files : {})) paths.add(p);
     for (const pid of Object.keys(plainObject(g.ws) ? g.ws : {})) predictions.add(pid);

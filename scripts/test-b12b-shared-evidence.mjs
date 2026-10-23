@@ -47,7 +47,7 @@ const BASE = "https://x.supabase.co/storage/v1/object/public/generations/";
 const OLD = Date.now() - 10 * 60 * 1000;
 const gen = (id, extra = {}) => ({ id, taskId: `pred-${id}`, status: "completed", startTime: OLD, outputs: [`${BASE}scope/${id}-out.png`],
   sourceImageUrl: `${BASE}uploads/scope/${id}-src.png`, ...extra });
-const HELD = "proximaai-held-purges-v2";
+const HELD = "proximaai-held-purges-v3";
 const heldNow = () => JSON.parse(mem.get(HELD) || "{}");
 const heldPaths = () => [...new Set(Object.values(heldNow()).flatMap(g => Object.keys(g.files || {})))].sort();
 const heldWs = () => [...new Set(Object.values(heldNow()).flatMap(g => Object.keys(g.ws || {})))].sort();
@@ -63,7 +63,9 @@ const reserve = (S, removed, T) => {
 // shares (IndexedDB: storedEvidenceIds), complete only when every source was read.
 const evidence = (rk, { tasks = [], items = [], restoreRemoved = [], local = [], shared = { task: new Set(), history: new Set() }, logs = [], localLogs = [] } = {}) => ({
   restoreKnownAt: rk,
-  task: { present: [...tasks, ...items, ...(restoreRemoved || [])], local: new Set([...local, ...(shared?.task || [])]), complete: !!restoreRemoved && !!shared },
+  // Task B14 (review round 27 #6): the restore's own removals are read (for `complete`) but are not present, as App builds
+  // it since the owner ruling 2026-10-23 (a generation the restore removed did not come back).
+  task: { present: [...tasks, ...items], local: new Set([...local, ...(shared?.task || [])]), complete: !!restoreRemoved && !!shared },
   history: { present: logs, local: new Set([...localLogs, ...(shared?.history || [])]), complete: !!shared },
 });
 
@@ -131,8 +133,17 @@ await test("#3: a generation the restore brought back History-only (by_restore) 
   // Tombstones unread (restoreRemoved null): incomplete, nothing decided.
   A.releaseHeldPurges(Date.now(), evidence(rk, { restoreRemoved: null }));
   assert.deepEqual([filesQueued(), wsQueued(), heldWs()], [[], [], ["pred-g"]]);
-  A.releaseHeldPurges(Date.now(), evidence(rk, { restoreRemoved: ["g"] }));
-  assert.deepEqual([filesQueued(), wsQueued(), heldWs()], [[], [], []], "kept: the restore's removal is its decision");
+  // Task B14 (review round 27 #6) rewrote the rest: brought back History-only = an item of a cloud History entry (or a
+  // generations_live answer at the cap): kept.
+  A.releaseHeldPurges(Date.now(), evidence(rk, { restoreRemoved: ["g"], items: ["g"] }));
+  assert.deepEqual([filesQueued(), wsQueued(), heldWs()], [[], [], []], "kept: the restore brought it back History-only");
+});
+await test("#3 (owner ruling 2026-10-23): a generation the restore removed (by_restore, no row, no item) is gone: its files and result go", () => {
+  const T = 1_790_000_000_000, g = gen("g");
+  reserve(A, [g], T);
+  A.voidDeleteIntents("task-delete", ["g"], T);
+  A.releaseHeldPurges(Date.now(), evidence(A.knownRestoreAt(), { restoreRemoved: ["g"] }));
+  assert.deepEqual([filesQueued(), wsQueued(), heldWs()], [[`scope/g-out.png`, `uploads/scope/g-src.png`], ["pred-g"], []]);
 });
 await test("#3: a capped History read asks the server about every owner it would call gone (heldGoneCandidates); unanswered, no decision", () => {
   const T = 1_790_000_000_000;
