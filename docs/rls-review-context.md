@@ -24,6 +24,9 @@ Single admin; identity = HMAC session token (public._verify_session_token), not 
   DELETE on tasks/history/settings/favorites/presets. Every app delete goes through the restore-checked SECURITY DEFINER
   RPCs (delete_queued_rows / clear_queued_rows / reset_queued_rows, scoped to the session's device_id); a plain REST
   delete fails with 42501 (HTTP 401) before any policy runs. The strict DELETE policies stay as a second guard.
+- Own-scope rows — supabase/migrations/20261023050000_rls_own_scope_rows.sql (3961a3d, applied 2026-10-23 04:43:16 UTC):
+  every select/update/delete policy uses USING (device_id = session_scope), so a session reads and changes only its own
+  rows; an upsert colliding with another scope's row is refused (42501 "USING expression"), never "rescued".
 - Related: 08e2bb2 (deleteArchivedPath true only when Storage confirms), 1bd2e68 (clear*Remote → {ok, error}).
 
 ## Accepted — do not re-report
@@ -31,8 +34,8 @@ Single admin; identity = HMAC session token (public._verify_session_token), not 
   NULL before the RLS check) while other ids raise 28000. Ids are crypto.randomUUID(); a caller must already know one.
 - An expired-token holder keeps receiving content-free pings until the topic rotates (rename, password change, unlock,
   key rotation). Pings carry nothing.
-- Bucket-wide storage access and other-scope rows readable by the single admin session (rename leaves files in the old
-  folder; the delete flow must reach them). Rows are deleted only by the scoped RPCs, never by a browser role directly.
+- Bucket-wide storage access for a valid session (rename leaves files in the old folder; the delete flow must reach
+  them); P3/P4 add per-account folders. Rows are deleted only by the scoped RPCs, never by a browser role directly.
 - Rolling back phase 0 while the phase-1 client is live stops instant updates; the 20 s / focus reconcile remains.
 - The policies trust session_signing_key: a holder of that key can mint valid sessions (rotation is the remedy).
 - Owner-run maintenance with the service role (scripts/tools/supabase-admin.mjs) bypasses the policies by design.

@@ -75,7 +75,7 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   bucket `generations` are closed by row policies that verify the `x-proxima-session` header on every statement
   (migrations 20261022100000 + 20261022120000). Every data call goes through the supabase.js client, whose fetch adds
   the header (`withSessionHeader`); never add a raw `fetch` to /rest/v1 or /storage/v1 from the browser. Rows are
-  written only into the session's own scope. Public image URLs stay open. Live updates come from a content-free ping
+  written only into the session's own scope, and read or changed only there (20261023050000). Public image URLs stay open. Live updates come from a content-free ping
   (`syncPing.js`), not postgres_changes. New SQL that browser roles run needs a rolled-back test as `anon` WITH a
   minted token in `request.headers` (see scripts/test-rls-*.sql). Details and the outsider view: docs/page-map.md.
 

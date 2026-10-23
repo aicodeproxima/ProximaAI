@@ -33,7 +33,8 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
    behind one row lock.
 3. **Policies admit any valid session.** USING admits "any valid session"; only WITH CHECK pins the scope (migration
    20261022120000). The `generations` storage policies have no folder check. A signed-in member could read, change or
-   delete every row and file.
+   delete every row and file. **Rows FIXED 2026-10-23** (20261023050000, 3961a3d: USING device_id = session_scope, P4's
+   G1 moved forward with the lockdown session's OK); the storage folders (G2) still wait for P3/P4.
 4. **The scope is the username.** It is `'user:<username>'`, which can change:
    - a rename rewrites device_id in every table and races with other devices;
    - archive folders are `user_<name>/…` and uploads are `uploads/user_<name>/…`;
@@ -289,9 +290,10 @@ a device list with "sign out other devices".
 - R2 and R3, SQL:
   - `scripts/test-mu-matrix.sql` runs rolled back, as anon with minted tokens for two seeded accounts, over every table
     × command, storage operation and browser-callable definer function;
-  - `scripts/test-mu-catalog.sql` holds the catalog gates (built 2026-10-23). Today it reads 11 PASS / 2 FAIL by
-    design: G1 (16 row policies admit any valid session) and G2 (4 storage policies lack a folder check) are the walls P4
-    builds. Failing-first with one planted defect per other gate: all 10 predicted FAILs;
+  - `scripts/test-mu-catalog.sql` holds the catalog gates (built 2026-10-23). It read 11 PASS / 2 FAIL by design (G1 =
+    16 row policies admitting any valid session, G2 = 4 storage policies without a folder check). G1 passes since
+    20261023050000 (3961a3d), so it now reads 12 PASS / 1 FAIL until P3/P4 add the folders. Failing-first with one
+    planted defect per other gate: all 10 predicted FAILs;
   - `scripts/test-mu-auth.sql` (P1, lockdown session) covers the per-account lockout, epoch and backup code. The live
     topic stays owner-only until P4 (members get `sync_topic` null); P4's matrix covers the topic per account;
   - the existing test-rls-* and feature suites keep passing unchanged.

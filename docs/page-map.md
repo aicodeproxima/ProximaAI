@@ -111,6 +111,8 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   list → `200 []`; Storage upload/overwrite/remove → HTTP 500 `database error, code: 28000`; public image URL → 200.
   A plain table DELETE, with or without a valid session (since 20261022350000, measured 22:13 UTC), → HTTP 401 `42501
   permission denied for table <t>`: browser roles hold no DELETE; the app deletes only through the restore-checked RPCs.
+  Since 20261023050000 (04:43 UTC 2026-10-23) a valid session sees and changes only its own scope's rows; an upsert
+  colliding with another scope's row → 42501 "new row violates row-level security policy (USING expression)".
 - Edge logs show which build a device runs: `x_client_info` ends in `proxima-rls/1 sess/1` (signed in) or `sess/0`
   (RPCs before sign-in). CORS preflights (`OPTIONS`) never carry it — exclude them. Per-device gate query:
   `node scripts/tools/sb-logs.mjs <start> <end> "select multiIf(log_attributes['request.headers.user_agent'] like
