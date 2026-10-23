@@ -31,16 +31,25 @@ not Supabase Auth.
   rows; an upsert colliding with another scope's row is refused (42501 "USING expression"), never "rescued".
 - P1 M2 (RLS session) — supabase/migrations/20261023200000_mu_p1_scope_topic.sql (applied 2026-10-23 08:21:35 UTC,
   after the lockdown session's M1 20261023100000): session_scope takes the account from proxima_auth.current_account,
-  so 'u:<uuid>' and, until M4, 'admin:<owner name>' tokens both work, and it returns the account's
+  so 'u:<uuid>' tokens work ('admin:<owner name>' ones did too until the lockdown session's M4, 20261023400000,
+  applied 2026-10-23 21:14:04 UTC, ended them; session_scope needed no change), and it returns the account's
   proxima_auth.users.scope (the owner's is still 'user:<name>'); the 28000 wrapper and its messages are unchanged.
   sync_topic hashes the owner row's name and sessions_valid_after + 1: the old text while the owner row has not moved
   since M1, else one rotation that the next reconcile picks up. One topic, the owner's, until P4. Rollback
   supabase/rollback/20261023200000_*.rollback.sql (refuses while M3 is live; M1's rollback refuses while M2 is live).
+- Scoped tombstones (lockdown session) — supabase/migrations/20261023500000_tombstone_rowless_scoped.sql (applied
+  2026-10-23 21:30:50 UTC): a delete or clear records a tombstone for every id it names, in the caller's own scope, even
+  when no row exists; _rows_not_tombstoned (now SECURITY INVOKER) drops an insert or upsert of a tombstoned id only within
+  that scope, and when row security is active and the row's scope is not the session's it returns before its advisory
+  lock, so the RLS check decides. While sync_tombstones' key is (id), a rowless tombstone is inserted on conflict (id) do
+  nothing, so one account can never move another's tombstone. Live probe after the apply: no header 28000, forged token
+  28000, another account 42501, own tombstoned id 0 rows, fresh id 1 row. Test: scripts/test-tombstone-rowless-db.sql.
 - Related: 08e2bb2 (deleteArchivedPath true only when Storage confirms), 1bd2e68 (clear*Remote → {ok, error}).
 
 ## Accepted — do not re-report
-- Tombstone oracle: a sessionless INSERT of a tombstoned id returns 0 rows (BEFORE trigger _rows_not_tombstoned returns
-  NULL before the RLS check) while other ids raise 28000. Ids are crypto.randomUUID(); a caller must already know one.
+- Until P4 changes sync_tombstones' key to (device_id, id): if account A writes a row with an id that account B already
+  tombstoned, A's later delete records no tombstone of its own (its insert yields to B's on conflict (id)), so another
+  of A's devices could upload it again. Ids are crypto.randomUUID(); this needs deliberate id reuse.
 - An expired-token holder keeps receiving content-free pings until the topic rotates (rename, password change, unlock,
   key rotation). Pings carry nothing.
 - Bucket-wide storage access for a valid session (rename leaves files in the old folder; the delete flow must reach
@@ -63,7 +72,7 @@ rollback + test-rls-grants-unchanged.sql. scripts/test-rls-queued-rpcs.sql: the 
 tokens each, a valid token reaches only its own scope, _clear_kind is closed to browser roles (32 checks; failing-first
 with 3 planted defects → 11 FAIL). The other features' SQL tests (scripts/test-*-db.sql: ws-webhook,
 ws-webhook-deleted, backup-scrub, backup-switch-off, history-strip, history-emptied, queued-deletes, paths-in-use,
-public-execute, restore-scrub, scrub-live) must stay green too.
+public-execute, restore-scrub, scrub-live, tombstone-rowless) must stay green too.
 
 ## Rules for reviewers
 Query the live database with `node scripts/tools/sb-query.mjs "<select>"` or `--write -f <file.sql>` (Management API,
