@@ -3,10 +3,10 @@
 //
 //   node scripts/tools/apply-migration.mjs supabase/migrations/<14 digits>_<name>.sql ... [--dry-run] [--allow-old]
 //
-// A file counts as already recorded when its version is recorded with the same name, or, for a file older than the
-// newest recorded version, when its name is recorded under another version: the first migrations were recorded by an
-// older tool under other versions with the same names (round 11 R1). A recorded version with another name, or a
-// recorded name on a file not older than the newest recorded version, is a clash and refused (round 12 F3). A file
+// A file counts as already recorded when its version is recorded with the same name, or, for a legacy file (version
+// <= LEGACY_MAX), when its name is recorded under another version: the first migrations were recorded by an
+// older tool under other versions with the same names (round 11 R1, round 13 B2). A recorded version with another
+// name, or a recorded name on a file newer than LEGACY_MAX, is a clash and refused (round 12 F3). A file
 // that is not recorded but older than the newest recorded version is refused unless --allow-old is given. Any refusal
 // exits 2 before anything is applied, dry run included. Any other flag (a typo such as --dryrun) is refused before the database is touched (R2).
 // Also refuses a file not named <14 digits>_<name>.sql. Its recorded text is dollar-quoted with a tag the file does not
@@ -20,6 +20,9 @@ import { fileURLToPath } from "node:url";
 const SB_QUERY = path.join(path.dirname(fileURLToPath(import.meta.url)), "sb-query.mjs");
 const FLAGS = new Set(["--dry-run", "--allow-old"]);
 export const USAGE = "usage: node scripts/tools/apply-migration.mjs <migration.sql> ... [--dry-run] [--allow-old]";
+// The newest legacy file recorded by the old tool under another version (round 13 B2): by-name matching applies only
+// to files at or below it; every by-name match in the dry run was <= it.
+export const LEGACY_MAX = "20261021171500";
 
 export function parseName(file) {
   const m = /^(\d{14})_([A-Za-z0-9_]+)\.sql$/.exec(path.basename(String(file)));
@@ -45,9 +48,9 @@ export function parseArgs(argv) {
 // is refused, not skipped):
 //   "recorded" by "version": the version is recorded with the same name;
 //   "version-clash": the version is recorded with a different name;
-//   "recorded" by "name": the version is not recorded, the name is, and the file is older than the newest recorded
-//     version (the first migrations were recorded under other versions);
-//   "name-clash": the same, but the file is not older than the newest recorded version;
+//   "recorded" by "name": the version is not recorded, the name is, and the file is a legacy file (version <=
+//     LEGACY_MAX; the first migrations were recorded by the old tool under other versions);
+//   "name-clash": the same, but the file is newer than LEGACY_MAX (round 13 B2);
 //   "refused-old": not recorded and older than the newest recorded version (unless allowOld);
 //   "apply": otherwise.
 // Refusals carry reason; recorded entries carry as = { version, name }; refused-old carries newest.
@@ -69,7 +72,7 @@ export function planApply(files, recordedRows, { allowOld = false } = {}) {
     }
     const n = byName.get(f.name);
     if (n) {
-      if (f.version < newest) return { ...f, action: "recorded", by: "name", as: n };
+      if (f.version <= LEGACY_MAX) return { ...f, action: "recorded", by: "name", as: n };
       return { ...f, action: "name-clash", as: n,
         reason: `name-clash: ${f.name} is already recorded as ${n.version}; rename the file` };
     }

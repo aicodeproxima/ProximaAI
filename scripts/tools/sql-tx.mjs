@@ -64,16 +64,19 @@ const TOP_TX = /^(begin|start\s+transaction|commit|end|rollback(?!\s+(work\s+|tr
 // with "begin;", so a body COMMIT cannot commit. Scanning them only refused valid SQL (commit/rollback words inside
 // dollar-quoted literals such as comment on ... is $c$...$c$).
 // A SQL-standard function body "begin atomic ... end" is part of its CREATE statement: the top-level "end" that closes
-// a preceding "begin atomic" is not transaction control.
+// a preceding "begin atomic" is not transaction control. Round 13 B1: the exemption opens only for a segment that
+// starts with CREATE, contains "begin atomic" and is not already closed in that segment (an empty body
+// "begin atomic end"); it covers the body's statements and ends at the first segment that is just "end". Any other
+// top-level "end" (it COMMITS) is refused.
 export function transactionControl(sql) {
   const { code } = splitSql(String(sql || "").toLowerCase());
   let atomic = false;
   for (const s of code.split(";")) {
-    const t = s.trim();
-    if (atomic && /^end\b/.test(t)) { atomic = false; continue; }
+    const t = s.trim().replace(/\s+/g, " ");
+    if (atomic && t === "end") { atomic = false; continue; }
     const m = t.match(TOP_TX);
-    if (m) return m[0].replace(/\s+/g, " ");
-    if (/\bbegin\s+atomic\b/.test(t)) atomic = true;
+    if (m) return m[0];
+    if (!atomic && /^create\b/.test(t) && /\bbegin atomic\b/.test(t) && !/\bbegin atomic end$/.test(t)) atomic = true;
   }
   return null;
 }

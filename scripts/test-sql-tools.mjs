@@ -85,7 +85,7 @@ test("buildApplyScript: quotes the recorded text with a tag the file does not us
 });
 
 // Round 11 R1: a file counts as recorded by version OR name; older unrecorded files are refused unless --allow-old.
-const { planApply, isRefusal, parseArgs: parseApplyArgs } = await import("./tools/apply-migration.mjs");
+const { planApply, isRefusal, parseArgs: parseApplyArgs, LEGACY_MAX } = await import("./tools/apply-migration.mjs");
 const { transactionControl, parseArgs: parseTxArgs } = await import("./tools/sql-tx.mjs");
 const rows = [
   { version: "20261020145422", name: "sync_tombstones" },
@@ -123,6 +123,22 @@ test("planApply: isRefusal marks every refusal; recorded and apply are not refus
     f("20261022300000", "newest_one"), f("20261023100000", "z")], rows);
   assert.deepEqual(plan.map(x => x.action), ["refused-old", "version-clash", "recorded", "name-clash", "apply"]);
   assert.deepEqual(plan.map(x => isRefusal(x)), [true, true, false, true, false]);
+});
+
+// Round 13 B2: by-name matching applied to any file older than the newest recorded version; it is only for the legacy
+// files (<= LEGACY_MAX) the old tool recorded under other versions.
+test("planApply: by-name matching covers only legacy files (<= LEGACY_MAX)", () => {
+  const rows2 = [{ version: "20261020213801", name: "legacy_pair" }, { version: "20261022300000", name: "newer_one" },
+    { version: "20261023500000", name: "newest_one" }];
+  const [a] = planApply([f("20261023010000", "newer_one")], rows2);
+  assert.equal(a.action, "name-clash");
+  assert.equal(a.reason, "name-clash: newer_one is already recorded as 20261022300000; rename the file");
+  const [b] = planApply([f("20261020214000", "legacy_pair")], rows2);
+  assert.equal(b.action, "recorded"); assert.equal(b.by, "name");
+  assert.deepEqual(b.as, { version: "20261020213801", name: "legacy_pair" });
+  assert.equal(LEGACY_MAX, "20261021171500");
+  assert.equal(planApply([f(LEGACY_MAX, "legacy_pair")], rows2)[0].action, "recorded");
+  assert.equal(planApply([f("20261021171501", "legacy_pair")], rows2)[0].action, "name-clash");
 });
 
 test("planApply: an unrecorded file older than the newest recorded version is refused", () => {
@@ -185,6 +201,20 @@ test("transactionControl: a SQL-standard begin atomic ... end body is part of it
   assert.equal(transactionControl(sql), null);
   assert.equal(transactionControl("create procedure p() language sql begin atomic insert into t values (1); insert into t values (2); end; end;"), "end");
   assert.equal(transactionControl(sql + "\ncommit;"), "commit");
+});
+
+// Round 13 B1: any segment containing "begin atomic" opened the exemption, so an empty body (closed in its own segment)
+// or a "begin atomic" outside a CREATE let the next top-level "end;" (which COMMITS) through.
+test("transactionControl: the begin atomic exemption opens only for a CREATE with an unclosed body", () => {
+  assert.equal(transactionControl("create function f() returns void language sql begin atomic end; end;"), "end");
+  assert.equal(transactionControl("select begin atomic from (select 1 as begin) s; end;"), "end");
+  assert.equal(transactionControl("create or replace function f() returns int language sql begin atomic select 1; select 2; end;"), null);
+  assert.equal(transactionControl("create function f() returns void language sql begin atomic end;"), null);
+  assert.equal(transactionControl("end;"), "end");
+  // a first body statement ending in a case..end expression does not close the body
+  assert.equal(transactionControl("create function f(x int) returns int language sql begin atomic select case when x > 0 then 1 else 2 end; end; select 1;"), null);
+  // the exemption ends at the first bare "end"
+  assert.equal(transactionControl("create function f() returns int language sql begin atomic select 1; end; select 2; end;"), "end");
 });
 
 test("transactionControl: top-level commit, end and begin..commit stay refused", () => {
