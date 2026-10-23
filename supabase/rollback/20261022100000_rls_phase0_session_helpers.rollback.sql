@@ -30,3 +30,7 @@ drop function if exists proxima_auth.sync_topic();
 drop function if exists proxima_auth.session_scope(boolean);
 alter default privileges for role postgres in schema proxima_auth grant execute on functions to public;
 drop schema if exists proxima_auth;
+
+-- The migration's own record goes with it, in the same transaction: a later apply-migration then
+--   re-applies the migration instead of answering "already recorded" (lockdown session's M3 review, 2026-10-23).
+delete from supabase_migrations.schema_migrations where version = '20261022100000' and name = 'rls_phase0_session_helpers';

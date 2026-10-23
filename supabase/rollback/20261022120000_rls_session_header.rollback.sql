@@ -29,3 +29,7 @@ create policy "Anon upload generations" on storage.objects for insert to anon wi
 create policy "Anon update generations" on storage.objects for update to anon using (bucket_id = 'generations');
 create policy "Anon delete generations" on storage.objects for delete to anon using (bucket_id = 'generations');
 alter publication supabase_realtime add table public.tasks, public.history;
+
+-- The migration's own record goes with it, in the same transaction: a later apply-migration then
+--   re-applies the migration instead of answering "already recorded" (lockdown session's M3 review, 2026-10-23).
+delete from supabase_migrations.schema_migrations where version = '20261022120000' and name = 'rls_session_header';

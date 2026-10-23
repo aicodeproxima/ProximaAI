@@ -5,6 +5,7 @@
 --   1) session_scope and sync_topic recreated from their pre-M2 pg_get_functiondef text, verbatim (captured 2026-10-23
 --      from the live database by a script, not retyped);
 --   2) post-check: both md5s equal the pre-M2 capture and the grants are unchanged.
+--   3) the migration's own schema_migrations record is deleted (a later apply-migration re-applies M2).
 -- Order (design §7): M4 -> M3 -> this -> M1b -> M1 (M1's rollback refuses while this migration is live).
 -- Proof: scripts/test-mu-scope-topic-rollback.sql.
 
@@ -95,3 +96,7 @@ begin
     raise exception 'M2 rollback: grants changed';
   end if;
 end $post$;
+
+-- ── 3. The migration's own record goes with it, in the same transaction: a later apply-migration then
+--   re-applies the migration instead of answering "already recorded" (lockdown session's M3 review, 2026-10-23).
+delete from supabase_migrations.schema_migrations where version = '20261023200000' and name = 'mu_p1_scope_topic';

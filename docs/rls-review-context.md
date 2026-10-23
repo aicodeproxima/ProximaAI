@@ -57,7 +57,8 @@ checks: both token formats, two accounts' rows, the topic; failing-first with M1
 test-mu-scope-topic-rollback.sql (13), with scripts/fixtures/mu-owner-{unlock,rename}.sql moving the owner between M1
 and M2 (M2 must still apply); rollback proof =
 test-rls-rollback-before.sql + phase-2 migration + its rollback + test-rls-rollback.sql in ONE call;
-test-rls-phase0-rollback.sql likewise; the DELETE revoke's = test-rls-rollback-before.sql + 20261022350000 + its
+test-rls-phase0-rollback.sql likewise; for an applied migration the order is before + its rollback + the migration + test-rls-grants-unchanged.sql (the pre-apply
+form: before + migration + rollback); the DELETE revoke's = test-rls-rollback-before.sql + 20261022350000 + its
 rollback + test-rls-grants-unchanged.sql. scripts/test-rls-queued-rpcs.sql: the restore-checked delete RPCs refuse 6 bad
 tokens each, a valid token reaches only its own scope, _clear_kind is closed to browser roles (32 checks; failing-first
 with 3 planted defects → 11 FAIL). The other features' SQL tests (scripts/test-*-db.sql: ws-webhook,

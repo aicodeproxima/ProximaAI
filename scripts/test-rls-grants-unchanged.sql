@@ -1,5 +1,6 @@
 -- Exact-inverse check for a grants/policies migration and its rollback. Send as ONE query (all rolled back):
 --   scripts/test-rls-rollback-before.sql + <migration> + <its rollback> + this file
+--   For a migration that is already applied, the other order: before + <its rollback> + <migration> + this file.
 -- Compares the policies, table grants and Realtime publication captured before with the state after.
 do $pt$
 declare snap text; r text[] := '{}';
