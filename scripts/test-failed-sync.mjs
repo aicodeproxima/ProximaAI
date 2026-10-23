@@ -7,7 +7,8 @@ globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setI
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
   restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload, pendingDeleteIds, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads,
   buildClearStash, writeClearStash, readClearStashes, dropClearStash, stashedItems, allStoredHistory, allStoredTasks,
-  intentsPendingAt, readClearStash, stashGiveBack, forgetStashedIds, recordStashArchive, stashArchivePaths } = await import("../src/lib/storage.js");
+  intentsPendingAt, readClearStash, stashGiveBack, forgetStashedIds, recordStashArchive, stashArchivePaths,
+  chainStashFavorites, chainedFavoritesBefore, moveClearStash, clearLogsStash } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -480,6 +481,144 @@ test("round 15 S5: confirm returns a held archive's paths; a void gives it back;
   assert.deepEqual(readClearStash(200).archives.b.paths, ["pb"]);
   dropClearStash(200);
   assert.deepEqual(stashGiveBack(readClearStash(100)).orphanPaths, ["pb"]);
+});
+
+// Review round 16 #5: two unanswered Resets in a row (the toast asks for the second), both voided by one restore, left the
+// favorites empty and stamped with the first reset's time. Reset B read its favoritesBefore from the refs A had emptied,
+// and settleClearStashes dropped A's stash once its ids had moved to B (queueDeleteIntents re-queues an id at the newer
+// time). This replays the critic's reproduction (r16-correctness/fav.mjs) with the real helpers; the App.jsx parts
+// (restoreStashedFavorites' condition, the applyClearStashes loop, settleClearStashes) are mirrored as they now read.
+const favoritesRig = () => {
+  const ref = { byType: { image: ["m1", "m2"] }, updatedAt: 500, setting: { byType: { image: ["m1", "m2"] }, updatedAt: 500 },
+    queued: [{ kind: "model-favorites", id: "user:o", data: { updatedAt: 500 } }] };
+  const restoreStashedFavorites = (fav) => {
+    if (!fav || !(fav.resetAt > 0) || ref.updatedAt !== fav.resetAt) return null;
+    ref.byType = fav.byType; ref.updatedAt = fav.updatedAt || 0; ref.setting = fav.setting; putBackQueuedUploads(fav.queued || []);
+    return fav;
+  };
+  const applyClearStashes = (which) => {
+    for (const s of readClearStashes()) {
+      if (!which(s.at)) continue;
+      const back = stashGiveBack(s);
+      if (!back) continue;
+      putBackQueuedUploads(back.uploads);
+      restoreStashedFavorites(back.favorites);
+      dropClearStash(s.at);
+    }
+  };
+  const settleClearStashes = () => {
+    const queued = new Set([...intentGroups("task-delete"), ...intentGroups("history-delete")].map(([ts]) => ts));
+    for (const s of readClearStashes()) if (!queued.has(s.at)) {
+      if (moveClearStash(s.at)) continue;
+      dropClearStash(s.at);
+    }
+  };
+  // App.jsx Reset: favoritesBefore (chained), the local reset, the stash, the take, the intents.
+  const reset = (at, cloudIds, { uploads = [] } = {}) => {
+    const before = chainedFavoritesBefore({ byType: ref.byType, updatedAt: ref.updatedAt, queued: getFailedSyncs().filter(e => e.kind === "model-favorites"), setting: ref.setting }, "user:o");
+    ref.byType = { image: [] }; ref.updatedAt = at; ref.setting = { byType: { image: [] }, updatedAt: at };
+    removeFailedSync("model-favorites", "user:o");
+    writeClearStash(at, { ...buildClearStash({ uploads }), favorites: { scope: "user:o", byType: before.byType, updatedAt: before.updatedAt,
+      setting: before.setting ?? null, queued: before.queued, resetAt: at } });
+    takeQueuedUploads("history", uploads.map(e => e.id));
+    queueDeleteIntents("task-delete", cloudIds, at);
+  };
+  return { ref, reset, applyClearStashes, settleClearStashes };
+};
+test("round 16 #5: two Resets voided together give back the original favorites (both stashes given back)", () => {
+  const rig = favoritesRig();
+  addFailedSync({ kind: "model-favorites", id: "user:o", data: { updatedAt: 500 } });
+  rig.reset(1000, ["t1", "t2"]);
+  queueDeleteIntents("task-delete", ["local-only"], 1000);   // A keeps an intent of its own: both stashes stay
+  rig.reset(2000, ["t1", "t2"]);
+  assert.equal(readClearStash(2000).favorites.updatedAt, 500, "B's stash carries A's favoritesBefore, not A's emptied state");
+  assert.deepEqual(readClearStash(2000).favorites.byType, { image: ["m1", "m2"] });
+  assert.equal(readClearStash(2000).favorites.resetAt, 2000, "resetAt is the new reset's time");
+  assert.deepEqual(readClearStash(2000).favorites.queued.map(e => e.id), ["user:o"], "A's queued upload entry travels with it");
+  rig.settleClearStashes();
+  assert.deepEqual(readClearStashes().map(s => s.at), [1000, 2000], "both pending: both kept");
+  dropDeleteIntentsBefore(3000);
+  rig.applyClearStashes(at => at < 3000);
+  assert.deepEqual(rig.ref.byType, { image: ["m1", "m2"] });
+  assert.equal(rig.ref.updatedAt, 500, "the original favorites at their original updatedAt");
+  assert.deepEqual(getFailedSyncs().filter(e => e.kind === "model-favorites").map(e => e.data.updatedAt), [500], "the queued upload is back, once");
+  assert.deepEqual(readClearStashes(), []);
+});
+test("round 16 #5: a Reset whose ids all moved to a pending Reset moves its stash there instead of being dropped", () => {
+  const rig = favoritesRig();
+  addFailedSync({ kind: "history", id: "h1", data: { id: "h1" } });
+  rig.reset(1000, ["t1", "t2"], { uploads: peekQueuedUploads(["history"]) });
+  writeClearStash(1000, { ...readClearStash(1000), tasks: [{ id: "loc" }], archives: { t1: { task: { id: "t1" }, paths: ["p1"] } } });
+  rig.reset(2000, ["t1", "t2"]);   // B's cloud read still held t1, t2: A's intents moved to 2000
+  assert.equal(intentsPendingAt(1000), false);
+  assert.deepEqual(readClearStash(1000).movedTo, [2000], "the move is recorded on A's stash");
+  rig.settleClearStashes();        // B's replay failed: B is still pending
+  assert.equal(readClearStash(1000), null, "A's stash left its key");
+  const b = readClearStash(2000);
+  assert.deepEqual(b.uploads.map(e => e.id), ["h1"], "A's taken upload moved to B");
+  assert.deepEqual(b.tasks.map(t => t.id), ["loc"], "A's local-only items moved to B");
+  assert.deepEqual(b.archives.t1.paths, ["p1"], "A's archive record moved to B");
+  assert.equal(b.favorites.updatedAt, 500);
+  assert.equal(b.favorites.resetAt, 2000);
+  dropDeleteIntentsBefore(3000);
+  rig.applyClearStashes(at => at < 3000);
+  assert.deepEqual(rig.ref.byType, { image: ["m1", "m2"] });
+  assert.equal(rig.ref.updatedAt, 500, "the original favorites at their original updatedAt");
+  assert.deepEqual(getFailedSyncs().filter(e => e.kind === "history").map(e => e.id), ["h1"], "A's upload given back");
+});
+test("round 16 #5: chainStashFavorites / chainedFavoritesBefore / moveClearStash edges", () => {
+  const older = { scope: "s", byType: { a: ["x"] }, updatedAt: 5, setting: { v: 1 }, queued: [{ id: "s" }], resetAt: 10 };
+  assert.deepEqual(chainStashFavorites({ scope: "s", byType: {}, updatedAt: 10, setting: null, queued: [], resetAt: 20 }, older),
+    { ...older, resetAt: 20 }, "the newer reset replaced the older one's emptied state: the older state, newer time");
+  const chosen = { scope: "s", byType: { a: ["y"] }, updatedAt: 15, setting: null, queued: [], resetAt: 20 };
+  assert.deepEqual(chainStashFavorites(chosen, older), chosen, "a choice made in between wins");
+  assert.deepEqual(chainStashFavorites(null, older), older);
+  assert.equal(chainStashFavorites(null, null), null);
+  const before = { byType: {}, updatedAt: 10, setting: null, queued: [] };
+  assert.deepEqual(chainedFavoritesBefore(before, "s"), before, "no stash: unchanged");
+  writeClearStash(100, { favorites: older });
+  assert.equal(chainedFavoritesBefore(before, "s").updatedAt, 5);
+  assert.deepEqual(chainedFavoritesBefore(before, "s").queued, [{ id: "s" }]);
+  assert.deepEqual(chainedFavoritesBefore(before, "other"), before, "another scope's reset is not this one's");
+  assert.deepEqual(chainedFavoritesBefore({ ...before, updatedAt: 11 }, "s").updatedAt, 11, "favorites changed since: unchanged");
+  // moveClearStash: nothing recorded / target settled -> false; a target with no stash of its own gets one.
+  mem.clear();
+  writeClearStash(100, { tasks: [{ id: "a" }] });
+  assert.equal(moveClearStash(100), false, "no move recorded");
+  queueDeleteIntents("task-delete", ["a"], 100);
+  queueDeleteIntents("task-delete", ["a"], 300);   // a plain delete (no stash) re-queues it
+  assert.deepEqual(readClearStash(100).movedTo, [300]);
+  queueDeleteIntents("task-delete", ["a"], 400);   // and again: the chain follows (300 had no stash)
+  assert.deepEqual(readClearStash(100).movedTo, [300, 400]);
+  assert.equal(moveClearStash(100), true);
+  assert.deepEqual(readClearStash(400).tasks.map(t => t.id), ["a"], "created at the pending target");
+  assert.equal(readClearStash(100), null);
+  settleDeleteIntents("task-delete", ["a"]);
+  assert.equal(moveClearStash(400), false, "nothing pending: the caller drops it");
+  assert.equal(moveClearStash(999), false);
+});
+
+// Review round 16 #6: Clear Logs treated savedLogIds ("stored here") as "the cloud has it", so a saved entry with no
+// queued upload (evicted at the 200 cap, or dropped by a restore) was never stashed, and a later void lost it.
+test("round 16 #6: Clear Logs stashes every planned entry the cloud lacks; the cloud's are left out", () => {
+  const loaded = [{ id: "savedNoUpload" }, { id: "inCloud" }, { id: "queued" }, { id: "late" }];
+  const stored = [{ id: "inCloud" }, { id: "storedOnly" }, { id: "storedInCloud" }];
+  const uploads = [{ kind: "history", id: "queued", data: { id: "queued", v: 2 } }];
+  const planned = new Set(["savedNoUpload", "inCloud", "queued", "storedOnly", "storedInCloud"]);
+  const { full, loadedOnly } = clearLogsStash({ loaded, stored, uploads, planned, cloudLogIds: new Set(["inCloud", "storedInCloud"]) });
+  assert.deepEqual(full.logs.map(l => l.id), ["savedNoUpload", "storedOnly"], "absent from the cloud, no upload: stashed (saved or not)");
+  assert.deepEqual(full.uploads.map(e => e.id), ["queued"], "a queued one is carried by its upload");
+  assert.deepEqual(loadedOnly.logs.map(l => l.id), ["savedNoUpload"], "the quota fallback keeps the loaded ones");
+  const noRead = clearLogsStash({ loaded, stored, uploads, planned, cloudLogIds: null });
+  assert.deepEqual(noRead.full.logs.map(l => l.id), ["savedNoUpload", "inCloud", "storedOnly", "storedInCloud"], "no cloud read: every planned entry without a stashed upload");
+  // A later void gives the saved-but-unqueued entry back.
+  writeClearStash(100, full);
+  queueDeleteIntents("history-delete", [...planned], 100);
+  assert.equal(stashGiveBack(readClearStash(100)), null, "pending: nothing yet");
+  dropDeleteIntentsBefore(200);   // a restore at 200 voids the clear
+  const back = stashGiveBack(readClearStash(100));
+  assert.deepEqual(back.logs.map(l => l.id).sort(), ["queued", "savedNoUpload", "storedOnly"]);
+  assert.ok(!back.logs.some(l => l.id === "inCloud"), "the restore gives back what the cloud had");
 });
 
 // Review round 14: Clear Logs / Reset plan over every stored entry, not only the 500 loaded. Without IndexedDB (node)

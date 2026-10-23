@@ -639,9 +639,12 @@ export function queueDeleteIntents(kind, ids, at) {
   try {
     const want = new Set((ids || []).filter(Boolean));
     if (!want.size) return now;
-    const list = getFailedSyncs().filter(e => !(e.kind === kind && want.has(e.id)));
+    const all = getFailedSyncs();
+    const movedFrom = new Set(all.filter(e => e.kind === kind && want.has(e.id) && (e.ts || 0) !== now).map(e => e.ts || 0));
+    const list = all.filter(e => !(e.kind === kind && want.has(e.id)));
     for (const id of want) list.push({ kind, id, data: id, ts: now, attempts: 1 });
     localStorage.setItem(FAILED_KEY, JSON.stringify(list));
+    if (movedFrom.size) noteStashMoves(movedFrom, now);
   } catch {}
   return now;
 }
@@ -870,6 +873,7 @@ export function writeClearStash(at, stash) {
     const out = { uploads: stash?.uploads || [], tasks: stash?.tasks || [], logs: stash?.logs || [], at: Number(at) };
     if (stash?.favorites) out.favorites = stash.favorites;
     if (stash?.archives && Object.keys(stash.archives).length) out.archives = stash.archives;
+    if (Array.isArray(stash?.movedTo) && stash.movedTo.length) out.movedTo = stash.movedTo;
     localStorage.setItem(CLEAR_STASH_PREFIX + Number(at), JSON.stringify(out));
     return true;
   } catch { return false; }
@@ -880,6 +884,7 @@ const parseStash = (raw, at) => {
   const out = { uploads: Array.isArray(s.uploads) ? s.uploads : [], tasks: Array.isArray(s.tasks) ? s.tasks : [], logs: Array.isArray(s.logs) ? s.logs : [], at };
   if (s.favorites && typeof s.favorites === "object") out.favorites = s.favorites;
   if (s.archives && typeof s.archives === "object" && Object.keys(s.archives).length) out.archives = s.archives;
+  if (Array.isArray(s.movedTo)) { const m = s.movedTo.map(Number).filter(Number.isFinite); if (m.length) out.movedTo = m; }
   return out;
 };
 // Every stored stash, oldest first.
@@ -968,6 +973,82 @@ export function stashedItems(stash, { deletingTasks = new Set(), deletingLogs = 
     return [...byId.values()];
   };
   return { tasks: pick(stash?.tasks, "task", deletingTasks), logs: pick(stash?.logs, "history", deletingLogs) };
+}
+
+// Review round 16 #5: an id a clear queued may be queued again by a later clear or delete (queueDeleteIntents moves its
+// intent to the newer queue time). The earlier clear can then end with no intent of its own while the later one is still
+// pending, and dropping its stash as "confirmed" would throw away what it holds (a Reset's real favorites, the uploads it
+// took). So every stash whose clear lost ids to time `to` (or that already points at a time that lost them: a plain
+// delete keeps no stash) records `to` in `movedTo`, and settleClearStashes moves it there (moveClearStash).
+function noteStashMoves(fromTimes, to) {
+  for (const s of readClearStashes()) {
+    if (s.at === to) continue;
+    const moved = s.movedTo || [];
+    if (!(fromTimes.has(s.at) || moved.some(t => fromTimes.has(t))) || moved.includes(to)) continue;
+    writeClearStash(s.at, { ...s, movedTo: [...moved, to] });
+  }
+}
+// The favorites a stash gives back when `newer` (a later Reset's) and `older` (an earlier one's) meet: when the later
+// reset replaced the earlier one's emptied state (its updatedAt is the earlier resetAt), the earlier state comes back,
+// guarded by the later reset's time; otherwise (a choice made in between) the later one's.
+export function chainStashFavorites(newer, older) {
+  if (!newer) return older || null;
+  if (older && older.resetAt > 0 && newer.updatedAt === older.resetAt)
+    return { ...older, scope: newer.scope || older.scope, resetAt: newer.resetAt };
+  return newer;
+}
+// A Reset's favoritesBefore (round 16 #5): while an earlier unsettled Reset's stash holds favorites whose resetAt is the
+// current favorites' updatedAt, the current favorites are that reset's emptied state, so the earlier favoritesBefore
+// (its setting, updatedAt and queued upload) is what this reset replaces. `scope`: the favorites scope of this device.
+export function chainedFavoritesBefore(before, scope) {
+  if (!before) return before;
+  const stashes = readClearStashes().reverse();
+  for (const s of stashes) {
+    const f = s.favorites;
+    if (!f || !(f.resetAt > 0) || f.resetAt !== before.updatedAt) continue;
+    if (f.scope && scope && f.scope !== scope) continue;
+    return { ...before, byType: f.byType, updatedAt: f.updatedAt, setting: f.setting ?? null, queued: Array.isArray(f.queued) ? f.queued : [] };
+  }
+  return before;
+}
+// A settled clear's stash whose ids moved to a clear or delete still pending (noteStashMoves) goes into that one's stash
+// (created if it has none): its uploads, local items, archive records and favorites, the target's own versions winning.
+// Says whether it moved; false: nothing pending to hold it (the caller drops it, as a confirmed clear).
+export function moveClearStash(at) {
+  const s = readClearStash(at);
+  if (!s || intentsPendingAt(s.at)) return false;
+  const pending = (s.movedTo || []).filter(t => t !== s.at && intentsPendingAt(t));
+  if (!pending.length) return false;
+  const to = Math.max(...pending);
+  const t = readClearStash(to) || { uploads: [], tasks: [], logs: [], at: to };
+  const byKey = (list, key) => { const m = new Map(); for (const x of list) if (x && !m.has(key(x))) m.set(key(x), x); return [...m.values()]; };
+  const merged = {
+    uploads: byKey([...t.uploads, ...s.uploads], e => `${e.kind}\u0000${e.id}`),
+    tasks: byKey([...t.tasks, ...s.tasks], x => x.id),
+    logs: byKey([...t.logs, ...s.logs], x => x.id),
+    archives: { ...(s.archives || {}), ...(t.archives || {}) },
+    favorites: chainStashFavorites(t.favorites, s.favorites),
+    movedTo: [...new Set([...(t.movedTo || []), ...(s.movedTo || [])])].filter(x => x !== to),
+  };
+  if (!merged.favorites) delete merged.favorites;
+  if (!writeClearStash(to, merged)) return false;
+  dropClearStash(s.at);
+  return true;
+}
+// Clear Logs' stash (round 16 #6): every planned History entry the cloud lacks, loaded or stored only, plus the uploads
+// it takes (an entry with a stashed upload is carried by it). `cloudLogIds`: the cloud's History ids read before the
+// snapshot, or null when the read failed (then every planned entry without a stashed upload). `loadedOnly`: the
+// fallback for a full localStorage.
+export function clearLogsStash({ loaded = [], stored = [], uploads = [], planned, cloudLogIds = null } = {}) {
+  const isPlanned = (x) => x && x.id && (!planned || planned.has(x.id));
+  const loadedLogs = (loaded || []).filter(isPlanned);
+  const loadedIds = new Set(loadedLogs.map(l => l.id));
+  const storedOnly = (stored || []).filter(l => isPlanned(l) && !loadedIds.has(l.id));
+  const ups = (uploads || []).filter(e => e?.kind === "history" && isPlanned(e));
+  return {
+    full: buildClearStash({ uploads: ups, logs: [...loadedLogs, ...storedOnly], cloudLogIds }),
+    loadedOnly: buildClearStash({ uploads: ups, logs: loadedLogs, cloudLogIds }),
+  };
 }
 
 export function clearFailedSyncs() {

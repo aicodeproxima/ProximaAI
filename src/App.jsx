@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, moveClearStash, clearLogsStash } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
@@ -1476,10 +1476,15 @@ export default function ProximaApp() {
     return { favorites };
   };
   // A clear none of whose intents is queued any more was confirmed (or given back above): its stash goes. Archive records
-  // still in it belong to tasks that are gone: their files go through the file-delete queue (S5).
+  // still in it belong to tasks that are gone: their files go through the file-delete queue (S5). Unless its ids moved
+  // to another clear or delete that is still pending (review round 16 #5: a Reset pressed again re-queues them at its own
+  // time): then its favorites, uploads, items and archive records move into that one's stash (storage.js moveClearStash).
   const settleClearStashes = () => {
     const queued = new Set([...intentGroups("task-delete"), ...intentGroups("history-delete")].map(([ts]) => ts));
-    for (const s of readClearStashes()) if (!queued.has(s.at)) { queueArchivedFileDeletes(stashArchivePaths(s)); dropClearStash(s.at); }
+    for (const s of readClearStashes()) if (!queued.has(s.at)) {
+      if (moveClearStash(s.at)) continue;
+      queueArchivedFileDeletes(stashArchivePaths(s)); dropClearStash(s.at);
+    }
   };
 
   // Force-flush all pending cloud writes + replay any failed entries
@@ -4779,6 +4784,9 @@ export default function ProximaApp() {
                       // 13): only they are named, queued as intents and taken from the queue; an entry that arrives after
                       // the copy (another device's, or a generation started here meanwhile) stays. The copy covers every
                       // entry stored here, not only the 500 loaded (review round 14), read before the snapshot too.
+                      // The cloud's History ids, read before the snapshot as Reset and Clear Outputs do (review round 16
+                      // #6): the stash below holds every planned entry the cloud lacks. null (unreadable): every one.
+                      const cloudLogIds = isSupabaseConfigured() ? ((await pullCloudIds())?.history ?? null) : null;
                       const storedLogs = await allStoredHistory();
                       const removedLogIds = [...new Set([...logsRef.current.map(l => l.id), ...storedLogs.map(l => l.id)])];
                       const queuedLogsAtSnap = peekQueuedUploads(["history"]);
@@ -4793,18 +4801,15 @@ export default function ProximaApp() {
                       const clearedLogIds = [...new Set([...removedLogIds, ...queuedLogsAtSnap.map(e => e.id)])];
                       const clearedLogSet = new Set(clearedLogIds);
                       // Stored BEFORE the take (review round 14): if this clear gets no answer and a restore voids it at a
-                      // replay, the stash gives back the uploads it takes and the entries not saved (no cloud read here:
-                      // those are the ones the cloud may lack). Dropped once the clear answers. Review round 15 S4: the
-                      // uploads come from a fresh peek right before the take (no await between: exactly the entries taken,
-                      // a version re-queued during the server-time read included), and the entries stored here beyond the
-                      // loaded ones (deleteHistoryEntries removes them too) are in it. Too big for localStorage: at least
-                      // the loaded ones.
-                      const loadedAtStash = new Set(logsRef.current.map(l => l.id));
+                      // replay, the stash gives back the uploads it takes and every planned entry the cloud lacks (review
+                      // round 16 #6: by the cloud read above, not savedLogIds, which means "stored here"). Dropped once the
+                      // clear answers. Review round 15 S4: the uploads come from a fresh peek right before the take (no
+                      // await between: exactly the entries taken, a version re-queued during the server-time read
+                      // included), and the entries stored here beyond the loaded ones (deleteHistoryEntries removes them
+                      // too) are in it. Too big for localStorage: at least the loaded ones.
                       const stashUploads = peekQueuedUploads(["history"]).filter(e => clearedLogSet.has(e.id));
-                      const stashLoaded = logsRef.current.filter(l => clearedLogSet.has(l.id) && !savedLogIds.current.has(l.id));
-                      const stashStoredOnly = storedLogs.filter(l => clearedLogSet.has(l.id) && !loadedAtStash.has(l.id) && !savedLogIds.current.has(l.id));
-                      if (!writeClearStash(snap, buildClearStash({ uploads: stashUploads, logs: [...stashLoaded, ...stashStoredOnly] })))
-                        writeClearStash(snap, buildClearStash({ uploads: stashUploads, logs: stashLoaded }));
+                      const logsStash = clearLogsStash({ loaded: logsRef.current, stored: storedLogs, uploads: stashUploads, planned: clearedLogSet, cloudLogIds });
+                      if (!writeClearStash(snap, logsStash.full)) writeClearStash(snap, logsStash.loadedOnly);
                       const takenLogUploads = takeQueuedUploads("history", clearedLogIds);
                       for (const id of clearedLogIds) deletingLogIds.current.add(id);
                       queueDeleteIntents("history-delete", clearedLogIds, snap);   // before the clear fires (review wf_ec400a67-988 #1)
@@ -5081,6 +5086,10 @@ export default function ProximaApp() {
                       const favoritesBefore = { byType: favoriteModelsRef.current, updatedAt: favoriteModelsUpdatedAtRef.current,
                         queued: getFailedSyncs().filter(e => e.kind === "model-favorites" && e.id === favoriteScope).map(e => ({ ...e })) };
                       favoritesBefore.setting = await getSetting(localModelFavoritesKey(favoriteScope));
+                      // Review round 16 #5: a Reset pressed again while an earlier one is unsettled (the toast below asks
+                      // for it) finds the favorites that reset emptied. What it replaces is then the earlier favoritesBefore
+                      // (its setting, updatedAt and queued upload), carried in its stash and its voided branch alike.
+                      Object.assign(favoritesBefore, chainedFavoritesBefore(favoritesBefore, favoriteScope));
                       const emptyFavorites = emptyModelFavorites();
                       favoriteModelsRef.current = emptyFavorites;
                       favoriteModelsUpdatedAtRef.current = Date.now();

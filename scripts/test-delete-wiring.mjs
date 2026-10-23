@@ -259,7 +259,8 @@ test("each clear stores its stash BEFORE its take and drops it once answered", (
   for (const [name, h, at, take] of [["Clear Logs", logsH(), "snap", 'takeQueuedUploads("history"'], ["Clear Outputs", outputs(), "clearAt", 'takeQueuedUploads("task"'],
     ["Reset", reset(), "resetAt", 'takeQueuedUploads("task"']]) {
     // Reset spreads the built stash to add its favorites (round 15 S3): `writeClearStash(resetAt, { ...buildClearStash(`.
-    const w = h.search(new RegExp(`writeClearStash\\(${at}, (\\{ \\.\\.\\.)?buildClearStash\\(`)), t = h.indexOf(take);
+    // Clear Logs writes the stash clearLogsStash built (round 16 #6): `writeClearStash(snap, logsStash.full)`.
+    const w = h.search(new RegExp(`writeClearStash\\(${at}, ((\\{ \\.\\.\\.)?buildClearStash\\(|logsStash\\.full\\))`)), t = h.indexOf(take);
     assert.ok(w >= 0 && t > w, `${name}: stash written before the take`);
     assert.doesNotMatch(h.slice(w, t), /await /, `${name}: nothing awaited between the stash and the take`);
     assert.match(h, new RegExp(`if \\((cr|rr)\\.ok \\|\\| (cr|rr)\\.voided\\) dropClearStash\\(${at}\\)`), `${name}: dropped once answered`);
@@ -320,9 +321,35 @@ test("round 15 S4: Clear Logs stashes the uploads it takes (fresh peek) and the 
   const w = h.indexOf('const stashUploads = peekQueuedUploads(["history"])'), t = h.indexOf('takeQueuedUploads("history"');
   assert.ok(w >= 0 && t > w, "peeked right before the take");
   assert.doesNotMatch(h.slice(w, t), /await /, "no await between the peek and the take");
-  assert.match(h.slice(w, t), /writeClearStash\(snap, buildClearStash\(\{ uploads: stashUploads, logs: \[\.\.\.stashLoaded, \.\.\.stashStoredOnly\] \}\)\)/);
-  assert.match(h.slice(w, t), /const stashStoredOnly = storedLogs\.filter\(/);
+  // Round 16 #6 replaced the inline stashLoaded / stashStoredOnly lists with clearLogsStash (loaded + stored, quota fallback).
+  assert.match(h.slice(w, t), /clearLogsStash\(\{ loaded: logsRef\.current, stored: storedLogs, uploads: stashUploads, /);
+  assert.match(h.slice(w, t), /if \(!writeClearStash\(snap, logsStash\.full\)\) writeClearStash\(snap, logsStash\.loadedOnly\);/, "quota fallback kept");
   assert.doesNotMatch(h, /uploads: queuedLogsAtSnap\.filter/, "never the pre-await peek");
+});
+// Review round 16 #6: Clear Logs used savedLogIds ("stored here") as "the cloud has it", so a saved entry with no queued
+// upload was never stashed and a later void lost it.
+test("round 16 #6: Clear Logs reads the cloud's History ids before its snapshot and stashes by them", () => {
+  const h = logsH();
+  const read = h.indexOf("const cloudLogIds = isSupabaseConfigured() ? ((await pullCloudIds())?.history ?? null) : null;");
+  const snap = h.indexOf("const snap = isSupabaseConfigured() ? await serverTimeRemote() : Date.now();");
+  assert.ok(read >= 0 && snap > read, "the cloud read comes before the snapshot");
+  const w = h.indexOf("const logsStash = clearLogsStash(");
+  assert.ok(w > snap && h.slice(w, h.indexOf(";", w)).includes("planned: clearedLogSet, cloudLogIds"), "planned entries, by the cloud read");
+  assert.doesNotMatch(h.slice(w, h.indexOf('takeQueuedUploads("history"')), /savedLogIds/, "savedLogIds no longer filters the stash");
+});
+// Review round 16 #5: two unanswered Resets voided together left the favorites empty (B stashed A's emptied state, and
+// A's stash was dropped once its ids moved to B).
+test("round 16 #5: a Reset chains its favoritesBefore; a settled stash whose ids moved is moved, not dropped", () => {
+  const h = reset();
+  const set = h.indexOf("favoritesBefore.setting = await getSetting(localModelFavoritesKey(favoriteScope));");
+  const chain = h.indexOf("Object.assign(favoritesBefore, chainedFavoritesBefore(favoritesBefore, favoriteScope));");
+  const empty = h.indexOf("favoriteModelsRef.current = emptyFavorites");
+  assert.ok(set >= 0 && chain > set && empty > chain, "chained after the setting is read, before the local reset");
+  assert.doesNotMatch(h.slice(chain, empty), /await /, "nothing awaited between the chain and the reset");
+  assert.ok(h.indexOf("writeClearStash(resetAt, { ...buildClearStash(") > chain, "the stash carries the chained state");
+  const settle = between("const settleClearStashes = () =>", "// Force-flush all pending");
+  const mv = settle.indexOf("if (moveClearStash(s.at)) continue;"), drop = settle.indexOf("dropClearStash(s.at)");
+  assert.ok(mv >= 0 && drop > mv, "moved before it could be dropped");
 });
 test("round 15 S5: an archive a clear held is recorded, re-applied on a void, its files deleted on a confirm", () => {
   const a = between("const onCloudArchiveTask = useCallback(", "const onCopyUrlTask = useCallback(");
