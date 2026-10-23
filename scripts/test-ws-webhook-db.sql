@@ -216,14 +216,20 @@ begin
   out := out || case when (select count(*) from cron.job where jobname = 'ws-webhook-sweep' and active) = 1
     then 'ok sweep-scheduled; ' else 'FAIL sweep-scheduled; ' end;
 
-  -- No advisory locks: a batch upload must not fill the shared lock table or deadlock against the webhook.
+  -- No per-row advisory locks: a batch upload must not fill the shared lock table (64 x max_connections slots) or
+  -- deadlock against the webhook (20261020212826 removed per-row locks: 56 were held for 50 rows). Since
+  -- 20261023500000 the insert path takes ONE shared lock per (kind, scope) (_rows_not_tombstoned, against
+  -- delete_queued_rows / _clear_kind's exclusive one), so 0 before that migration and 1 after it both pass; per-row
+  -- locking shows as ~50, and an exclusive lock on the upload path fails.
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs)
     select 'wh-batch-' || g, scope, case when g % 2 = 0 then 'completed' else 'processing' end, 1000, 'wh-pred-batch-' || g, '[]'
     from generate_series(1, 50) g;
   reset role;
-  out := out || case when (select count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid()) = 0
-    then 'ok no-advisory-locks; ' else format('FAIL no-advisory-locks %s; ', (select count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid())) end;
+  out := out || case when (select count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid()) <= 1
+      and (select count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid() and mode <> 'ShareLock') = 0
+    then 'ok no-per-row-locks; '
+    else format('FAIL no-per-row-locks %s; ', (select string_agg(mode, ',') from pg_locks where locktype = 'advisory' and pid = pg_backend_pid())) end;
 
   -- Only completed / failed are accepted.
   set local role service_role;
