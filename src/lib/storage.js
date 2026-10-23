@@ -1035,6 +1035,23 @@ export function moveClearStash(at) {
   dropClearStash(s.at);
   return true;
 }
+// Review round 17 (#1, #3, #6): a stash's fate follows the clear its ids moved to. The followers of the clear at `ts`:
+// stashes with no intent of their own pending whose `movedTo` includes `ts` (transitive: noteStashMoves records every
+// later time on a stash already pointing at one that lost ids). None while an intent at `ts` is still pending: that
+// clear is not settled yet, and its remaining group's void or confirm decides (as stashGiveBack waits, round 15 S1).
+export function stashFollowers(ts) {
+  const at = Number(ts);
+  const out = new Set();
+  if (!Number.isFinite(at) || intentsPendingAt(at)) return out;
+  for (const s of readClearStashes()) if (s.at !== at && (s.movedTo || []).includes(at) && !intentsPendingAt(s.at)) out.add(s.at);
+  return out;
+}
+// Which stashes a VOIDED clear at `ts` gives back (App.jsx applyClearStashes): its own, with whatever moveClearStash
+// merged into it, and its followers. Read before any settle pass can drop a follower as confirmed.
+export function voidedClearStashes(ts) {
+  const at = Number(ts), followers = stashFollowers(at);
+  return (s) => s === at || followers.has(s);
+}
 // Clear Logs' stash (round 16 #6): every planned History entry the cloud lacks, loaded or stored only, plus the uploads
 // it takes (an entry with a stashed upload is carried by it). `cloudLogIds`: the cloud's History ids read before the
 // snapshot, or null when the read failed (then every planned entry without a stashed upload). `loadedOnly`: the

@@ -263,7 +263,9 @@ test("each clear stores its stash BEFORE its take and drops it once answered", (
     const w = h.search(new RegExp(`writeClearStash\\(${at}, ((\\{ \\.\\.\\.)?buildClearStash\\(|logsStash\\.full\\))`)), t = h.indexOf(take);
     assert.ok(w >= 0 && t > w, `${name}: stash written before the take`);
     assert.doesNotMatch(h.slice(w, t), /await /, `${name}: nothing awaited between the stash and the take`);
-    assert.match(h, new RegExp(`if \\((cr|rr)\\.ok \\|\\| (cr|rr)\\.voided\\) dropClearStash\\(${at}\\)`), `${name}: dropped once answered`);
+    // Round 17: dropped once confirmed; a void gives it back (applyClearStashes) instead of dropping it.
+    assert.match(h, new RegExp(`if \\((cr|rr)\\.ok\\) dropClearStash\\(${at}\\)`), `${name}: dropped once confirmed`);
+    assert.doesNotMatch(h, /\.voided\) dropClearStash\(/, `${name}: never dropped on a void`);
   }
 });
 test("restoreGuard voids and replay voids give the stashes back; confirmed clears drop them", () => {
@@ -276,8 +278,8 @@ test("restoreGuard voids and replay voids give the stashes back; confirmed clear
     assert.match(src.slice(i, i + 600), /applyClearStashes\(at => at < guard\.restoreAt\)/, `stash given back right after: ${site}`);
   }
   const replay = between("const replayDeleteIntents = async", "const replayHistoryUploads = async");
-  assert.match(replay, /r\.voided\.length[\s\S]*applyClearStashes\(at => at === ts\)/);
-  const apply = between("const applyClearStashes = (which) =>", "const settleClearStashes = ");
+  assert.match(replay, /r\.voided\.length[\s\S]*applyClearStashes\(voidedClearStashes\(ts\)\)/, "round 17 #6: its own stash and its followers");
+  const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
   assert.match(apply, /const back = stashGiveBack\(s\);\s*\n\s*if \(!back\) continue;/, "round 15 S1: nothing while an intent of the clear is pending");
   assert.match(apply, /putBackQueuedUploads\(back\.uploads\)/);
   assert.match(apply, /saveTasks\(/); assert.match(apply, /addHistoryEntry\(/);
@@ -290,11 +292,11 @@ test("restoreGuard voids and replay voids give the stashes back; confirmed clear
 // Review round 15 S1: the task group's void gave the stash back (and dropped it) while the same clear's History group
 // still held its entries back, so local-only History was lost; S2: confirmed ids came back with a later void.
 test("round 15 S1/S2: a stash is given back only when its clear has no pending intent; confirmed ids leave it first", () => {
-  const apply = between("const applyClearStashes = (which) =>", "const settleClearStashes = ");
+  const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
   assert.doesNotMatch(apply, /pendingDeleteIds\(/, "the per-id filter excludes only OTHER queue times (stashGiveBack)");
   assert.doesNotMatch(apply, /stashedItems\(/);
   const replay = between("const replayDeleteIntents = async", "const replayHistoryUploads = async");
-  const c = replay.indexOf("confirmIntents(kind, r.deleted)"), a = replay.indexOf("if (r.voided.length) applyClearStashes(at => at === ts);");
+  const c = replay.indexOf("confirmIntents(kind, r.deleted)"), a = replay.indexOf("if (r.voided.length) applyClearStashes(voidedClearStashes(ts));");
   assert.ok(c >= 0 && a > c, "the group's confirmed ids are settled before its stash is considered");
   assert.equal(src.match(/confirmDeleteIntents\(/g)?.length, 1, "only confirmIntents calls it (it queues held archives' files)");
   assert.match(between("function confirmIntents(kind, ids)", "// ─── LOGIN SCREEN ───"), /queueArchivedFileDeletes\(confirmDeleteIntents\(kind, ids\)\)/);
@@ -309,7 +311,7 @@ test("round 15 S3: a Reset voided later puts its favorites back, only while they
   assert.match(r, /favoriteModelsUpdatedAtRef\.current !== fav\.resetAt\) return null/, "a newer choice wins");
   for (const re of [/favoriteModelsRef\.current = byType/, /favoriteModelsUpdatedAtRef\.current = fav\.updatedAt/, /setFavoriteModelsByType\(byType\)/,
     /setSetting\(localModelFavoritesKey\(fav\.scope \|\| getDeviceId\(\)\), setting\)/, /putBackQueuedUploads\(fav\.queued \|\| \[\]\)/]) assert.match(r, re);
-  assert.match(between("const applyClearStashes = (which) =>", "const settleClearStashes = "), /restoreStashedFavorites\(back\.favorites\)/);
+  assert.match(between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = "), /restoreStashedFavorites\(back\.favorites\)/);
   const b = src.indexOf("const stashBack = guard.restoreAt > 0 ? applyClearStashes(at => at < guard.restoreAt) : null;");
   const set = src.indexOf("if (stashBack?.favorites) { localFavoriteValue = stashBack.favorites; localFavoriteSnapshot = readModelFavoritesSetting(stashBack.favorites); }");
   const choice = src.indexOf('const pendingFavoriteWrite = getFailedSyncs().find(f => f.kind === "model-favorites"');
@@ -357,19 +359,50 @@ test("round 15 S5: an archive a clear held is recorded, re-applied on a void, it
   assert.ok(rec >= 0 && del > rec, "recorded first; queued for deletion only when no clear holds it");
   assert.match(a.slice(rec, del), /archiving: false \} : null \}\)/);
   for (const [name, h, at, r] of [["Clear Outputs", outputs(), "clearAt", "cr"], ["Reset", reset(), "resetAt", "rr"]]) {
-    const read = h.indexOf(`const heldArchives = ${r}.ok || ${r}.voided ? (readClearStash(${at})?.archives || {}) : {};`);
-    const drop = h.indexOf(`if (${r}.ok || ${r}.voided) dropClearStash(${at})`);
+    // Round 17: read only for a confirm; a void re-applies them through applyClearStashes (back.archives), onto the
+    // versions the branch put back.
+    const read = h.indexOf(`const heldArchives = ${r}.ok ? (readClearStash(${at})?.archives || {}) : {};`);
+    const drop = h.indexOf(`if (${r}.ok) dropClearStash(${at})`);
     assert.ok(read >= 0 && drop > read, `${name}: read before the stash is dropped`);
-    assert.match(voidedOf(h, `if (${r}.voided) {`), /reapplyArchives\(heldArchives, /, `${name}: re-applied on a void`);
+    assert.match(voidedOf(h, `if (${r}.voided) {`), new RegExp(`applyClearStashes\\(voidedClearStashes\\(${at}\\), \\{ tasks: new Map\\(`), `${name}: re-applied on a void`);
+    assert.doesNotMatch(voidedOf(h, `if (${r}.voided) {`), /heldArchives/, `${name}: not re-applied twice`);
     assert.ok(h.includes(`if (${r}.ok) queueArchivedFileDeletes(stashArchivePaths({ archives: heldArchives }));`), `${name}: deleted on a confirm`);
   }
-  const apply = between("const applyClearStashes = (which) =>", "const settleClearStashes = ");
-  assert.match(apply, /reapplyArchives\(back\.archives, /);
+  const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
+  assert.match(apply, /reapplyArchives\(back\.archives, new Map\(\[\.\.\.heldTasks, /, "onto the versions an inline void put back");
   assert.match(apply, /queueArchivedFileDeletes\(back\.orphanPaths\)/);
   const re = between("const reapplyArchives = (archives, base = new Map()) =>", "const restoreStashedFavorites = ");
   assert.match(re, /isArchived: true, archiving: false/);
   assert.match(re, /saveTask\(updated\);\s*\n\s*addFailedSync\(\{ kind: "task", id, data: updated \}\)/, "saved and its upload queued");
   assert.match(between("const settleClearStashes = () =>", "// Force-flush all pending"), /queueArchivedFileDeletes\(stashArchivePaths\(s\)\); dropClearStash\(s\.at\)/);
+});
+// Review round 17 #1/#3/#6: a voided clear dropped its stash (with what an earlier stash had merged into it), and a stash
+// whose ids moved to it was then dropped as confirmed by the next settle pass.
+test("round 17: a voided clear gives back its stash and its followers, after its in-memory put-back", () => {
+  assert.match(src, /import \{[^}]*\bvoidedClearStashes\b[^}]*\} from "\.\/lib\/storage\.js";/);
+  for (const [name, h, at, key, settle, put] of [
+    ["Clear Logs", logsH(), "snap", "if (cr.voided) {", 'settleDeleteIntents("history-delete", clearedLogIds)', "putBackQueuedUploads(takenLogUploads)"],
+    ["Clear Outputs", outputs(), "clearAt", "if (cr.voided) {", 'settleDeleteIntents("history-delete", plan.remove || [])', "putBackQueuedUploads(logUploadsBefore.filter("],
+    ["Reset", reset(), "resetAt", "if (rr.voided) {", 'settleDeleteIntents("history-delete", clearedLogIds)', "putBackQueuedUploads(favoritesBefore.queued)"]]) {
+    const v = voidedOf(h, key);
+    const s = v.indexOf(settle), p = v.indexOf(put), a = v.indexOf(`applyClearStashes(voidedClearStashes(${at}), {`);
+    assert.ok(s >= 0 && p > s && a > p, `${name}: intents settled, in-memory put back, then the stashes given back`);
+    assert.doesNotMatch(v, /dropClearStash\(/, `${name}: never a plain drop on a void`);
+    assert.doesNotMatch(v, /await /, `${name}: no settle pass can run before the give-back`);
+    assert.match(v.slice(a), /logs: (new Set\(|backIds \})/, `${name}: the History entries put back win`);
+  }
+  // The apply loop: versions an inline void put back count as held now.
+  const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
+  assert.match(apply, /const haveTasks = new Set\(\[\.\.\.tasksRef\.current\.map\(t => t\.id\), \.\.\.heldTasks\.keys\(\)\]\)/);
+  assert.match(apply, /haveLogs = new Set\(\[\.\.\.logsRef\.current\.map\(l => l\.id\), \.\.\.heldLogs\]\)/);
+  // Replay: the void gives back before the pass's settleClearStashes (after both replays).
+  const fs = between("const forceSaveAll = async () =>", "const queue = taskSyncQueueRef.current.splice(0)");
+  assert.ok(fs.indexOf('await replayDeleteIntents("task-delete")') < fs.indexOf("settleClearStashes()"), "replay (and its give-back) before the settle pass");
+  // storage.js: followers = no pending intent of their own, movedTo includes the voided time; none while it is pending.
+  const st = readFileSync(new URL("../src/lib/storage.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const f = st.slice(st.indexOf("export function stashFollowers(ts)"), st.indexOf("export function voidedClearStashes(ts)"));
+  assert.match(f, /if \(!Number\.isFinite\(at\) \|\| intentsPendingAt\(at\)\) return out;/);
+  assert.match(f, /\(s\.movedTo \|\| \[\]\)\.includes\(at\) && !intentsPendingAt\(s\.at\)/);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

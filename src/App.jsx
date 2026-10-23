@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, moveClearStash, clearLogsStash } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, moveClearStash, clearLogsStash, voidedClearStashes } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
@@ -1448,8 +1448,11 @@ export default function ProximaApp() {
   // storage.js stashGiveBack): a task group voided first must not give it back (and drop it) while the same clear's
   // History group still holds its entries back. Ids confirmed meanwhile already left the stash (S2), archives it held
   // are re-applied (S5) and a Reset's favorites come back (S3). Returns { favorites: the local setting restored | null }.
-  const applyClearStashes = (which) => {
+  // `held` (round 17): what an inline voided branch has just put back in memory (the refs do not see it yet), so those
+  // versions win: `tasks` (id -> task, also the base its archives re-apply onto) and `logs` (ids).
+  const applyClearStashes = (which, held = {}) => {
     let any = false, favorites = null;
+    const heldTasks = held.tasks || new Map(), heldLogs = held.logs || new Set();
     for (const s of readClearStashes()) {
       if (!which(s.at)) continue;
       const back = stashGiveBack(s);
@@ -1457,7 +1460,7 @@ export default function ProximaApp() {
       any = true;
       putBackQueuedUploads(back.uploads);
       const { tasks, logs } = back;
-      const haveTasks = new Set(tasksRef.current.map(t => t.id)), haveLogs = new Set(logsRef.current.map(l => l.id));
+      const haveTasks = new Set([...tasksRef.current.map(t => t.id), ...heldTasks.keys()]), haveLogs = new Set([...logsRef.current.map(l => l.id), ...heldLogs]);
       const backTasks = tasks.filter(t => !haveTasks.has(t.id)), backLogs = logs.filter(l => !haveLogs.has(l.id));
       if (backTasks.length) {
         setTasks(prev => { const have = new Set(prev.map(t => t.id)); const add = backTasks.filter(t => !have.has(t.id)); return add.length ? [...prev, ...add] : prev; });
@@ -1467,7 +1470,7 @@ export default function ProximaApp() {
         setLogs(prev => { const have = new Set(prev.map(l => l.id)); const add = backLogs.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
         for (const l of backLogs) addHistoryEntry(l);
       }
-      reapplyArchives(back.archives, new Map(backTasks.map(t => [t.id, t])));
+      reapplyArchives(back.archives, new Map([...heldTasks, ...backTasks.map(t => [t.id, t])]));
       queueArchivedFileDeletes(back.orphanPaths);
       favorites = restoreStashedFavorites(back.favorites) || favorites;
       dropClearStash(s.at);
@@ -1514,8 +1517,9 @@ export default function ProximaApp() {
         confirmIntents(kind, r.deleted);
       }
       // A clear voided at its replay gives back what it removed here (round 14), once its other group is settled too
-      // (round 15 S1: stashGiveBack waits while any intent at this queue time is pending, in either kind).
-      if (r.voided.length) applyClearStashes(at => at === ts);
+      // (round 15 S1: stashGiveBack waits while any intent at this queue time is pending, in either kind), and so does
+      // every stash whose ids moved to it (round 17 #6: read now, before settleClearStashes could drop them as confirmed).
+      if (r.voided.length) applyClearStashes(voidedClearStashes(ts));
     }
   };
 
@@ -4827,7 +4831,7 @@ export default function ProximaApp() {
                       await deleteHistoryEntries(clearedLogIds);
                       // Restore-checked at its queue time (review round 8): a restore that landed meanwhile wins.
                       const cr = await clearQueuedRemote("history", snap, clearedLogIds);   // named: entries created later elsewhere stay (round 9)
-                      if (cr.ok || cr.voided) dropClearStash(snap);   // answered: the branches below decide (round 14)
+                      if (cr.ok) dropClearStash(snap);   // confirmed: its stash goes (a void gives it back below, round 17)
                       if (cr.voided) {
                         settleDeleteIntents("history-delete", clearedLogIds);
                         for (const id of clearedLogIds) deletingLogIds.current.delete(id);
@@ -4838,6 +4842,9 @@ export default function ProximaApp() {
                         const loadedNow = new Set(logsRef.current.map(l => l.id));
                         for (const l of storedOnlyBefore) if (!loadedNow.has(l.id)) addHistoryEntry(l);   // beyond the loaded ones
                         putBackQueuedUploads(takenLogUploads);
+                        // Round 17 #1/#3: then the stash, with what an earlier clear's stash merged into it during the call,
+                        // and every stash whose ids moved here (versions put back above win).
+                        applyClearStashes(voidedClearStashes(snap), { logs: new Set([...logsBefore, ...storedOnlyBefore].map(l => l.id)) });
                         setFailedSyncCount(getFailedSyncs().length);
                         setSaveStatus("idle");
                         setAccountToast("A restore on another device replaced your data while this clear waited — nothing was cleared in the cloud");
@@ -4986,8 +4993,9 @@ export default function ProximaApp() {
                       const cr = await clearQueuedRemote("task", queuedAt, namedIds);
                       // Archives that finished while this clear held their tasks (round 15 S5): re-applied if voided, their
                       // files deleted if confirmed.
-                      const heldArchives = cr.ok || cr.voided ? (readClearStash(clearAt)?.archives || {}) : {};
-                      if (cr.ok || cr.voided) dropClearStash(clearAt);   // answered: the branches below decide (round 14)
+                      // A void gives the stash back below (round 17: with what moved into it, and its followers).
+                      const heldArchives = cr.ok ? (readClearStash(clearAt)?.archives || {}) : {};
+                      if (cr.ok) dropClearStash(clearAt);   // confirmed: its stash goes
                       if (cr.voided) {
                         // A restore on another device landed after this clear was queued: it wins, nothing is purged.
                         settleDeleteIntents("task-delete", clearedTaskIds);
@@ -5008,7 +5016,10 @@ export default function ProximaApp() {
                         setLogs(prev => { const have = new Set(prev.map(l => l.id)); const add = logsBack.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
                         for (const l of logsBack) { addHistoryEntry(l); if (savedLogsBefore.has(l.id)) savedLogIds.current.add(l.id); }
                         putBackQueuedUploads(logUploadsBefore.filter(e => backIds.has(e.id)));
-                        reapplyArchives(heldArchives, new Map(tasksRemovedHere.map(t => [t.id, t])));   // round 15 S5
+                        // Then the stash (round 17 #1/#3): what an earlier clear's stash merged into it during the call and
+                        // every stash whose ids moved here come back too, and its archives re-apply (round 15 S5) onto
+                        // the versions put back above, which win.
+                        applyClearStashes(voidedClearStashes(clearAt), { tasks: new Map(tasksRemovedHere.map(t => [t.id, t])), logs: backIds });
                         setFailedSyncCount(getFailedSyncs().length);
                         setSaveStatus("idle");
                         setAccountToast("A restore on another device replaced your data while this clear waited — nothing was cleared in the cloud");
@@ -5179,8 +5190,9 @@ export default function ProximaApp() {
                       const rr = await resetQueuedRemote(resetAt, clearedTaskIds, clearedLogIds, snap);
                       // Archives that finished while this reset held their tasks (round 15 S5): re-applied if voided, their
                       // files deleted if confirmed.
-                      const heldArchives = rr.ok || rr.voided ? (readClearStash(resetAt)?.archives || {}) : {};
-                      if (rr.ok || rr.voided) dropClearStash(resetAt);   // answered: the branches below decide (round 14)
+                      // A void gives the stash back below (round 17: with what moved into it, and its followers).
+                      const heldArchives = rr.ok ? (readClearStash(resetAt)?.archives || {}) : {};
+                      if (rr.ok) dropClearStash(resetAt);   // confirmed: its stash goes
                       if (rr.voided) {
                         // A restore on another device landed after this reset was queued: it wins.
                         settleDeleteIntents("task-delete", clearedTaskIds); settleDeleteIntents("history-delete", clearedLogIds);
@@ -5198,7 +5210,6 @@ export default function ProximaApp() {
                         for (const l of [...logsRemovedHere, ...storedOnlyLogs]) if (!nowLogIds.has(l.id)) addHistoryEntry(l);
                         for (const id of savedLogsBefore) savedLogIds.current.add(id);
                         putBackQueuedUploads(takenUploads);
-                        reapplyArchives(heldArchives, new Map([...storedOnlyTasks, ...tasksRemovedHere].map(t => [t.id, t])));   // round 15 S5
                         // Favorites: only while nothing changed them since the reset (a newer choice wins). The refs, the
                         // state, the local setting with its OLD updatedAt, and the queued upload it removed.
                         if (favoriteModelsUpdatedAtRef.current === resetFavoritesAt) {
@@ -5208,6 +5219,11 @@ export default function ProximaApp() {
                           setSetting(localModelFavoritesKey(favoriteScope), favoritesBefore.setting ?? createModelFavoritesSetting(favoritesBefore.byType, favoritesBefore.updatedAt));
                           putBackQueuedUploads(favoritesBefore.queued);
                         }
+                        // Then the stash (round 17 #1/#3): what an earlier Reset's stash merged into it during the call
+                        // (the uploads that one took) and every stash whose ids moved here come back too, and its archives
+                        // re-apply (round 15 S5) onto the versions put back above, which win.
+                        applyClearStashes(voidedClearStashes(resetAt), { tasks: new Map([...storedOnlyTasks, ...tasksRemovedHere].map(t => [t.id, t])),
+                          logs: new Set([...logsRemovedHere, ...storedOnlyLogs].map(l => l.id)) });
                         setFailedSyncCount(getFailedSyncs().length);
                         setSaveStatus("idle");
                         setAccountToast("A restore on another device replaced your data while this reset waited — nothing was cleared in the cloud");
