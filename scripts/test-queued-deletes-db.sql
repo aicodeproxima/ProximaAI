@@ -11,10 +11,13 @@ declare
 begin
   if to_regclass('proxima_auth.users') is null then   -- from P1's M1 the app_secrets admin rows are frozen; the owner row is the account
     update app_secrets set value = jsonb_set(value, '{username}', '"__qd_test"') where key = 'admin_username';
+    v_tok := _sign_session_token('admin:__qd_test', now() + interval '12 hours 5 minutes');
   else
     execute 'update proxima_auth.users set username = $1, scope = ''user:'' || $1 where role = ''owner''' using '__qd_test';
+    -- From M1 the owner's token comes from the account, after the rename above (M3 mints 'u:<id>'; M4 revokes every
+    -- 'admin:' token, so a hand-signed 'admin:' one would fail every case: review m4crit #3).
+    execute 'select proxima_auth.mint_token((select id from proxima_auth.users where role = ''owner''))' into v_tok;
   end if;
-  v_tok := _sign_session_token('admin:__qd_test', now() + interval '12 hours 5 minutes');
   insert into tasks (id, device_id, status, start_time, outputs) values
     ('qd-1', u, 'completed', 1000, '[]'), ('qd-2', u, 'completed', 1000, '[]'), ('qd-3', u, 'completed', 1000, '[]');
   insert into history (id, device_id, timestamp, tasks, total_cost) values ('qd-L', u, 1000, '[]', 0);
@@ -84,6 +87,9 @@ begin
       update app_secrets set value = jsonb_set(value, '{username}', '"__qd_renamed"') where key = 'admin_username';
     else
       execute 'update proxima_auth.users set username = $1, scope = ''user:'' || $1 where role = ''owner''' using '__qd_renamed';
+      -- A 'u:' token names the account, not the name, so the plain UPDATE above leaves it valid; rename_my_account
+      -- revokes the account's sessions (_revoke_sessions), so do that here too: the old token must then be refused.
+      execute 'select proxima_auth._revoke_sessions((select id from proxima_auth.users where role = ''owner''))';
     end if;
     begin
       r := delete_queued_rows(v_old_tok, 'task', array['qd-6'], 9e12::bigint);
@@ -93,6 +99,8 @@ begin
       update app_secrets set value = jsonb_set(value, '{username}', '"__qd_test"') where key = 'admin_username';
     else
       execute 'update proxima_auth.users set username = $1, scope = ''user:'' || $1 where role = ''owner''' using '__qd_test';
+      -- The revoke above ended v_tok too: a fresh token for the cases below (as a sign-in after the rename would).
+      execute 'select proxima_auth.mint_token((select id from proxima_auth.users where role = ''owner''))' into v_tok;
     end if;
     out := out || case when v_bad is null and exists (select 1 from tasks where id = 'qd-6') then 'ok recheck-after-lock; '
                        else format('FAIL recheck-after-lock %s; ', v_bad) end;

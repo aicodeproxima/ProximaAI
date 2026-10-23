@@ -62,11 +62,13 @@ declare
 begin
   if to_regclass('proxima_auth.users') is null then raise exception 'M1 rollback: proxima_auth.users does not exist (M1 not applied)'; end if;
   -- Anything outside this rollback's set that references the P1 objects (M2 still live, or anything new): refuse.
+  -- Names that no longer exist are left out: M4 drops m1_frozen_guard(), and one NULL in the array would make the ANY
+  -- NULL for every function, so this check would see nothing (review m4crit #1/#2).
   select string_agg(p.oid::regprocedure::text, ', ') into v_bad
     from pg_proc p
    where p.pronamespace not in ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
      and p.prosrc ~ '(proxima_auth\.users|current_account|auth_config|issue_session)'
-     and not (p.oid = any (array(select to_regprocedure(x) from unnest(v_set) x)));
+     and not (p.oid = any (array(select to_regprocedure(x) from unnest(v_set) x where to_regprocedure(x) is not null)));
   if v_bad is not null then raise exception 'M1 rollback: still referenced outside the rollback set: % (roll back M2 first)', v_bad; end if;
   select string_agg(format('%s.%s.%s', schemaname, tablename, policyname), ', ') into v_bad from pg_policies
    where coalesce(qual, '') || coalesce(with_check, '') ~ '(proxima_auth\.users|current_account|auth_config|issue_session)';

@@ -11,6 +11,12 @@
 -- (cases 20b, 21) expect the stage's token: 'admin:<owner name>' before M3, 'u:<owner id>' from M3
 -- (supabase/migrations/20261023300000_mu_p1_mint_u_tokens.sql), detected by issue_session's body. 2026-10-23, live
 -- M1+M2: `sql-tx --test` 42 ok / 0 FAIL (owner flows admin:); `sql-tx <M3> --test` 42 ok / 0 FAIL (owner flows u:).
+-- M4 stage (supabase/migrations/20261023400000_mu_p1_end_dual_accept.sql, detected by set_admin_credentials_rehash
+-- being gone; m4-stage-consistent fails a partial M4): every 'admin:' token answers 'session token revoked' (case 14,
+-- 20b); u: tokens, sign-in, both unlocks, password change and rename unchanged. Before 2026-10-23 21:06:07 UTC M4's
+-- clock check refuses, so run its no-clock scratch copy (the sed line in M4's header). 2026-10-23, live M1+M2+M3:
+-- `sql-tx --test` 43 ok / 0 FAIL; `sql-tx <M4 no-clock> --test` 43 ok / 0 FAIL; with only the rehash drop prepended
+-- (a partial M4): 40 ok / 3 FAIL (m4-stage-consistent, dual-accept-admin, admin-still-verifies).
 -- Fixtures: usernames '__mu_a', '__mu_b', '__mu_c', '__mu_d' (disabled), '__mu_e' (cost-12 hashes, case 7b only); ids
 -- 00000000-0000-4000-8000-0000000000a1/b1/c1/d1/e1; task ids 'mu-*'; documentation IPs 192.0.2.x / 198.51.100.x / 203.0.113.x / 2001:db8::/32, one per case so no
 -- case trips another's throttle. The owner row is touched only inside this rolled-back block (case 14 moves its epoch
@@ -338,14 +344,46 @@ begin
 
   -- 14. Dual-accept window: an 'admin:<owner>' token keeps working (role owner, the owner's scope); 'admin:' never maps
   --     to a member; an owner token issued before the owner's epoch is revoked (epoch moved, then put back). From M4
-  --     (set_admin_credentials_rehash dropped) an 'admin:' token is revoked.
+  --     (supabase/migrations/20261023400000_mu_p1_end_dual_accept.sql) EVERY 'admin:' token answers exactly
+  --     'session token revoked': the owner's name issued now or 6 h ago (both valid before M4), a member's name, an
+  --     empty name; through the verifier, get_my_account (as anon) and session_scope (28000). m4-stage-consistent: M4's
+  --     three marks (set_admin_credentials_rehash gone, current_account without its 'admin: branch, the verifier
+  --     revoking a fresh owner 'admin:' token) are all present or all absent; a partial M4 fails.
   begin
     v_m4 := not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'set_admin_credentials_rehash');
     select sessions_valid_after into v_ep from proxima_auth.users where id = v_owner_id;
     t := _sign_session_token('admin:' || v_owner, now() + interval '12 hours 5 minutes');
+    begin perform _verify_session_token(t); s := 'accepted'; exception when others then s := sqlerrm; end;
+    n := (v_m4::int) + (position('''admin:' in pg_get_functiondef('proxima_auth.current_account(text)'::regprocedure)) = 0)::int
+         + (s = 'session token revoked')::int;
+    out := out || case when n in (0, 3) then format('ok m4-stage-consistent (m4=%s); ', v_m4)
+                       else format('FAIL m4-stage-consistent %s of 3 M4 marks (rehash-gone=%s verifier=%s); ', n, v_m4, left(s, 30)) end;
     if v_m4 then
-      begin perform get_my_account(t); ok := false;
-      exception when others then ok := sqlerrm ~ 'revoked'; end;
+      ok := true; v_md5 := ''; t3 := current_setting('request.headers', true);
+      foreach s in array array['admin:' || v_owner || '|0', 'admin:' || v_owner || '|-21600', 'admin:__mu_a|0', 'admin:|0'] loop
+        t2 := _sign_session_token(split_part(s, '|', 1), to_timestamp(greatest(extract(epoch from clock_timestamp())::bigint
+                + split_part(s, '|', 2)::bigint, v_ep + 1) + 43200));
+        begin perform _verify_session_token(t2); v_md5 := v_md5 || 'verify-accepted '; ok := false;
+        exception when others then if sqlerrm <> 'session token revoked' then ok := false; v_md5 := v_md5 || 'verify ' || left(sqlerrm, 20) || ' '; end if; end;
+        begin
+          set local role anon;
+          r := get_my_account(t2);
+          reset role;
+          ok := false; v_md5 := v_md5 || 'account-answered ';
+        exception when others then reset role;
+          if sqlerrm <> 'session token revoked' then ok := false; v_md5 := v_md5 || 'account ' || left(sqlerrm, 20) || ' '; end if;
+        end;
+        perform set_config('request.headers', json_build_object('x-proxima-session', t2)::text, true);
+        begin perform proxima_auth.session_scope(true); ok := false; v_md5 := v_md5 || 'scope-accepted ';
+        exception when others then
+          if not (sqlstate = '28000' and sqlerrm = 'session token revoked') then ok := false; v_md5 := v_md5 || 'scope ' || sqlstate || ' '; end if;
+        end;
+        perform set_config('request.headers', coalesce(t3, ''), true);
+      end loop;
+      -- the owner's own 'u:' token is unaffected
+      r := get_my_account(proxima_auth.mint_token(v_owner_id));
+      ok := ok and (r->>'id')::uuid = v_owner_id and r->>'role' = 'owner';
+      r := json_build_object('m4', v_md5);
     else
       r := get_my_account(t);
       ok := (r->>'ok')::boolean and (r->>'id')::uuid = v_owner_id and r->>'role' = 'owner' and r->>'scope' = 'user:' || v_owner;
@@ -356,8 +394,9 @@ begin
       exception when others then ok := ok and sqlerrm ~ 'revoked'; end;
       update proxima_auth.users set sessions_valid_after = v_ep where id = v_owner_id;
     end if;
-    out := out || case when ok then 'ok dual-accept-admin; ' else format('FAIL dual-accept-admin m4=%s %s; ', v_m4, left(coalesce(r::text, ''), 40)) end;
-  exception when others then out := out || format('FAIL dual-accept-admin %s; ', left(sqlerrm, 60)); end;
+    out := out || case when ok then format('ok dual-accept-admin (%s); ', case when v_m4 then 'M4: every admin: revoked' else 'window open' end)
+                       else format('FAIL dual-accept-admin m4=%s %s; ', v_m4, left(coalesce(r::text, ''), 80)) end;
+  exception when others then reset role; out := out || format('FAIL dual-accept-admin %s; ', left(sqlerrm, 60)); end;
 
   -- 15. Per-IP throttle (limit lowered to 3). From a blocked IP the password is still checked: B's right password signs
   --     in, a wrong one answers 'throttled' AND counts on B as from anywhere (main-session decision replacing review

@@ -6,8 +6,11 @@ do $t$
 declare
   out text := '';
   v_public text; v_kept int; v_ro int;
-  -- From P1's M1 the new unlock_with_backup_code is an account RPC too (like verify_admin): 14 then, 13 before.
+  -- Expected account RPCs per stage: 13 before P1's M1; 14 from M1 (the new unlock_with_backup_code is one too, like
+  -- verify_admin) until M4; 13 again once M4 drops set_admin_credentials_rehash (review m4crit #4).
   v_p1 constant boolean := to_regprocedure('public.unlock_with_backup_code(text,text,text)') is not null;
+  v_rehash constant boolean := to_regprocedure('public.set_admin_credentials_rehash(text,text)') is not null;
+  v_expect constant int := case when not v_p1 then 13 when v_rehash then 14 else 13 end;
 begin
   -- 1. No security definer function of schema public is executable through PUBLIC.
   select string_agg(p.proname, ',' order by p.proname) into v_public
@@ -23,7 +26,7 @@ begin
            'unlock_admin_with_backup_code', 'unlock_with_backup_code', 'verify_admin')
      and has_function_privilege('anon', p.oid, 'EXECUTE') and has_function_privilege('authenticated', p.oid, 'EXECUTE')
      and has_function_privilege('service_role', p.oid, 'EXECUTE');
-  out := out || case when v_kept = case when v_p1 then 14 else 13 end then 'ok callers-kept; ' else format('FAIL callers-kept %s; ', v_kept) end;
+  out := out || case when v_kept = v_expect then 'ok callers-kept; ' else format('FAIL callers-kept %s (expected %s); ', v_kept, v_expect) end;
   select count(*) into v_ro from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where p.prosecdef and n.nspname = 'public' and has_function_privilege('supabase_read_only_user', p.oid, 'EXECUTE');
   out := out || case when v_ro = 0 then 'ok read-only-none; ' else format('FAIL read-only-none %s; ', v_ro) end;

@@ -38,6 +38,10 @@
 -- steps 1, 3 and 5 still compare against capture + exactly one guard line.
 --   RB2=supabase/rollback/20261023200000_mu_p1_scope_topic.rollback.sql
 --   node scripts/tools/sql-tx.mjs $RB2 $RB $T $M1 $RB $T $M1 $T $RB $T $M1 $T $RB --test $T
+-- With M1 + M2 + M3 live (from 2026-10-23; M4 not live): M3's rollback goes first (M2's refuses while M3 is live).
+--   RB3=supabase/rollback/20261023300000_mu_p1_mint_u_tokens.rollback.sql
+--   node scripts/tools/sql-tx.mjs $RB3 $RB2 $RB $T $M1 $RB $T $M1 $T $RB $T $M1 $T $RB --test $T
+--   2026-10-23 (M1 rollback with the m4crit #1/#2 NULL-name fix): 28 ok, 0 FAIL.
 do $t$
 declare
   fns constant text[] := array['public._verify_session_token(text)', 'public.verify_admin(text,text)',

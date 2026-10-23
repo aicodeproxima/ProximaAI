@@ -430,13 +430,13 @@ round 16 #1).
 | `_verify_session_token` | As in §3. Its existing messages are unchanged; unknown subjects now get `malformed session token`. |
 | `verify_admin(username, password)` | IP throttle first (§6). Then `pg_advisory_xact_lock(hashtextextended('proxima-signin:' \|\| lower(coalesce(username, '')), 0))`, taken for **every** typed name, known or not, so lock waits never tell a stranger whether a name exists (review round 2 #5). The row is then found by `lower(username)` and locked FOR UPDATE (lock order: IP row → per-name advisory lock → account row). **Unknown, disabled or deleted name:** `crypt(p, dummy_hash)`, answer `{ok:false, reason:'invalid'}`. **Locked account:** the password is **not** checked; dummy bcrypt for equal timing; the attempt counts on the IP throttle; answer `invalid`, byte-identical to a wrong password. **Wrong password:** counts on the account (3 → locked) unless the IP is blocked (§6); answer `invalid`, no attempts_left. **Right password:** counters reset; `issue_session`; returns `{ok, token, expires_at, username, account_id, role, scope}`. The token is `admin:` for the owner until M3 (§3). The legacy sha256 branch and `not_provisioned` are removed. |
 | `unlock_with_backup_code(username, code, new_pw)` **new** | Throttle, then the same per-name advisory lock as verify_admin, then the row by `lower(username)`, FOR UPDATE. **Unknown, disabled or deleted name, or no code on the row:** dummy bcrypt, answer `invalid`. **Pause running** (`backup_locked_until > now()`): the code is **not** checked; dummy bcrypt; counted on the IP; answer `invalid`, byte-identical to a wrong code. **Wrong code:** per-row counter (5 wrong → 15-min pause), answer `invalid` (no attempts_left, no retry_after). **Right code:** login and backup counters reset, the optional new bcrypt(12) password is stored, **this account's** epoch is bumped, and a fresh token comes from issue_session. |
-| `unlock_admin_with_backup_code(code, new_pw)` (old) | Kept for stale service-worker bundles and for rollback. It maps to the owner row only, with the same body as the new one (so it also answers `invalid` during a pause). Dropped at M4 once edge logs show 0 calls for 24 h; otherwise in P5. |
+| `unlock_admin_with_backup_code(code, new_pw)` (old) | Kept for stale service-worker bundles and for rollback. It maps to the owner row only, with the same body as the new one (so it also answers `invalid` during a pause). **Kept at M4** (as built 2026-10-23): the live client still calls it (`src/lib/supabase.js` `unlockWithBackupCode`) until client step C1 ships. Its drop moves to a later migration after C1, gated on edge logs showing 0 calls to `/rest/v1/rpc/unlock_admin_with_backup_code` for 24 h (0 in the 24 h before 2026-10-23 09:06 UTC, but the shipped client still has the call); otherwise in P5. |
 | `_reauth_admin(pw)` → `proxima_auth._reauth(account, pw)` | Keeps today's order: a locked account is refused (`locked`) **before** crypt. Otherwise per-row counting, same rule (3 → locked). The caller already holds the account's token, so `locked` reveals nothing new. Not browser-callable. |
 | `_revoke_admin_sessions()` → `proxima_auth._revoke_sessions(account)` | Per-row epoch, as in §3. |
 | `change_my_password` | The account comes from the token; `_reauth(account)`; a new hash on that row; `_revoke_sessions(account)`; a fresh token for this device from `issue_session` (so the owner's `admin:` token is never born revoked). |
 | `rename_my_account` | Validation as today. **Rate limit first:** once the account has had 5 `username_taken` answers in the current hour (`rename_taken_count`, `rename_taken_since`), every rename attempt answers `rate_limited` until the hour ends. `username_taken` if `lower(new)` is used by another row, or if any row of any of the 8 tables already sits in `'user:'||new` (no inheriting orphan rows); each such answer adds 1 and raises a LOG line with the opaque account id only. Lock order: users row → restore marker → tables (marker before `update tasks`, as test-queued-deletes case 5 requires). It updates `username` and `scope` together (the CHECK keeps them in step), runs today's 8-table rescope, bumps the epoch, and returns a fresh token from `issue_session`. |
 | `set_admin_backup_code` | Per row: code hash, `backup_failed = 0`, `backup_locked_until = null`. |
-| `set_admin_credentials_rehash` | Account check, then always `not_legacy` (no legacy row exists). Dropped at M4. |
+| `set_admin_credentials_rehash` | Account check, then always `not_legacy` (no legacy row exists). Dropped at M4. Callers checked 2026-10-23: none in the catalog (functions, policies, views, cron); the only client call (`src/lib/supabase.js` signIn) runs only when verify_admin answers `rehash_required`, which no body returns since M1, and ignores the outcome; 0 edge-log calls in the 24 h before 2026-10-23 09:06 UTC. |
 | `get_my_account` | Adds `id`, `role` and `scope`. username, email, email_verified, last_verified_at and has_backup_code come from the row. `password_is_bcrypt` is true when the hash is set. `sync_topic` comes from `proxima_auth.sync_topic()` (RLS) **for the owner only**; any other role gets `sync_topic = null` until P4 makes topics per account. In P1 there is one topic and it is the owner's. |
 | `set_my_account` | Writes the row's email, email_verified and last_verified_at. |
 | `get_my_wavespeed_key` / `set_my_wavespeed_key` | `device_id = v_acc.scope`. Not an account → 42501. This fixes the `u:` fall-through. get stays service_role-only. |
@@ -556,6 +556,85 @@ round 16 #1).
      rollback does not recreate the guard or the snapshot: M1's rollback runs without them (§7; review round 18 #2);
    - the RLS session drops its session_scope branch in the same window.
 
+   **As built (2026-10-23, not applied):** `supabase/migrations/20261023400000_mu_p1_end_dual_accept.sql`, rollback
+   `supabase/rollback/20261023400000_mu_p1_end_dual_accept.rollback.sql`, proof `scripts/test-mu-m4-rollback.sql`. Built
+   by a script from the live `pg_get_functiondef` texts (read-only capture), so every kept line is verbatim.
+   - One transaction, no transaction control. The opening DO block checks M1's objects exist, takes
+     `proxima_auth.users` in EXCLUSIVE mode until the commit, then refuses unless:
+     (1) **M3 is live**: issue_session's md5 is `b9ba44a18b04d17bdf0034b944a57035` or no `(?i)'admin:'\s*\|\|` in its body,
+     and `mint_token(owner id)` gives `u:<owner id>`;
+     (2) **the clock**: `now() >= '2026-10-23 21:06:07+00'` = M3's apply (09:01:07 UTC) + 12 h 05 min. The constant is
+     embedded; a re-apply of M3 or a script-minted `admin:` token after M3 moves it (edit it in a reviewed commit). The
+     check has **no bypass**: test runs before that time use a scratch copy with exactly the lines between the anchored
+     markers deleted, `sed '/^  -- M4-CLOCK-BEGIN/,/^  -- M4-CLOCK-END$/d' <M4> > <scratch>/m4-noclock.sql` (6 lines; the
+     copy differs from the file only there). Chosen over a session-setting switch so that the applied file contains
+     no switch at all; the real file was run before the time and refused with `M4: too early: not before 2026-10-23
+     21:06:07 UTC ...`;
+     (3) **compare-and-swap** on every function M4 rewrites or drops (live md5s captured read-only 2026-10-23, = M1's
+     post-apply): `_verify_session_token` `484c5195284ab3141fcae69a7c80b8af`, `current_account`
+     `6e53e84b823eaf7e6580d0d8ebed45fc`, `set_admin_credentials_rehash` `16d6979772017cdaa5ee7c9d4bf80c17`. The M1
+     freeze ends with M4;
+     (4) **M1's frozen guard and snapshot**: each object is either exactly as M1 left it (guard md5
+     `f61c6c7fffab1ea1dd6db45c9a3f1b5d`; `app_secrets_m1_frozen` tgtype 31 and `app_secrets_m1_frozen_truncate` tgtype 34
+     on public.app_secrets, enabled, calling it, no other trigger calling it; `m1_seed_snapshot` a plain table
+     `key text, value_md5 text`, owner postgres, row security on, no grant beyond postgres) or already absent. Absent is
+     accepted because M4's own rollback does not recreate them, so a re-apply after that rollback finds them gone;
+     present but different refuses.
+   - Changes: the verifier's `admin:` branch becomes `raise exception 'session token revoked'` in place (after the
+     signature and exp checks, as for `u:`; post-apply md5 `59556daf06c76548385bfe196467c2dd`); current_account loses
+     its `admin:` branch (`9175d1aea4b9e6959723c12f0bb708f1`); nothing else in either body changes. Drops
+     `set_admin_credentials_rehash`, then both guard triggers, `proxima_auth.m1_frozen_guard()` and
+     `proxima_auth.m1_seed_snapshot`. **Keeps** `unlock_admin_with_backup_code` (see §4's table) and does not touch
+     session_scope (since M2 it resolves through current_account only and has no `'admin:` literal; md5
+     `0e153c08ca88b0e2f7e933d97c451fc8`).
+   - Post-check in the same transaction: both md5s with unchanged owner, grants and settings; no body in public or
+     proxima_auth contains `'admin:` except the verifier, exactly once, in the branch that raises revoked; nothing
+     mints `admin:`; issue_session unchanged; `admin:` tokens (the owner's name issued now, another name, an empty
+     name) answer exactly `session token revoked` from the verifier and from current_account; the owner's `u:` token
+     resolves through current_account and session_scope; the dropped objects are gone; the old unlock unchanged
+     (`efa5fb04c91d9a3c374c8f8c351524e3`).
+   - Locking: DROP TRIGGER holds public.app_secrets in ACCESS EXCLUSIVE mode until the commit, and every token check reads
+     the signing key there, so token checks wait that fraction of a second. Apply with both owner devices idle; a
+     deadlock with an in-flight account write would only abort M4 (nothing half-done) and it can be re-run.
+   - Rollback (§7): refuses unless M4 is live in full (both post-apply md5s and the rehash function absent); restores the
+     three pre-M4 texts verbatim, the rehash function with its grants (postgres, anon, authenticated, service_role, never
+     PUBLIC); does not recreate the guard or the snapshot; deletes its own record (`20261023400000`,
+     `mu_p1_end_dual_accept`).
+   - Gates measured 2026-10-23 on live M1 + M2 + M3 (M4 as the no-clock copy): test-mu-auth 43 ok / 0 FAIL live and with
+     M4; test-mu-p1-catalog 12 ok live and with M4; test-mu-frozen-guard 7 ok live, 1 ok with M4
+     (`frozen-guard-retired-at-m4`); proof 22 ok; refusals and the full chain as listed in the proof's header;
+     `apply-migration.mjs <M4> --dry-run` prints `would apply`.
+   - **Open before M4 is applied** (outside the M4 author's files). **All three DONE 2026-10-23** (review m4crit #1-#4):
+     - DONE: M1's rollback (gen.mjs regenerated; M1's migration byte-identical, md5 `be4ed890…`; new rollback md5
+       `3b2012d1…`) leaves names that no longer exist out of the guard's array. Measured with M4 as its no-clock copy:
+       `M4 RB4 RB3 RB1` now refuses (`still referenced outside the rollback set: proxima_auth.session_scope(boolean),
+       proxima_auth.sync_topic() (roll back M2 first)`; before the fix it ran and printed `FAIL p1-fully-rolled-back`);
+       `M4 RB4 RB3 RB2 RB1` → `ok p1-fully-rolled-back`; M1's rollback proof (`$RB3 $RB2 $RB $T $M1 $RB $T $M1 $T $RB $T
+       $M1 $T $RB`, test-mu-rollback.sql) 28 ok, 0 FAIL.
+     - DONE: test-queued-deletes-db.sql and test-paths-in-use-db.sql sign the owner token with
+       `proxima_auth.mint_token(<owner id>)` after their rename once `proxima_auth.users` exists (`admin:` only before
+       M1); queued-deletes case 6 revokes the account's sessions after its plain rename, as rename_my_account does, so
+       the old token is still refused (and mints afresh after the rename back). 23 ok / 6 ok live and with M4.
+       test-public-execute-db.sql expects 13 / 14 / 13 (before M1 / M1 until M4 / once the rehash function is gone):
+       3 ok live and with M4. test-mu-m4-rollback.sql is in suites.mjs's skip set.
+     - (was) **M1's rollback guard goes blind after M4** (found by the chain proof): its "still referenced outside the
+       rollback set" check uses `not (p.oid = any (array(select to_regprocedure(x) from unnest(v_set) x)))`; v_set lists
+       `proxima_auth.m1_frozen_guard()`, which M4 drops, so the array holds a NULL and the test is NULL for every
+       function. After M4 → M4's rollback → M3's rollback, M1's rollback then runs while M2 is live and leaves
+       session_scope calling the dropped current_account (every data read fails until M2's rollback runs). Fix in m1-gen
+       `gen.mjs` (and the checked-in rollback): add `where to_regprocedure(x) is not null` to that subquery; a scratch
+       copy with that line refused as required (`still referenced outside the rollback set: session_scope, sync_topic
+       (roll back M2 first)`) and passed the full chain.
+     - Fixture suites that fail with M4 prepended (each mints or counts the old way): test-paths-in-use-db.sql:18 and
+       test-queued-deletes-db.sql:17 sign `'admin:__…_test'` tokens (1 ok / 5 FAIL and 3 ok / 18 FAIL with M4, all
+       `session token revoked`): sign with `proxima_auth.mint_token(<owner id>)` once `proxima_auth.users` exists;
+       test-public-execute-db.sql (`FAIL callers-kept 13`): expect 13 when set_admin_credentials_rehash is gone
+       (14 before; the old unlock stays in the list). scripts/test-mu-m4-rollback.sql is a multi-run proof and belongs
+       in m1-gen suites.mjs's skip set (alone it prints "raised no RESULT").
+     - The RLS session's suites need nothing for M4: every test-rls-* suite passes with M4 prepended (their mints are
+       already stage-aware); test-mu-scope-topic.sql passes 38 ok with three cases switching to their M4 branch
+       (`S4 owner admin: revoked from M4`, `R5 owner admin: refused from M4`, `T7 ... admin: revoked from M4`).
+
 The P1 gate (§9) runs `sql-tx.mjs M1 M2 M3 --test scripts/test-mu-auth.sql` before M1 is applied, then the suite alone
 after each live step, checked against the per-stage table in §9.1.
 
@@ -665,6 +744,18 @@ after each live step, checked against the per-stage table in §9.1.
   - M4's rollback restores the `admin:` branches and the functions M4 dropped, but **not** the frozen guard or
     `m1_seed_snapshot` (their seed md5s cannot be re-captured, and nothing writes the frozen rows after M4). M1's
     rollback runs whether or not M4 dropped them (review round 18 #2).
+    As built (2026-10-23): `supabase/rollback/20261023400000_mu_p1_end_dual_accept.rollback.sql` refuses unless M4 is
+    live in full (compare-and-swap on M4's post-apply md5s `59556daf…` and `9175d1ae…`, and
+    set_admin_credentials_rehash absent); restores `_verify_session_token`, current_account and
+    set_admin_credentials_rehash from their pre-M4 texts verbatim (md5s `484c5195…`, `6e53e84b…`, `16d69797…`, grants
+    and attributes checked); deletes its own record. Proof `scripts/test-mu-m4-rollback.sql`: `sql-tx $T $M4 $T $RB4 $T
+    $M4 --test $T` → 22 ok, 0 FAIL (bodies restored byte for byte, a fresh owner `admin:` token resolves again, the
+    `u:` token minted under M4 still valid, M3's rollback guard M4-a/b/c clear, guard and snapshot not recreated, only
+    M4's record deleted, re-apply works with the guard already gone). Chain: M4 → M3's rollback refuses (M4 live), M4 →
+    M2's rollback refuses (M3 live), M4 → M1's rollback refuses (M2 live: `roll back M2 first`; compare-and-swap would refuse next), M4 → RB4 → RB3 → RB2 → RB1 permits
+    (no P1 object left), M4 → RB4 → RB3 → RB1 refuses (M2 live: `roll back M2 first`). That last refusal was an open
+    defect (M1's rollback guard went blind once M4 dropped the guard function); fixed 2026-10-23 in M1's rollback
+    (§4 item 9 "Open before M4 is applied", DONE).
   - M3's rollback restores issue_session's owner `admin:` path. `u:` tokens stay accepted, because M1 still verifies
     them. Nobody is signed out. It refuses while M4 is live (any of M4-a/b/c, §4 item 7 "As built") and is
     compare-and-swap on M3's post-apply md5. Proof (2026-10-23, live M1 + M2): `sql-tx $T $M3 $T $RB3 $T $M3 --test $T`
@@ -804,7 +895,7 @@ Every case uses its own documentation IP so no case trips another's throttle. Ca
 | `M1` alone | all ok except `FAIL scope-header-A` and `FAIL owner-u-session-scope` (session_scope still refuses `u:` with 28000 until M2); owner flows mint `admin:`. Checked 2026-10-23 with M2's rollback prepended: 41 ok, 2 FAIL, exactly those two |
 | `M1 + M2` | all ok; owner flows still mint `admin:` |
 | `M1 + M2 + M3` | all ok; owner flows mint `u:` |
-| after `M4` | all ok; dual-accept-admin asserts `admin:` is revoked; owner-old-unlock may report the 2-arg unlock as dropped |
+| after `M4` | all ok; m4-stage-consistent (rehash gone, current_account without `'admin:`, the verifier revoking a fresh owner `admin:` token: all three or none) and dual-accept-admin assert every `admin:` token (owner now, owner 6 h ago, a member's name, empty) answers exactly `session token revoked` from the verifier, get_my_account and session_scope (28000); owner-old-unlock still runs (the 2-arg unlock is kept until after C1). 2026-10-23 with M4's no-clock copy prepended: 43 ok, 0 FAIL (live: 43 ok); with only the rehash drop prepended (a partial M4): 40 ok, 3 FAIL |
 
 **Today it fails, as required.** `node scripts/tools/sql-tx.mjs --test scripts/test-mu-auth.sql` (2026-10-23, revised
 suite) printed `0 ok, 22 FAIL` with exit 1 and no syntax error. Every case failed on a missing P1 object or on what
@@ -833,6 +924,12 @@ line; the pre-M1 anon/authenticated EXECUTE list is embedded, captured 2026-10-2
 - **Execute:** no function other than verify_admin and unlock_with_backup_code is newly executable by anon or
   authenticated (compared with the pre-M1 ACL snapshot); mint_token, issue_session and current_account are executable
   by postgres only; no new function is executable through PUBLIC.
+- **From M4** (detected by set_admin_credentials_rehash being gone; scripts/test-mu-p1-catalog.sql, 12 ok in both
+  stages on 2026-10-23): `no-admin-accept` replaces admin-literal-places (the literal `'admin:` only in the verifier,
+  exactly once, in the branch that raises `session token revoked`); `frozen-guard-retired` replaces
+  frozen-guard-triggers (guard function, both triggers and m1_seed_snapshot gone); `m4-drops` (rehash gone, the old
+  unlock still executable by anon, authenticated and service_role; before M4 it checks nothing is dropped yet);
+  no-table-privilege covers the three remaining tables. With only the rehash drop prepended it prints 10 ok, 2 FAIL.
 
 ### 9.3 Existing suites that must stay green (and the fixture lines P1 changes)
 - **SQL suites, all of them:**
@@ -868,7 +965,9 @@ line; the pre-M1 anon/authenticated EXECUTE list is embedded, captured 2026-10-2
   - **test-public-execute-db.sql:17-24:** add unlock_with_backup_code to the callers-kept list in M1 (expected count
     13 → 14; done state-agnostically: 14 when `to_regprocedure('public.unlock_with_backup_code(text,text,text)')`
     exists, 13 before). At M4, remove set_admin_credentials_rehash (and unlock_admin_with_backup_code if dropped) and set the
-    count to match.
+    count to match. **Done (2026-10-23):** the expected count is 13 before M1, 14 from M1, 13 once
+    set_admin_credentials_rehash is gone (M4 keeps the old unlock); test-paths-in-use-db.sql and
+    test-queued-deletes-db.sql mint the owner token through `proxima_auth.mint_token` from M1 (§4 item 9, DONE).
 - **Robustness edits:** read the owner from `proxima_auth.users where role='owner'` instead of app_secrets
   `admin_username` (correct today, wrong after any rename during P1). Files: test-rls-tables:8, test-rls-phase0:7,
   test-rls-plan:5, test-rls-queued-rpcs:8, test-rls-rpcs:5, test-rls-storage:6, test-rls-triggers:6 and
@@ -892,6 +991,7 @@ guard message and the pre-M1 bodies it runs; `gen.mjs` fails the build when any 
 | others-writable | a scratch key takes insert, update and delete; session_signing_key and auto_backups take an update. |
 | old-body-after-commit | the pre-M1 verify_admin (wrong password), change_my_password (with an owner `admin:` token), set_my_account and unlock_admin_with_backup_code, created verbatim under `pg_temp` scratch names, and the still-live old helper `_revoke_admin_sessions` run after M1, as a call blocked on M1's lock runs after the commit: each raises 55000 at its first app_secrets write, and app_secrets (md5 over keys, values, updated_at) and the owner row are unchanged. |
 | check-same-after-new-code | a stranger's 3 wrong sign-ins (owner locked), unlock_with_backup_code with a new password, a sign-in plus change_my_password, rename_my_account and set_my_account, all new code as anon with tokens: after each the check still reads `same = true` with no changed key. |
+| frozen-guard-retired-at-m4 | From M4 the file prints only this line: the guard function, both triggers and m1_seed_snapshot are gone, M4 is live (set_admin_credentials_rehash gone), and a frozen row takes an update again (in a subtransaction that is undone). `FAIL frozen-guard-partial` when only some of the four are gone, `FAIL frozen-guard-missing` when all are gone without M4. The post-apply check reads the snapshot and is not run after M4. 2026-10-23: 7 ok live, 1 ok with M4's no-clock copy, `frozen-guard-partial` with one trigger dropped. |
 
 ## 10. Risks and open questions
 **Owner ruling, 2026-10-23: all seven recommendations approved** (verbatim: "approve all just get with your partner to

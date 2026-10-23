@@ -3,6 +3,13 @@
 --   with M1:     node scripts/tools/sql-tx.mjs supabase/migrations/20261023100000_mu_p1_accounts.sql --test scripts/test-mu-frozen-guard.sql
 --   after M1:    node scripts/tools/sql-tx.mjs --test scripts/test-mu-frozen-guard.sql
 --   without M1:  the same command prints a skip line (passes).
+--   from M4 (supabase/migrations/20261023400000_mu_p1_end_dual_accept.sql, or its no-clock scratch copy before
+--   2026-10-23 21:06:07 UTC; see M4's header): M4 drops the guard function, both triggers and
+--   proxima_auth.m1_seed_snapshot, so the cases below no longer apply. The file then prints one line instead:
+--   ok frozen-guard-retired-at-m4 when all four objects are gone, M4 is live (set_admin_credentials_rehash gone) and a
+--   frozen row takes an update again (inside a subtransaction that is undone); FAIL frozen-guard-partial when only some
+--   are gone, FAIL frozen-guard-missing when all are gone but M4 is not live. The post-apply check
+--   (scripts/mu-p1-post-apply-check.sql) reads the snapshot and is not run after M4.
 -- guard-objects: proxima_auth.m1_frozen_guard() is a trigger function with search_path '', not security definer, not
 --   executable by PUBLIC, anon, authenticated or service_role; app_secrets_m1_frozen (BEFORE INSERT OR UPDATE OR DELETE,
 --   per row) and app_secrets_m1_frozen_truncate (BEFORE TRUNCATE) are on public.app_secrets, call it, and are enabled.
@@ -183,6 +190,25 @@ $o$;
 begin
   if to_regclass('proxima_auth.users') is null then
     raise exception 'RESULT: ok frozen-guard-skipped (no M1: run with M1 prepended, see the header); ';
+  end if;
+  -- From M4 the guard is retired (see the header).
+  n := (to_regprocedure('proxima_auth.m1_frozen_guard()') is null)::int + (to_regclass('proxima_auth.m1_seed_snapshot') is null)::int
+       + (select count(*) from unnest(array['app_secrets_m1_frozen', 'app_secrets_m1_frozen_truncate']) x(nm)
+           where not exists (select 1 from pg_trigger tg where tg.tgrelid = 'public.app_secrets'::regclass and tg.tgname = x.nm))::int;
+  if n = 4 then
+    if to_regprocedure('public.set_admin_credentials_rehash(text,text)') is not null then
+      raise exception 'RESULT: FAIL frozen-guard-missing (guard, triggers and snapshot gone, but M4 is not live); ';
+    end if;
+    begin
+      update public.app_secrets set updated_at = updated_at where key = 'admin_username';
+      get diagnostics m = row_count;
+      raise exception 'mu-fg-m4-done %', m;
+    exception when others then st := sqlerrm; end;
+    raise exception 'RESULT: %', case when st = 'mu-fg-m4-done 1'
+      then 'ok frozen-guard-retired-at-m4 (guard function, both triggers and m1_seed_snapshot gone, a frozen row takes writes again); '
+      else format('FAIL frozen-guard-retired-at-m4 frozen-row update %s; ', left(st, 80)) end;
+  elsif n > 0 then
+    raise exception 'RESULT: FAIL frozen-guard-partial (% of 4 guard objects gone); ', n;
   end if;
   select u.username, u.id into v_owner, v_id from proxima_auth.users u where u.role = 'owner';
 

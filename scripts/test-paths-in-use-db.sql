@@ -12,10 +12,13 @@ declare
 begin
   if to_regclass('proxima_auth.users') is null then   -- from P1's M1 the app_secrets admin rows are frozen; the owner row is the account
     update app_secrets set value = jsonb_set(value, '{username}', '"__paths_test"') where key = 'admin_username';
+    v_tok := _sign_session_token('admin:__paths_test', now() + interval '12 hours 5 minutes');
   else
     execute 'update proxima_auth.users set username = $1, scope = ''user:'' || $1 where role = ''owner''' using '__paths_test';
+    -- From M1 the owner's token comes from the account, after the rename above (M3 mints 'u:<id>'; M4 revokes every
+    -- 'admin:' token, so a hand-signed 'admin:' one would fail every case: review m4crit #3).
+    execute 'select proxima_auth.mint_token((select id from proxima_auth.users where role = ''owner''))' into v_tok;
   end if;
-  v_tok := _sign_session_token('admin:__paths_test', now() + interval '12 hours 5 minutes');
   insert into tasks (id, device_id, status, start_time, source_image_url, outputs) values
     ('pu-t1', u, 'completed', 1000, base || 'uploads/user___paths_test/s1.png', jsonb_build_array(base || 'user___paths_test/o1.png')),
     ('pu-o1', 'user:__other', 'completed', 1000, base || 'uploads/user___paths_test/gone.png', '[]');
