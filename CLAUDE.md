@@ -72,7 +72,8 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   form still holds (any live tab, per-tab key `proximaai-form-inputs:<tab>`; the other device's via settings
   `form-inputs:<browser>`; this browser's rows not uploaded yet in `form-inputs:<browser>:unsent`, with their generation and
   prediction ids, which also hold those WaveSpeed results) is kept until every form lets go of it and those rows are sent,
-  then deleted. A hold counts 7 days after its last
+  then deleted. A History upload naming a generation whose own row is still queued goes out only after that :unsent row
+  is confirmed to name it (App.jsx publishUnsentBefore); it is also published as the page hides or closes. A hold counts 7 days after its last
   heartbeat (`FORM_HOLD_ALIVE_MS`): a page Chrome froze sends nothing but still holds its form. A History entry with
   an item whose task this device lacks is rewritten, not removed, and the server strips items of deleted tasks from
   every History upload (`history_strip_deleted_items`). A confirmed delete whose row shows up again without a restore is

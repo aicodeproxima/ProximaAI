@@ -27,6 +27,7 @@ const MAX_HISTORY = 1000;
 const PRUNE_BATCH = 50; // How many to delete when pruning
 
 let dbPromise = null;
+let dbHandle = null;   // the open database once dbPromise resolved (task B15: transactions created synchronously)
 
 function openDB() {
   if (dbPromise) return dbPromise;
@@ -57,7 +58,11 @@ function openDB() {
       // Migrate from old "prism" DB if upgrading
       // Old data will be re-loaded via migrateFromLocalStorage on first run
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      dbHandle = request.result;
+      try { dbHandle.onclose = () => { dbHandle = null; dbPromise = null; }; } catch {}
+      resolve(request.result);
+    };
     request.onerror = () => reject(request.error);
   }).catch(err => {
     dbPromise = null;
@@ -295,6 +300,24 @@ export async function saveTask(task) {
 export async function saveTasks(taskList) {
   await batchPut("tasks", taskList);
 }
+
+// Task B15 (review round 28 #1/#3/#5): puts `items` into `storeName` in a transaction CREATED before this returns when
+// the database is open. IndexedDB orders the transactions on one store by creation, across tabs: a read another tab
+// creates after this call sees the write. A voided clear's give-back writes this way and only then drops its stash, so
+// another tab's pass finds the given-back generation in the stash (read before its IndexedDB read) or in IndexedDB.
+// Database not open yet (or the call throws): the async path. Resolves once written (or failed).
+function putNow(storeName, items, fallback) {
+  if (!Array.isArray(items) || !items.length) return Promise.resolve();
+  if (!dbHandle) return fallback();
+  try {
+    const txn = dbHandle.transaction(storeName, "readwrite");
+    const store = txn.objectStore(storeName);
+    for (const item of items) { try { store.put(item); } catch {} }
+    return new Promise((res) => { txn.oncomplete = () => res(); txn.onerror = () => res(); txn.onabort = () => res(); });
+  } catch { return fallback(); }
+}
+export const saveTasksNow = (taskList) => putNow("tasks", taskList, () => saveTasks(taskList));
+export const addHistoryEntriesNow = (entries) => putNow("history", entries, () => Promise.all((entries || []).map(addHistoryEntry)));
 
 export async function deleteTask(id) {
   try {
@@ -585,6 +608,17 @@ export function unsentUploadPaths() {
 // (App.jsx: form-inputs:<browser>:unsent, a key no previous build writes): their paths, the ids of the generations they
 // carry (task rows and the items of History entries) and those generations' prediction ids. Another device's WaveSpeed
 // flush holds a prediction it names: the generation may still land (a frozen phone's queue) and keep its result.
+// Task B15 (review round 28 #4): the items of these History entries whose own task row is still queued here (not yet in
+// the cloud). A History upload naming one is sent only after a confirmed :unsent publication names it (App.jsx
+// publishUnsentBefore): another device that sees the entry then holds that generation's files and WaveSpeed result.
+export function unsentRowsIn(entries) {
+  try {
+    const queued = new Set(getFailedSyncs().filter(f => f?.kind === "task" && f.id).map(f => String(f.id)));
+    const out = new Set();
+    for (const l of entries || []) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) if (i?.id && queued.has(String(i.id))) out.add(String(i.id));
+    return [...out];
+  } catch { return []; }
+}
 export function unsentGenerations() {
   const ids = new Set(), predictions = new Set();
   try {
@@ -1468,7 +1502,7 @@ export function recordStashPrediction(taskId, predictionId) {
 }
 // What this browser keeps outside a tab's state: the content of every clear stash (a void gives it back) and every
 // queued upload. Task ids (tasks, History items, archive records) and History entry ids.
-function storedKeptIds() {
+export function storedKeptIds() {   // exported: task B15 (review round 28 #5), the pass reads it before IndexedDB too
   const task = new Set(), history = new Set();
   const addLog = (l) => { if (!l || typeof l !== "object") return; if (l.id) history.add(String(l.id)); for (const i of Array.isArray(l.tasks) ? l.tasks : []) if (i?.id) task.add(String(i.id)); };
   for (const s of readClearStashes()) {

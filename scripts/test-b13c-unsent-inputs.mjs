@@ -72,9 +72,12 @@ await test("the file flush classifies such a path as held by a form (never delet
 // Task B14 (review round 27 #5) rewrote this: the queued uploads' paths are published in their own row
 // (form-inputs:<browser>:unsent, which a previous build's tab never overwrites), not inside form-inputs:<browser>.
 await test("wiring: the cloud publication carries the queued uploads' paths (in the :unsent row)", () => {
+  // Task B15 (review round 28 #4/#2) rewrote the anchors: one module-level publishUnsent, called by the effect.
   const eff = between("// This tab's Generate form inputs, published for every tab's file flush", "const mediaDuration = url =>");
-  assert.match(eff, /const un = unsentGenerations\(\)/);
-  assert.match(eff, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths,/);
+  assert.match(eff, /publishUnsent\(\);/);
+  const fn = between("async function publishUnsent({ exiting = false } = {}) {", "\n}\n");
+  assert.match(fn, /const now = Date\.now\(\), un = unsentGenerations\(\);/);
+  assert.match(fn, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths,/);
   assert.equal(S.unsentGenerations().paths.length, 0, "an empty queue publishes no paths");
   S.addFailedSync({ kind: "task", id: "t2", data: { id: "t2", sourceImageUrl: url("uploads/s/in.png") } });
   assert.deepEqual(S.unsentGenerations().paths, ["uploads/s/in.png"]);

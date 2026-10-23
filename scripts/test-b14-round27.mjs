@@ -112,8 +112,11 @@ await test("#7: liveUnsent reads ids and predictions of live publications only",
 await test("#5 wiring: form-inputs carries the forms only; the unsent row is its own key, published when it changes", () => {
   const eff = between("// This tab's Generate form inputs, published for every tab's file flush", "const mediaDuration = url =>");
   assert.equal((eff.match(/mine = \[\.\.\.liveFormPaths\(readFormPublications\(\), now\)\];/g) || []).length, 2, "publish() and bye(): forms only");
-  assert.match(eff, /const un = unsentGenerations\(\), unItems = \[\.\.\.un\.paths, \.\.\.un\.ids\.map\(i => `id:\$\{i\}`\), \.\.\.un\.predictions\.map\(p => `p:\$\{p\}`\)\];/);
-  assert.match(eff, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths, ids: un\.ids, predictions: un\.predictions \}\)/);
+  // Task B15 (review round 28 #4/#2) rewrote these anchors: the :unsent write moved into the module-level publishUnsent.
+  assert.match(eff, /publishUnsent\(\);/);
+  const fn = between("async function publishUnsent({ exiting = false } = {}) {", "\n}\n");
+  assert.match(fn, /const items = \[\.\.\.un\.paths, \.\.\.un\.ids\.map\(i => `id:\$\{i\}`\), \.\.\.un\.predictions\.map\(p => `p:\$\{p\}`\)\];/);
+  assert.match(fn, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths, ids: un\.ids, predictions: un\.predictions \}\)/);
 });
 await test("#7 wiring: the WaveSpeed flush holds a prediction any browser's unsent rows name; unreadable: nothing is sent", () => {
   const fl = between("const flushWsDeletes = useCallback(async () => {", "const checked = new Set(due);");
@@ -132,16 +135,15 @@ await test("#2 wiring: Clear Outputs retries taskRowsPresentRemote up to 3 times
   assert.match(h, /const assumedIds = withRow \? unnamedHistoryOnly\.filter\(id => withRow\.has\(id\)\) : unnamedHistoryOnly;/);
 });
 
-// #3: a given-back stash is dropped only once the give-back's IndexedDB writes settled (until then the stash is this
-//    browser's other trace of those generations for another tab's pass); a stash whose give-back is still being written
-//    is not given back twice.
-await test("#3 wiring: applyClearStashes collects the IndexedDB writes and drops the stash after them, once", () => {
+// #3: task B15 (review round 28 #1/#3/#5) replaced B14's deferred drop: the give-back's IndexedDB transactions are
+//    created before the synchronous drop, and the pass reads the stash before its IndexedDB read too
+//    (scripts/test-b15-round28.mjs). Rewritten to that design.
+await test("#3 wiring: the give-back writes IndexedDB in transactions created before the synchronous drop", () => {
   const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
-  assert.match(apply, /if \(givingBackRef\.current\.has\(s\.at\)\) continue;/);
-  assert.match(apply, /writes\.push\(saveTasks\(backTasks\)\);/);
-  assert.match(apply, /for \(const l of backLogs\) writes\.push\(addHistoryEntry\(l\)\);/);
-  assert.match(apply, /givingBackRef\.current\.add\(s\.at\);\s*Promise\.allSettled\(writes\)\.then\(\(\) => \{ dropGivenBackStash\(s\); givingBackRef\.current\.delete\(s\.at\); \}\);/);
-  assert.ok(!/\n\s*dropGivenBackStash\(s\);/.test(apply), "no synchronous drop left");
+  assert.match(apply, /saveTasksNow\(backTasks\);/);
+  assert.match(apply, /addHistoryEntriesNow\(backLogs\);/);
+  assert.ok(apply.indexOf("saveTasksNow(backTasks);") < apply.indexOf("dropGivenBackStash(s);"), "written before the drop");
+  assert.ok(!/givingBackRef|Promise\.allSettled\(writes\)/.test(src), "no deferred drop");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

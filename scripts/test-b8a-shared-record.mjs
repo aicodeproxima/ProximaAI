@@ -115,7 +115,7 @@ test("#1 guard: every History sender strips items of confirmed (final) task ids,
 });
 test("#1 wiring: the senders, the reconcile, replayHistoryUploads and persistLog strip blocked task items; the stale step drops their History", () => {
   for (const name of ["sendHistory", "sendHistoryEntry", "sendQueuedHistory"])
-    assert.match(between(`async function ${name}(`, "\n}\n"), /const send = uploadable\("history", withoutBlockedItems\(/, name);
+    assert.match(between(`async function ${name}(`, "\n}\n"), /(const|let) send = uploadable\("history", withoutBlockedItems\(/, name);   // task B15: let (re-filtered after the :unsent write)
   // Task B9 (review round 22 #5/#7) rewrote these checks (were: withoutDeleting by uploadBlockedIds, pending included):
   // the reconcile and the replay plan through historyUploadPlan (final confirms only), and persistLog queues and sends
   // the entry as planned (held back as given while an item is superseded or in flight).

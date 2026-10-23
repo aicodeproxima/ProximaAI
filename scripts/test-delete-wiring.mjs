@@ -328,7 +328,8 @@ test("restoreGuard voids and replay voids give the stashes back; confirmed clear
   const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
   assert.match(apply, /const back = stashGiveBack\(s\);\s*\n\s*if \(!back\) continue;/, "round 15 S1: nothing while an intent of the clear is pending");
   assert.match(apply, /putBackQueuedUploads\(back\.uploads\)/);
-  assert.match(apply, /saveTasks\(/); assert.match(apply, /addHistoryEntry\(/);
+  // Task B15 (review round 28) rewrote this: the give-back writes through the synchronous-transaction variants.
+  assert.match(apply, /saveTasksNow\(/); assert.match(apply, /addHistoryEntriesNow\(/);
   assert.match(apply, /!haveTasks\.has\(t\.id\)/, "a version held now is not overwritten");
   // Task B5: the given-back stash goes, except the part still pending at a time its ids moved to (dropGivenBackStash).
   assert.match(apply, /dropGivenBackStash\(s\);/);
@@ -603,7 +604,7 @@ test("B7a: no task / History upload bypasses the filter: the raw senders are cal
     assert.equal(src.match(new RegExp(`\\b${raw}\\(`, "g"))?.length, 1, `${raw} is called once`);
     const w = wrapper(name);
     assert.match(w, new RegExp(`\\b${raw}\\(`), `${raw} is called in ${name}`);
-    assert.match(w, /const send = uploadable\("(task|history)", /, `${name} filters through uploadable`);
+    assert.match(w, /(const|let) send = uploadable\("(task|history)", /, `${name} filters through uploadable`);   // task B15: let (re-filtered)
     assert.doesNotMatch(rest, new RegExp(`(?<![\\w.])${plain}\\(`), `no direct ${plain}( call`);
   }
 });

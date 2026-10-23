@@ -83,7 +83,8 @@ await test("wiring: no put-back cancels holds any more (keepGivenBack removed; e
   assert.ok(!/releaseHeldPurges\([^)]*alive/.test(src), "no release with an alive set");
   const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
   // Task B14 (review round 27 #3) rewrote the anchor: the stash is dropped after the give-back's IndexedDB writes.
-  assert.match(apply, /applyRelinks\(\[\.\.\.heldTasks\.values\(\), \.\.\.backTasks\]\);[\s\S]*?Promise\.allSettled\(writes\)\.then\(\(\) => \{ dropGivenBackStash\(s\);/);
+  // Task B15 (review round 28 #1/#3) restored the synchronous drop (rewritten anchor).
+  assert.match(apply, /applyRelinks\(\[\.\.\.heldTasks\.values\(\), \.\.\.backTasks\]\);[^\n]*\n\s*dropGivenBackStash\(s\);/);
 });
 
 await test("wiring: a shared IndexedDB copy of an id the cloud tombstones (or this pass removes) is not evidence", () => {
