@@ -109,6 +109,10 @@ export function historyRemovals(removedTasks, restoreRemoved) {
 // delete still in flight, or confirmed after the reads, is never released, nor one with a pending intent (the server
 // decides those: delete_queued_rows). Every pass, not only the one that saw the restore (review round 5).
 // `cloudIds` null (unread): nothing is released.
+// Task B7a (review round 20 #4): `confirmed` maps id -> the confirm's SEQUENCE and `since` is the sequence at the pass
+// start (storage.js confirmSeqNow / confirmSeqs), not two clock readings: a delete confirmed after the pass began is never
+// released, whatever the server-clock offset did meanwhile. App.jsx runs it through storage.js sharedDeleteState over
+// every confirmed id of the browser, and a released id leaves the shared record (releaseConfirmed).
 export function releaseRestored(deleting, pendingIds, cloudIds, confirmed, since) {
   if (!(cloudIds instanceof Set) || !(confirmed instanceof Map)) return [];
   const pending = new Set(pendingIds || []);

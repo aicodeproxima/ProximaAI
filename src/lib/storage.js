@@ -5,6 +5,7 @@
 import { planResume, rememberReleased, liveReleased, noteClaimants, liveClaimants, dropClaimants, putBackClaimantRecords } from "./taskResume.js";
 import { FORM_HOLD_ALIVE_MS } from "./fileDelete.js";
 import { serverNow } from "./serverClock.js";
+import { releaseRestored } from "./syncReconcile.js";
 
 const DB_NAME = "proximaai";
 const DB_VERSION = 3;
@@ -582,6 +583,9 @@ export function getFailedSyncs() {
 }
 
 export function addFailedSync(entry) {
+  // Task B7a, the last guard: a task / History upload of an id the SHARED delete state blocks (a delete intent pending in
+  // any tab, or a confirmed delete no restore brought back) is never queued, so no replay can send it.
+  if ((entry?.kind === "task" || entry?.kind === "history") && uploadBlockedIds(entry.kind).has(entry.id)) return;
   try {
     const list = getFailedSyncs();
     // Dedupe by kind+id (don't pile up duplicates for the same task/log)
@@ -751,26 +755,50 @@ export function intentGroups(kind) {
 const CONFIRMED_KEY = "proximaai-confirmed-deletes";
 const CONFIRMED_FOR_MS = 30 * 24 * 60 * 60 * 1000;
 const readConfirmed = () => { try { return JSON.parse(localStorage.getItem(CONFIRMED_KEY) || "{}") || {}; } catch { return {}; } };
+// One record: { at: server time (withoutConfirmedUploads compares it with upload stamps), seq: the confirm sequence
+// (releaseRestored compares it with a pass's start) }. Records written before task B7a are a bare server time: seq 0,
+// i.e. confirmed before any pass.
+const confirmRecord = (v) => (v && typeof v === "object" ? { at: Number(v.at) || 0, seq: Number(v.seq) || 0 } : { at: Number(v) || 0, seq: 0 });
+// Task B7a (review round 20 #4): "confirmed before this pass" is decided by ORDER, not by time. A shared counter (every
+// tab of this browser) numbers each confirm call; a reconcile pass takes the counter value at its start
+// (confirmSeqNow), and a confirm made after that has a seq >= it, whatever the server-clock offset did meanwhile.
+const CONFIRM_SEQ_KEY = "proximaai-confirm-seq";
+export function confirmSeqNow() {
+  try { return Math.max(1, Math.floor(Number(localStorage.getItem(CONFIRM_SEQ_KEY))) || 1); } catch { return 1; }
+}
+function takeConfirmSeq() {
+  const seq = confirmSeqNow();
+  try { localStorage.setItem(CONFIRM_SEQ_KEY, String(seq + 1)); } catch {}
+  return seq;
+}
 // Returns the archived file paths of confirmed tasks that a clear's stash held (forgetStashedIds): the caller queues
 // them for deletion through the file-delete queue.
-export function confirmDeleteIntents(kind, ids) {
-  settleDeleteIntents(kind, ids);
-  if (kind !== "task-delete" && kind !== "history-delete") return [];
+// Task B7b (review round 20 #7): `at` is the queue time of the group the cloud answered (App.jsx passes it at every
+// confirm site). Only intents queued at or before it are settled: an id a later delete re-queued (its intent moved to a
+// later time, e.g. after a restore brought it back) keeps that intent, so that delete is still sent (the server answers
+// "deleted" if nothing is left). `at` omitted: every queue time (no App.jsx caller; scripts/test-delete-wiring.mjs).
+export function confirmDeleteIntents(kind, ids, at) {
+  const isDelete = kind === "task-delete" || kind === "history-delete";
+  // The record first (task B7a): another tab must never see the id with neither its intent nor its confirm.
+  if (isDelete) {
+    try {
+      // Server time, like the queued uploads' stamps (addFailedSync) that withoutConfirmedUploads compares it with: a
+      // device clock off by more than a few ms would otherwise keep a stale upload or drop a real one (round 19
+      // follow-up, scripts/test-confirm-clock.mjs). The sequence orders it against reconcile passes (round 20 #4).
+      const all = readConfirmed(), now = serverNow(), cut = now - CONFIRMED_FOR_MS, seq = takeConfirmSeq();
+      for (const k of Object.keys(all)) for (const [id, v] of Object.entries(all[k] || {})) if (!(confirmRecord(v).at > cut)) delete all[k][id];
+      all[kind] = all[kind] || {};
+      for (const id of ids || []) if (id) all[kind][id] = { at: now, seq };
+      localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
+    } catch {}
+  }
+  settleDeleteIntents(kind, ids, at);
+  if (!isDelete) return [];
   // A delete the cloud confirmed is never given back by a later void of its clear (review round 15 S2).
   const paths = forgetStashedIds(kind, ids);
   // Nor uploaded again (review round 19 #2): a queued upload of a confirmed id (one a give-back put back while its delete
   // was pending, or a stale tab's) would re-insert a row the server holds no tombstone for.
   dropQueuedUploadsOf(kind === "task-delete" ? "task" : "history", ids);
-  try {
-    // Server time, like the queued uploads' stamps (addFailedSync) that withoutConfirmedUploads compares it with, and
-    // like releaseRestored's `since`: a device clock off by more than a few ms would otherwise keep a stale upload or
-    // drop a real one (round 19 follow-up, scripts/test-confirm-clock.mjs).
-    const all = readConfirmed(), now = serverNow(), cut = now - CONFIRMED_FOR_MS;
-    for (const k of Object.keys(all)) for (const [id, at] of Object.entries(all[k] || {})) if (!(at > cut)) delete all[k][id];
-    all[kind] = all[kind] || {};
-    for (const id of ids || []) if (id) all[kind][id] = now;
-    localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
-  } catch {}
   return paths;
 }
 // A new delete of these ids starts: their older confirmations no longer say anything (a restore brought them back and
@@ -783,9 +811,93 @@ export function forgetConfirmed(kind, ids) {
     localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
   } catch {}
 }
+// id -> the confirm's server time, recorded within 30 days.
 export function confirmedDeletes(kind) {
   const cut = serverNow() - CONFIRMED_FOR_MS;
-  return new Map(Object.entries(readConfirmed()[kind] || {}).filter(([, at]) => at > cut));
+  return new Map(Object.entries(readConfirmed()[kind] || {}).map(([id, v]) => [id, confirmRecord(v)]).filter(([, r]) => r.at > cut).map(([id, r]) => [id, r.at]));
+}
+// id -> the confirm's sequence (confirmSeqNow), for the same records.
+export function confirmSeqs(kind) {
+  const cut = serverNow() - CONFIRMED_FOR_MS;
+  return new Map(Object.entries(readConfirmed()[kind] || {}).map(([id, v]) => [id, confirmRecord(v)]).filter(([, r]) => r.at > cut).map(([id, r]) => [id, r.seq]));
+}
+// A restore brought these confirmed ids back (syncReconcile.js releaseRestored): their records go, so every tab may
+// upload them again. Re-checked at the write: a record confirmed again at or after `sinceSeq` (deleted again during
+// the pass) stays. Returns the ids released.
+export function releaseConfirmed(kind, ids, sinceSeq) {
+  const out = [];
+  try {
+    const all = readConfirmed(), recs = all[kind];
+    if (!recs) return out;
+    for (const id of ids || []) if (id in recs && confirmRecord(recs[id]).seq < sinceSeq) { delete recs[id]; out.push(id); }
+    if (out.length) localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
+  } catch {}
+  return out;
+}
+
+// ─── Task B7a (review round 20 #1, #3, #5, #8): the SHARED delete state decides every upload ───
+// Several tabs may be open; the failed-sync queue (delete intents) and the confirmed-deletes record are shared by them,
+// while each tab's React state and deletingIds are its own and may be stale (a frozen background tab). So no tab
+// uploads a task / History row whose id has a delete intent pending in ANY tab, or whose delete was confirmed and not
+// released by a restore (releaseConfirmed).
+// `kind`: "task" / "history". The ids whose uploads are blocked.
+export function uploadBlockedIds(kind) {
+  const del = kind === "task" ? "task-delete" : kind === "history" ? "history-delete" : null;
+  if (!del) return new Set();
+  return new Set([...pendingDeleteIds(del), ...confirmedDeletes(del).keys()]);
+}
+// The one upload filter (App.jsx sends every task / History upload through it): `items` (rows, queue entries or ids)
+// without the blocked ones. A confirmed id's queued uploads leave the queue (none can ever be sent: addFailedSync refuses
+// them, so one still queued is a stale copy); a pending one's stay (that delete decides: a void sends them later).
+export function uploadable(kind, items) {
+  const list = Array.isArray(items) ? items : [...(items || [])];
+  const del = kind === "task" ? "task-delete" : kind === "history" ? "history-delete" : null;
+  if (!del) return list;
+  const pending = pendingDeleteIds(del), confirmed = confirmedDeletes(del);
+  const out = [], dead = new Set();
+  for (const x of list) {
+    const id = typeof x === "string" ? x : x?.id;
+    if (!id) continue;
+    if (confirmed.has(id)) dead.add(id);
+    else if (!pending.has(id)) out.push(x);
+  }
+  if (dead.size) dropQueuedUploadsOf(kind, [...dead]);
+  return out;
+}
+// One reconcile pass's view of the shared delete state for `kind` ("task" / "history"), App.jsx reconcileWithCloud:
+//   released: the confirmed ids a restore brought back (in `cloudIds`, confirmed before the pass began, `sinceSeq`, and
+//             no intent pending): their records go (releaseConfirmed), so they are added and uploaded again;
+//   deleting: this tab's `deleting` plus every pending intent plus every confirmed id not released (the plans' input:
+//             nothing in it is added, removed or uploaded by the pass);
+//   stale(rows): the ids of these local rows whose delete was confirmed and that the cloud lacks: this tab's stale copy
+//             goes (delete means delete in every tab). `cloudIds` null (unread): none, and nothing is released.
+export function sharedDeleteState(kind, { deleting = new Set(), cloudIds = null, sinceSeq } = {}) {
+  const del = kind === "task" ? "task-delete" : "history-delete";
+  const pending = pendingDeleteIds(del);
+  const seqs = confirmSeqs(del);
+  const known = cloudIds instanceof Set;
+  const back = known ? releaseRestored(seqs.keys(), pending, cloudIds, seqs, sinceSeq) : [];
+  const released = back.length ? releaseConfirmed(del, back, sinceSeq) : [];
+  const confirmed = new Set([...confirmedDeletes(del).keys()]);
+  const all = new Set([...(deleting || []), ...pending, ...confirmed]);
+  return { released, deleting: all, confirmed,
+    stale: (rows) => (known ? (rows || []).filter(r => r?.id && confirmed.has(r.id) && !cloudIds.has(r.id)).map(r => r.id) : []) };
+}
+// Task B7a (review round 20 #8): which of this tab's "being deleted" ids no longer are, derived each pass: no intent of
+// this kind pending in the shared queue, and no hold of this tab left. `holds`: id -> Set of holds; an object is a
+// delete call of this tab still running (its intent may not be queued yet, e.g. during the safety backup), a number is
+// a queue time whose intents still pending keep the id (History entries a task delete's server work removes). A
+// confirmed id stays excluded through the shared confirmed record, not through this set.
+export function settledDeletingIds(deleting, kind, holds) {
+  const pending = pendingDeleteIds(kind);
+  const out = [];
+  for (const id of deleting || []) {
+    if (pending.has(id)) continue;
+    const h = holds?.get?.(id);
+    if (h && [...h].some(x => (x && typeof x === "object") || (typeof x === "number" && intentsPendingAt(x)))) continue;
+    out.push(id);
+  }
+  return out;
 }
 
 // A recorded confirmation (confirmedDeletes, 30 days) also stops a queued upload of that id (review round 19 #2/#3).
@@ -812,13 +924,16 @@ function dropQueuedUploadsOf(upKind, ids) {
   } catch {}
 }
 
-// The intents a confirmed delete settled, every queue time of these ids (confirmDeleteIntents only: App.jsx never calls it
-// directly, round 19 #3). Removed in one write.
-export function settleDeleteIntents(kind, ids) {
+// The intents a confirmed delete settled (confirmDeleteIntents only: App.jsx never calls it directly, round 19 #3).
+// `upTo`: the answered group's queue time; only intents queued at or before it go (task B7b, review round 20 #7). Omitted
+// (null / undefined): every queue time of these ids. Removed in one write.
+export function settleDeleteIntents(kind, ids, upTo) {
   try {
     const done = new Set(ids || []);
     if (!done.size) return;
-    localStorage.setItem(FAILED_KEY, JSON.stringify(getFailedSyncs().filter(e => !(e.kind === kind && done.has(e.id)))));
+    const bound = upTo == null ? Infinity : Number(upTo);
+    if (Number.isNaN(bound)) return;   // an unreadable time settles nothing: the replay sends that group again
+    localStorage.setItem(FAILED_KEY, JSON.stringify(getFailedSyncs().filter(e => !(e.kind === kind && done.has(e.id) && (e.ts || 0) <= bound))));
   } catch {}
 }
 // Review round 19 #1: a void answer is about ONE group, the intents queued at `at`. An id a later delete re-queued (its
@@ -1098,6 +1213,51 @@ export function dropGivenBackStash(stash) {
     if (writeClearStash(stash.at, { uploads: kept.uploads, tasks, logs, archives: kept.archives, movedTo: [...times] })) return;
   }
   dropClearStash(stash.at);
+}
+// Task B7b (review round 20 #2/#6): what the INLINE voided branch of Clear Outputs, Reset and Clear Logs may put back from
+// its in-memory copies, by the same rule a later void's give-back follows (stashGiveBack / splitStash / stashedItems):
+// - an id still pending deletion of its kind at ANOTHER time (another tab's delete, a clear pressed again) is not put
+//   back: its items and taken uploads join the clear's stash at `at` as the part kept for that time (the caller's
+//   applyClearStashes then keeps it there, following that time: dropGivenBackStash), so that time's void gives it back
+//   and its confirm drops it;
+// - an id whose delete was confirmed after the clear's queue time is left out entirely (a confirmed delete never comes
+//   back; its confirm already took it out of every stash and the upload queue);
+// - everything else comes back; the uploads only through the shared upload filter (uploadable).
+// Call it after the clear's own intents are settled (voidDeleteIntents at `at`). `held`: { tasks, logs, uploads }: the
+// tasks and History entries the clear removed here and the queue entries it took. Returns them, filtered.
+export function inlineVoidPutBack(at, { tasks = [], logs = [], uploads = [] } = {}) {
+  const ts = Number(at);
+  const pending = { task: pendingDeleteIds("task-delete", { exceptAt: ts }), history: pendingDeleteIds("history-delete", { exceptAt: ts }) };
+  const confirmed = { task: confirmedDeletes("task-delete"), history: confirmedDeletes("history-delete") };
+  const gone = (kind, id) => { const c = confirmed[kind].get(id); return c != null && c > ts; };
+  const kept = { tasks: [], logs: [], uploads: [] };
+  const split = (items, kind, field) => {
+    const out = [];
+    for (const x of items || []) {
+      if (!x?.id || gone(kind, x.id)) continue;
+      (pending[kind].has(x.id) ? kept[field] : out).push(x);
+    }
+    return out;
+  };
+  const backTasks = split(tasks, "task", "tasks"), backLogs = split(logs, "history", "logs");
+  const backUploads = [];
+  for (const e of uploads || []) {
+    const kind = e?.kind;
+    if (kind !== "task" && kind !== "history") { if (e?.kind) backUploads.push(e); continue; }
+    if (!e.id || gone(kind, e.id)) continue;
+    (pending[kind].has(e.id) ? kept.uploads : backUploads).push(e);
+  }
+  if (kept.tasks.length || kept.logs.length || kept.uploads.length) {
+    const s = readClearStash(ts) || { uploads: [], tasks: [], logs: [] };
+    const merge = (have, add, key) => { const ids = new Set(add.map(key)); return [...add, ...(have || []).filter(x => !ids.has(key(x)))]; };
+    const ukey = (e) => `${e?.kind}\u0000${e?.id}`;
+    writeClearStash(ts, { ...s, tasks: merge(s.tasks, kept.tasks, x => x?.id), logs: merge(s.logs, kept.logs, x => x?.id), uploads: merge(s.uploads, kept.uploads, ukey) });
+  }
+  return {
+    tasks: backTasks, logs: backLogs,
+    uploads: [...uploadable("task", backUploads.filter(e => e.kind === "task")), ...uploadable("history", backUploads.filter(e => e.kind === "history")),
+      ...backUploads.filter(e => e.kind !== "task" && e.kind !== "history")],
+  };
 }
 // Review round 17 (#1, #3, #6): a stash's fate follows the clear its ids moved to. The followers of the clear at `ts`:
 // stashes with no intent of their own pending whose `movedTo` includes `ts` (transitive: noteStashMoves records every

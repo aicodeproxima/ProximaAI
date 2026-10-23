@@ -33,10 +33,13 @@ async function runCase(skewMs, scenario) {
     S.confirmDeleteIntents("task-delete", ["x"]);
     S.putBackQueuedUploads(taken);
   } else {
-    // x was confirmed deleted, came back (a restore) and changed here: the new upload, queued after the confirm, is real.
+    // An upload entry stamped after the confirm (the server-time stamp addFailedSync gives) is kept by the time
+    // comparison. Task B7a: addFailedSync itself now refuses a confirmed id until a restore releases it (storage.js
+    // releaseConfirmed, scripts/test-shared-delete-state.mjs), so the later entry is placed directly here: this case
+    // checks only that withoutConfirmedUploads compares the two stamps on one clock.
     S.confirmDeleteIntents("task-delete", ["x"]);
     await tick();
-    upload();
+    S.putBackQueuedUploads([{ kind: "task", id: "x", data: { id: "x" }, ts: clock.serverNow(), attempts: 1 }]);
   }
   return S.withoutConfirmedUploads(S.getFailedSyncs().filter(e => e.kind === "task" && e.id === "x")).length;
 }
