@@ -32,10 +32,13 @@ begin
   for i in 1..5 loop                                   -- as postgres: one live-scope seed per table, then the expected count
     q := p || '_' || tbls[i];
     execute format('insert into public.%I (%I, device_id) values (%L, %L)', tbls[i], kcol[i], q || '_seed', s);
-    execute format('select count(*) from public.%I', tbls[i]) into n;
+    -- and one row in another scope: from 20261023050000 a session never sees or touches it
+    execute format('insert into public.%I (%I, device_id) values (%L, %L)', tbls[i], kcol[i], q || '_other', 'user:__rls_other_scope');
+    execute format('select count(*) from public.%I where device_id = %L', tbls[i], s) into n;   -- the session's own rows
     total := total || n;
   end loop;
-  select count(*) into tomb0 from public.sync_tombstones;
+  select count(*) into tomb0 from public.sync_tombstones where device_id = s;
+  insert into public.sync_tombstones (id, kind, device_id) values (p || '_tomb_other', 'task', 'user:__rls_other_scope');
 
   execute 'set local role anon';
   for i in 1..5 loop
@@ -101,6 +104,11 @@ begin
     begin
       execute format('select count(*) from public.%I', tbls[i]) into n;
       r := r || format('%s %s valid select=%s expected=%s', case when n = total[i] then 'PASS' else 'FAIL' end, tbls[i], n, total[i]);
+      execute format('select count(*) from public.%I where %I = %L', tbls[i], kcol[i], q || '_other') into n;
+      r := r || format('%s %s another scope''s row invisible (%s)', case when n = 0 then 'PASS' else 'FAIL' end, tbls[i], n);
+      execute format('update public.%I set device_id = device_id where %I = %L', tbls[i], kcol[i], q || '_other');
+      get diagnostics n = row_count;
+      r := r || format('%s %s another scope''s row not updatable (%s rows)', case when n = 0 then 'PASS' else 'FAIL' end, tbls[i], n);
       for k in 1..2 loop                               -- pass 1 inserts, pass 2 takes ON CONFLICT DO UPDATE (PostgREST upsert shape)
         execute format('insert into public.%I (%I, device_id) values (%L, %L) on conflict (%s) do update set device_id = excluded.device_id',
                        tbls[i], kcol[i], q || '_v', s, conf[i]);
@@ -145,6 +153,8 @@ begin
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
   select count(*) into n from public.sync_tombstones;               -- +4: the tasks and history _v and _seed deletes above
   r := r || format('%s tombstones valid select=%s expected=%s', case when n = tomb0 + 4 then 'PASS' else 'FAIL' end, n, tomb0 + 4);
+  select count(*) into n from public.sync_tombstones where id = p || '_tomb_other';
+  r := r || format('%s tombstones of another scope invisible (%s)', case when n = 0 then 'PASS' else 'FAIL' end, n);
   foreach stmt in array array[
       format('insert into public.sync_tombstones (id, kind, device_id) values (%L, %L, %L)', p || '_tomb', 'task', s),
       format('update public.sync_tombstones set deleted_at = now() where id = %L', p || '_tasks_seed'),

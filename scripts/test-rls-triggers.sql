@@ -30,18 +30,34 @@ begin
     insert into public.tasks (id, device_id, status) values (p || '_t', s, 'processing') on conflict (id) do update set status = excluded.status;
     select status into v from public.tasks where id = p || '_t';
     r := r || format('%s T1b completed row stays completed -> %s', case when v = 'completed' then 'PASS' else 'FAIL' end, v);
-    -- T2 keep_owner rescue INTO the live scope: the existing row is another scope's; USING lets the conflict update through
-    insert into public.tasks (id, device_id)     values (p || '_orphan',  s) on conflict (id) do update set device_id = excluded.device_id;
-    insert into public.favorites (id, device_id) values (p || '_forphan', s) on conflict (id) do update set device_id = excluded.device_id;
-    select count(*) into n from (select device_id from public.tasks where id = p || '_orphan'
-                                 union all select device_id from public.favorites where id = p || '_forphan') x where x.device_id = s;
-    r := r || format('%s T2 rescue into live scope (%s/2)', case when n = 2 then 'PASS' else 'FAIL' end, n);
     -- T3 PATCH-style move OUT: keep_owner restores the owner, WITH CHECK passes, the row stays in the live scope
     update public.tasks set device_id = 'user:__rls_other' where id = p || '_t';
     select device_id into v from public.tasks where id = p || '_t';
     r := r || format('%s T3 move-out kept owner', case when v = s then 'PASS' else 'FAIL' end);
   exception when others then r := r || format('FAIL T1-T3 raised %s %s', sqlstate, sqlerrm);
   end;
+  -- T2 MUST DENY (since 20261023050000): an upsert whose id collides with another scope's row is refused, and that row
+  --    stays in its scope. Before, a valid session "rescued" such a row into its own scope; with several accounts that
+  --    would move another account's row.
+  begin
+    insert into public.tasks (id, device_id) values (p || '_orphan', s) on conflict (id) do update set device_id = excluded.device_id;
+    r := r || text 'FAIL T2 upsert over another scope''s row allowed';
+  exception when sqlstate '42501' then r := r || format('%s T2 upsert over another scope''s row refused: %s',
+              case when sqlerrm like '%USING expression%' then 'PASS' else 'FAIL' end, sqlerrm);
+            when others then r := r || format('FAIL T2 %s %s', sqlstate, sqlerrm);
+  end;
+  begin
+    insert into public.favorites (id, device_id) values (p || '_forphan', s) on conflict (id) do update set device_id = excluded.device_id;
+    r := r || text 'FAIL T2b favorites upsert over another scope''s row allowed';
+  exception when sqlstate '42501' then r := r || text 'PASS T2b favorites upsert over another scope''s row refused';
+            when others then r := r || format('FAIL T2b %s %s', sqlstate, sqlerrm);
+  end;
+  execute 'reset role';
+  select count(*) into n from (select device_id from public.tasks where id = p || '_orphan'
+                               union all select device_id from public.favorites where id = p || '_forphan') x where x.device_id = 'user:__rls_orphan';
+  r := r || format('%s T2c the other scope''s rows stay in their scope (%s/2)', case when n = 2 then 'PASS' else 'FAIL' end, n);
+  execute 'set local role anon';
+  perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
   -- T4 MUST DENY: an upsert proposing another scope for a NEW row fails the INSERT check
   begin
     insert into public.tasks (id, device_id) values (p || '_t4', 'user:__rls_other') on conflict (id) do update set device_id = excluded.device_id;
@@ -87,8 +103,12 @@ begin
     r := r || format('%s T10 apiKey dropped', case when n = 0 then 'PASS' else 'FAIL' end);
     -- T11 the app's delete is scoped: another scope's row is out of its reach
     perform public.delete_queued_rows(t_good, 'history', array[p || '_horphan'], qat);
+    select count(*) into n from public.history where id = p || '_horphan';
+    r := r || format('%s T11b another scope''s row invisible to the session (%s)', case when n = 0 then 'PASS' else 'FAIL' end, n);
+    execute 'reset role';   -- survival is checked as the owner role: the session cannot see another scope's row
     r := r || format('%s T11 another scope''s row untouched by the scoped delete',
            case when exists (select 1 from public.history where id = p || '_horphan') then 'PASS' else 'FAIL' end);
+    execute 'set local role anon';
     -- T12 the client's keyset id read and its scope-filtered pulls see the live rows
     select count(*) into n from public.tasks where device_id = s and id > '' ;
     r := r || format('%s T12 scope read sees live rows (%s)', case when n >= 2 then 'PASS' else 'FAIL' end, n);
