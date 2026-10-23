@@ -293,7 +293,9 @@ await test("#18: a final delete's direct write refused is reported, not silently
 await test("#18 wiring: deleteOnWaveSpeed checks both writes, has no direct fallback, says so; the lookup resolves only stored deletes", () => {
   const dow = between("const deleteOnWaveSpeed = useCallback(", "}, [flushWsDeletes]);");
   // Task B12b: the held write is holdLateResult for a relinked result (its relink and its hold, both checked).
-  assert.match(dow, /if \(at != null\) \{\s*const ws = queueDeletes\(\{\}, \[t\], now\);\s*const ok = relink && t\.id \? holdLateResult\(at, t\.id, t\.taskId, ws\[t\.taskId\]\) : holdPurgeDeletes\(at, \{ ws \}\);\s*if \(!ok\) unstored\.push\(t\.taskId\);\s*continue;\s*\}/);
+  // Task B13a (review round 26 #6): the generation's relink parts are held with it after the checked write (rewritten:
+  // the held block now also holds them before `continue`).
+  assert.match(dow, /if \(at != null\) \{\s*const ws = queueDeletes\(\{\}, \[t\], now\);\s*const ok = relink && t\.id \? holdLateResult\(at, t\.id, t\.taskId, ws\[t\.taskId\]\) : holdPurgeDeletes\(at, \{ ws \}\);\s*if \(!ok\) unstored\.push\(t\.taskId\);[\s\S]*?continue;\s*\}/);
   assert.match(dow, /if \(direct\.length && !writeWsDeletes\(queueDeletes\(readWsDeletes\(\), direct, now\)\)\) unstored\.push\(/);
   assert.match(dow, /if \(unstored\.length\) \{[^}]*setSaveStatus\("error"\);/);
   assert.match(dow, /return unstored;/);
@@ -343,7 +345,9 @@ function clearWithEmptyEntry() {
   const at = C.serverNow() - 1000;
   const staged = P.planDeleteStage([L], [x], [], { all: true, serverHistory: true, at, holdAt: at });
   assert.deepEqual(staged.send.remove, [], "premise: no History intent of its own (the server removes it in the clear)");
-  assert.deepEqual(staged.hold.files["uploads/scope/L-src.png"], [], "no owner of its own: the delete as a whole decides");
+  // Task B13a (review round 26 #1): rewritten from [] (owner-less): the path is recorded with its entry ("entry:L"); the
+  // delete as a whole still decides it unless restore evidence does (then the entry itself).
+  assert.deepEqual(staged.hold.files["uploads/scope/L-src.png"], ["entry:L"], "recorded with its entry, no History delete of its own");
   assert.ok(S.reserveDelete({ intents: [{ kind: "task-delete", ids: ["x"], at }, ...staged.intents], holdAt: at, hold: staged.hold }));
   return at;
 }
@@ -360,8 +364,16 @@ await test("#4: the same clear voided -> the entry's path waits with x's (undeci
   S.voidDeleteIntents("task-delete", ["x"], at);
   assert.deepEqual(filesQueued(), [], "nothing deleted on a void");
   assert.ok(heldPaths().includes("uploads/scope/L-src.png"), "undecided like x: still held");
+  // Task B13a (review round 26 #1): rewritten from "x came back: everything of that delete is kept". x came back, so its
+  // paths are kept; the entry L did NOT come back (absent from the cloud and this browser), so its path goes. The variant
+  // where L came back too keeps everything.
   S.releaseHeldPurges(Date.now(), { restoreKnownAt: S.knownRestoreAt(), task: { present: ["x"], local: [], complete: true }, history: { present: [], local: [], complete: true } });
-  assert.deepEqual([filesQueued(), heldPaths()], [[], []], "x came back: everything of that delete is kept");
+  assert.deepEqual([filesQueued(), heldPaths()], [["uploads/scope/L-src.png"], []], "x came back (kept); L did not (its path goes)");
+  mem.clear();
+  const at2 = clearWithEmptyEntry();
+  S.voidDeleteIntents("task-delete", ["x"], at2);
+  S.releaseHeldPurges(Date.now(), { restoreKnownAt: S.knownRestoreAt(), task: { present: ["x"], local: [], complete: true }, history: { present: ["L"], local: [], complete: true } });
+  assert.deepEqual([filesQueued(), heldPaths()], [[], []], "x and L came back: everything of that delete is kept");
 });
 await test("#4: a group naming no owner at all follows its queue time; a voided time stays known while its hold is kept", () => {
   const at = C.serverNow() - 1000;

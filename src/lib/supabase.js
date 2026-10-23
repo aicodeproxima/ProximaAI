@@ -767,6 +767,25 @@ export async function pullTaskInputs(ids) {
   } catch (err) { warnOnce("pullTaskInputs", err); return null; }
 }
 
+// Task B13a (review round 26 #2): which of these generation ids have a tasks row in this account's scope now (any age),
+// through the session client (one scoped select of ids, chunks of 100). Clear Outputs reads it right after a successful
+// clear: only its unnamed History-only ids whose row the server left in place are "assumed" confirms. null when the read
+// failed.
+export async function taskRowsPresentRemote(ids) {
+  const list = [...new Set((ids || []).filter(Boolean))];
+  const out = new Set();
+  try {
+    if (!list.length) return out;
+    if (!requireClient()) return null;
+    for (let i = 0; i < list.length; i += 100) {
+      const { data, error } = await supabase.from("tasks").select("id").eq("device_id", getDeviceId()).in("id", list.slice(i, i + 100));
+      if (error || !Array.isArray(data)) return null;
+      for (const r of data) if (r?.id) out.add(r.id);
+    }
+    return out;
+  } catch (err) { warnOnce("taskRowsPresentRemote", err); return null; }
+}
+
 // The input URLs older rows lack (syncReconcile.js inputBackfill, review round 3): one narrow update per row, only those
 // columns, only in this account's scope. { ok: false } when any was refused; the next pass derives them again.
 export async function backfillTaskInputs(rows) {

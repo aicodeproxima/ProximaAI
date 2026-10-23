@@ -68,17 +68,21 @@ const evidence = (rk, { tasks = [], items = [], restoreRemoved = [], local = [],
 });
 
 // ─── #10: the evidence is the browser's, not one tab's ───
-await test("#10: a generation tab B got back from a voided clear keeps its files and result when tab A decides (B's give-back cancels them for every tab)", () => {
+// Owner ruling 2026-10-23 rewrote this test: B's give-back no longer cancels the holds at once (keepGivenBack removed);
+// they wait, and A's pass keeps x because B gave it back into this browser's IndexedDB (the shared evidence).
+await test("#10: a generation tab B got back from a voided clear keeps its files and result when tab A decides (B's give-back is in the shared IndexedDB)", async () => {
   const T = 1_790_000_000_000, x = gen("x");
   reserve(A, [x], T);
   assert.deepEqual([heldPaths(), heldWs()], [[`scope/x-out.png`, `uploads/scope/x-src.png`], ["pred-x"]]);
-  // The restore in tab B voids the clear; B gives x back (applyClearStashes / the inline put-back: keepGivenBack).
+  // The restore in tab B voids the clear; B gives x back (state and IndexedDB); its holds wait.
   B.voidDeleteIntents("task-delete", ["x"], T);
-  B.releaseHeldPurges(Date.now(), null, { alive: { task: ["x"], history: [] } });
-  // Tab A's next usable pass: x absent from the cloud (local-only) and from A's own state.
+  B.releaseHeldPurges(Date.now());
+  assert.deepEqual([filesQueued(), wsQueued(), heldWs()], [[], [], ["pred-x"]], "the give-back decides nothing: still held");
+  // Tab A's next usable pass: x absent from the cloud (local-only) and from A's own state, present in IndexedDB.
   const rk = A.knownRestoreAt();
   assert.ok(rk > T);
-  A.releaseHeldPurges(Date.now(), evidence(rk));
+  const shared = await A.storedEvidenceIds({ tasks: async () => [x], history: async () => [] });
+  A.releaseHeldPurges(Date.now(), evidence(rk, { shared }));
   assert.deepEqual([filesQueued(), wsQueued(), heldPaths(), heldWs()], [[], [], [], []], "nothing of x is deleted");
 });
 await test("#10: without that cancel (B gave x back into IndexedDB only), A's pass reads IndexedDB and keeps x; unreadable: it decides nothing", async () => {
@@ -109,15 +113,13 @@ await test("#10: a generation nobody keeps is still decided gone (files and resu
   A.releaseHeldPurges(Date.now(), evidence(A.knownRestoreAt(), { shared }));
   assert.deepEqual([filesQueued(), wsQueued()], [[`scope/x-out.png`, `uploads/scope/x-src.png`], ["pred-x"]]);
 });
-await test("#10 wiring: give-backs cancel for every tab before the stash goes; the pass reads IndexedDB when anything is held", () => {
-  const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
-  const k = apply.indexOf("keepGivenBack(tasks, logs, Object.keys(back.archives || {}));"), d = apply.indexOf("dropGivenBackStash(s);");
-  assert.ok(k > 0 && d > k, "cancelled before the stash is dropped");
-  assert.match(between("const keepGivenBack = ", "const applyClearStashes = "), /releaseHeldPurges\(Date\.now\(\), null, \{ alive: \{ task, history \} \}\)/);
-  assert.equal(src.match(/keepGivenBack\(back\.tasks, back\.logs\);/g)?.length, 2, "Clear Outputs and Reset's inline voided branches");
+// Owner ruling 2026-10-23 rewrote this wiring test: no give-back cancels holds (keepGivenBack removed); the pass still
+// reads IndexedDB when anything is held, leaving out copies of ids the cloud tombstones or the pass removes.
+await test("#10 wiring: give-backs leave holds to the pass; the pass reads IndexedDB when anything is held", () => {
+  assert.ok(!/const keepGivenBack|keepGivenBack\s*\(/.test(src), "no give-back cancels holds");
   const rec = between("const reconcileWithCloud = useCallback(", "}, []);\n\n  useEffect(");
   assert.match(rec, /const shared = hasHeldPurges\(\) \? await storedEvidenceIds\(\) : null;/);
-  assert.match(rec, /if \(shared\) \{ for \(const id of shared\.task\) keptTaskIds\.add\(id\); for \(const id of shared\.history\) keptLogIds\.add\(id\); \}/);
+  assert.match(rec, /for \(const id of shared\.task\) if \(!tombT\.has\(id\) && !rmTasks\.has\(id\)\) keptTaskIds\.add\(id\);/);
 });
 
 // ─── #3: complete evidence only; the restore's own removals count as present ───
@@ -182,7 +184,9 @@ await test("r1 (#6/#11/#14): a late result held while a bulk delete has not rese
   // Wiring: keepLateSubmitId attaches before the reservation; both aborts release and relink.
   const late = between("function keepLateSubmitId(", "const submittingIds = useRef(");
   assert.match(late, /if \(deleting && deletingIds\.current\.has\(id\) && deleteHoldAt\(id\) === undefined\) \{\s*const t = tasksRef\.current\.find\(x => x\.id === id\);/);
-  assert.match(late, /tasksRef\.current = tasksRef\.current\.map\(x => \(x\.id === id \? next : x\)\);/);
+  // Task B13a (review round 26 #7): the attach goes through linkLate (tasksRef, state, IndexedDB and the queued upload).
+  assert.match(late, /tasksRef\.current = tasksRef\.current\.map\(x => \(x\.id === id && !x\.taskId \? next : x\)\);/);
+  assert.match(late, /if \(!t\.taskId\) linkLate\(t\);/);
   const bulk = between("const deleteSelectedTasks = async () =>", "const renderSelectBar = ");
   assert.match(bulk, /const keepLate = \(\) => \{ releaseAbortedLate\(ids\); applyRelinks\(\); \};/);
   assert.equal(bulk.match(/keepLate\(\);/g)?.length, 2, "the failed backup and the storage-full abort");
@@ -288,7 +292,10 @@ await test("F1: an ASSUMED confirm (Clear Outputs' unnamed History-only generati
   const T = 1_790_000_000_000;
   A.queueDeleteIntents("task-delete", ["t8", "t2"], T);
   need(A, "markAssumedConfirms")("task-delete", ["t8"], T);
-  A.confirmDeleteIntents("task-delete", ["t8", "t2"], T);
+  // Task B13a (review round 26 #3/#5): rewritten from one confirm of both ids. App.jsx now confirms an assumed id as such
+  // (confirmIntents(..., { assumed: true }): no final mark) and a named one normally; the outcome is the same.
+  A.confirmDeleteIntents("task-delete", ["t8"], T, { assumed: true });
+  A.confirmDeleteIntents("task-delete", ["t2"], T);
   const st = A.sharedDeleteState("task", { deleting: new Set(), cloudIds: new Set(["t8", "t2"]), sinceSeq: A.confirmSeqNow(), restoreKnownAt: 0, evidence: { present: [], complete: true } });
   assert.deepEqual([st.released, st.reappeared], [["t8"], [{ id: "t2", at: T }]], "t8 is the server's answer; t2 (named) a late upload");
   assert.equal(A.confirmedDeletes("task-delete").has("t8"), false);
@@ -297,7 +304,9 @@ await test("F1: an ASSUMED confirm (Clear Outputs' unnamed History-only generati
   A.confirmDeleteIntents("task-delete", ["t8"], T + 100);
   const st2 = A.sharedDeleteState("task", { deleting: new Set(), cloudIds: new Set(["t8"]), sinceSeq: A.confirmSeqNow(), restoreKnownAt: 0, evidence: { present: [], complete: true } });
   assert.deepEqual([st2.released, st2.reappeared.map(r => r.id)], [[], ["t8"]]);
-  assert.match(src, /if \(cr\.ok\) \{ markAssumedConfirms\("task-delete", unnamedHistoryOnly, queuedAt\); confirmIntents\("task-delete", unnamedHistoryOnly, queuedAt\); \}/);
+  // Task B13a (review round 26 #2): only the unnamed ids a read found a row for are assumed (wiring checked in
+  // scripts/test-b13a-round26.mjs).
+  assert.match(src, /markAssumedConfirms\("task-delete", assumedIds, queuedAt\); confirmIntents\("task-delete", assumedIds, queuedAt, \{ assumed: true \}\);/);
 });
 await test("F1: a confirm a newer restore superseded is still released when the cloud holds it after that restore", () => {
   const T = 1_790_000_000_000;

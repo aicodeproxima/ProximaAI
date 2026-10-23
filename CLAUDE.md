@@ -64,14 +64,18 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   deletes; a delete whose intents and hold cannot both be written changes nothing and says "storage is full"; when the
   rule that decides holds changes, they move to a key no previous build reads, see THE KEY RULE in storage.js),
   released to the queues once that delete is confirmed for every owner; if a restore voids or drops it, the next sync
-  that read the cloud after that restore decides: kept if the generation came back, deleted if it did not (an uncertain
-  outcome never cancels a hold); settled only on a
+  that read the cloud after that restore decides: kept if the generation came back, deleted if it did not (owner ruling
+  2026-10-23: a cancelled delete's put-back leaves the holds to that sync; an uncertain outcome never cancels a hold); a
+  generation deleted elsewhere is re-planned by every device that removes it (its files against that device's view, its
+  WaveSpeed result by the device holding the prediction id); settled only on a
   confirmed remove or a HEAD 400/404, and a path a kept generation uses again is never deleted. Log deletes delete no files. A file a Generate
   form still holds (any live tab, per-tab key `proximaai-form-inputs:<tab>`; the other device's via settings
-  `form-inputs:<browser>`) is kept until every form lets go of it, then deleted. A hold counts 7 days after its last
+  `form-inputs:<browser>`, which also carries the paths of this browser's rows not uploaded yet) is kept until every form
+  lets go of it and those rows are sent, then deleted. A hold counts 7 days after its last
   heartbeat (`FORM_HOLD_ALIVE_MS`): a page Chrome froze sends nothing but still holds its form. A History entry with
   an item whose task this device lacks is rewritten, not removed, and the server strips items of deleted tasks from
-  every History upload (`history_strip_deleted_items`).
+  every History upload (`history_strip_deleted_items`). A confirmed delete whose row shows up again without a restore is
+  deleted again, but only a confirm this build marked final (`proximaai-final-confirms`; a previous build's is released).
   A restore wins over every delete queued before it: deletes, clears and a delete's History rewrites go only through
   restore-checked functions that take the account's marker (settings `last_restore_at`, server-only since 20261022301000)
   — `delete_queued_rows`, `clear_queued_rows` (rows that existed at the queue time + the ids named), `upsert_queued_history`.

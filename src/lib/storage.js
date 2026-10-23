@@ -4,7 +4,8 @@
 
 import { planResume, rememberReleased, liveReleased, noteClaimants, liveClaimants, dropClaimants, putBackClaimantRecords } from "./taskResume.js";
 import { FORM_HOLD_ALIVE_MS, queueFileDeletes } from "./fileDelete.js";
-import { pathsInUse } from "./purge.js";
+import { pathsInUse, ENTRY_OWNER } from "./purge.js";
+import { queueDeletes } from "./wsDelete.js";
 import { serverNow } from "./serverClock.js";
 import { releaseRestored } from "./syncReconcile.js";
 import { withoutDeleting } from "./batchLog.js";
@@ -160,6 +161,23 @@ export async function getHistory(limit = 500) {
       return JSON.parse(localStorage.getItem("proximaai-logs") || localStorage.getItem("prism-logs") || "[]");
     } catch { return []; }
   }
+}
+
+// Task B13b (simulator I2, seed 12378): which of `stored` (copies a voided clear gives back to IndexedDB that this tab's
+// state lacks) a page load would show next to `loaded` (this tab's state after the give-back): the newest `limit` of both
+// by `time` (getHistory / getCompletedTasks load the newest 500). Those go back into state too, as loaded (saved). A
+// voided Reset or Clear Logs gave back the entries it found only in IndexedDB to IndexedDB alone ("beyond the loaded
+// ones"), but an entry an earlier clear of this tab, still in its call, had just taken out of state is one of the loaded
+// ones: it stayed out of state, so no pass uploaded it, and its upload a restore had dropped (restoreGuard) never came
+// back: the entry was lost from the cloud while every device thought it kept.
+export const LOAD_LIMIT = 500;
+export function intoLoadedView(stored, loaded, { time = () => 0, limit = LOAD_LIMIT } = {}) {
+  const have = new Set((loaded || []).map(x => x?.id).filter(Boolean));
+  const cands = (stored || []).filter(x => x?.id && !have.has(x.id));
+  if (!cands.length) return [];
+  const all = [...(loaded || []).filter(x => x?.id), ...cands].sort((a, b) => (Number(time(b)) || 0) - (Number(time(a)) || 0));
+  const top = new Set(all.slice(0, limit).map(x => x.id));
+  return cands.filter(x => top.has(x.id));
 }
 
 // Every History entry this device stores, not only the 500 loaded (Clear Logs / Reset plan over them, review round 14),
@@ -552,6 +570,17 @@ export function readFormPublications() {
   return out;
 }
 export function forgetFormPaths() { try { localStorage.removeItem(FORM_KEY + TAB_ID); } catch {} }
+// Task B13c (simulator class B): the bucket paths this browser's queued, not yet uploaded task and History rows use (the
+// failed-sync queue, shared by its tabs: a closing tab never withdraws them). Published with the forms' holds and held
+// by this browser's own flush: a batch input a sibling row still waiting to upload here needs (a frozen phone) is in no
+// other device's view, no cloud row and, once this form let go of it, no form hold, so another device deleted it and the
+// sibling landed later without its input. Once the row is sent it leaves the queue, and the path leaves the set at the
+// next publication (by then the cloud row holds it: paths_in_use).
+export function unsentUploadPaths() {
+  try {
+    return pathsInUse(getFailedSyncs().filter(f => (f?.kind === "task" || f?.kind === "history") && f.data && typeof f.data === "object").map(f => f.data));
+  } catch { return new Set(); }
+}
 // One id per browser, shared by its tabs: the key of this browser's cloud form publication (review wf_ec400a67-988 #6).
 export function browserId() {
   try {
@@ -667,14 +696,29 @@ export function queueDeleteIntents(kind, ids, at) {
 // the caller stops with the honest storage-full message: there is nothing to undo. An id the intents move from an earlier
 // queue time is recorded on that time's stash (noteStashMoves) only after both writes succeeded. Replaces round 24's
 // take-back (intentsOf / takeBackDeleteIntents), whose callers had already changed state they then had to put back.
-export function reserveDelete({ intents = [], holdAt = null, hold = null } = {}) {
+// Task B13a (review round 26 #4): a clear's STASH is part of its reservation (`stash`: { at: the clear's queue time,
+// value: the stash, fallback: a smaller stash to store when `value` does not fit (Clear Logs' loaded-only one) }). It is
+// written after the intents and the hold, checked; if neither it nor its fallback fits, the whole reservation is refused
+// and every key it wrote (the failed-sync queue, the hold, the stash's own key) gets back its exact previous string: the
+// clear stops with the storage-full message and nothing changed. Before, the stash was written after the reservation
+// with its result ignored, so on a nearly full origin a clear went on without it and a later void lost this device's
+// local-only data.
+export function reserveDelete({ intents = [], holdAt = null, hold = null, stash = null } = {}) {
   const groups = (intents || []).map(g => ({ kind: g?.kind, at: Number(g?.at), ids: [...new Set((g?.ids || []).filter(Boolean))] }))
     .filter(g => (g.kind === "task-delete" || g.kind === "history-delete") && g.ids.length);
   if (groups.some(g => !Number.isFinite(g.at))) return false;
-  let before;
-  try { before = localStorage.getItem(FAILED_KEY); } catch { return false; }
+  const stashAt = stash ? Number(stash.at) : NaN;
+  if (stash && !Number.isFinite(stashAt)) return false;
+  const stashKey = stash ? CLEAR_STASH_PREFIX + stashAt : null;
+  let before, beforeHeld, beforeStash;
+  try {
+    before = localStorage.getItem(FAILED_KEY);
+    beforeHeld = localStorage.getItem(HELD_PURGE_KEY);
+    beforeStash = stashKey ? localStorage.getItem(stashKey) : null;
+  } catch { return false; }
   const moves = [];
-  let wrote = false;
+  const wrote = { failed: false, held: false, stash: false };
+  const putBack = (key, prev) => { try { if (prev == null) localStorage.removeItem(key); else localStorage.setItem(key, prev); } catch {} };
   try {
     if (groups.length) {
       let list = getFailedSyncs();
@@ -686,11 +730,20 @@ export function reserveDelete({ intents = [], holdAt = null, hold = null } = {})
         if (movedFrom.size) moves.push([movedFrom, g.at]);
       }
       localStorage.setItem(FAILED_KEY, JSON.stringify(list));
-      wrote = true;
+      wrote.failed = true;
     }
-    if (hold && holdAt != null && !holdPurgeDeletes(holdAt, hold)) throw new Error("hold refused");
+    if (hold && holdAt != null) {
+      wrote.held = true;   // put back on any refusal below (an unchanged string is put back harmlessly)
+      if (!holdPurgeDeletes(holdAt, hold)) throw new Error("hold refused");
+    }
+    if (stash) {
+      wrote.stash = true;
+      if (!writeClearStash(stashAt, stash.value) && !(stash.fallback && writeClearStash(stashAt, stash.fallback))) throw new Error("stash refused");
+    }
   } catch {
-    if (wrote) { try { if (before == null) localStorage.removeItem(FAILED_KEY); else localStorage.setItem(FAILED_KEY, before); } catch {} }
+    if (wrote.stash) putBack(stashKey, beforeStash);
+    if (wrote.held) putBack(HELD_PURGE_KEY, beforeHeld);
+    if (wrote.failed) putBack(FAILED_KEY, before);
     return false;
   }
   for (const [from, to] of moves) noteStashMoves(from, to);
@@ -1040,6 +1093,14 @@ export function inFlightIds(kind) {
 // build then never sees, and so never cancels or queues, an item held under the new rule; its own holds (written under
 // its key after the migration) stay its own. The layout is unchanged. The queues (proximaai-file-deletes,
 // proximaai-ws-deletes) keep their key, layout and meaning.
+// Task B13a (review round 26 #1) adds the owner "entry:<id>" under this key without moving it: the previous build that
+// reads it (bf37422) takes such an owner for an unknown generation id, so it never CANCELS that item (it waits without
+// restore evidence, and with it sends the item, as its owner-less rule did when every generation of the group was gone;
+// the flushes' ownership and paths_in_use checks still keep a path a kept entry uses), and older builds never read it.
+// Task B13a (review round 26 #3/#5) applies this rule to confirm records: FINAL_CONFIRMS_KEY below.
+// Task B13b (simulator class D) decides an undecided owner "gone" from a user tombstone the pass read (heldPurgeRule) under
+// this key without moving it: a previous build reading it only waits where this one sends (it never cancels such an
+// item), and once sent the item has left the hold.
 const HELD_PURGE_KEY = "proximaai-held-purges-v2";
 const LEGACY_HELD_PURGE_KEY = "proximaai-held-purges";   // rounds 23-24 (a79a43c, d0b3af6): migrated, never written
 const HISTORY_OWNER = "history:";
@@ -1218,9 +1279,78 @@ export function holdArchiveFiles(at, tid, paths, patch) {
   if (patch && !noteRelink(String(tid), { a: { patch, paths: list } })) return false;
   return holdPurgeDeletes(at, { files: Object.fromEntries(list.map(p => [p, [String(tid)]])) });
 }
+// Task B13a (review round 26 #6): a pending or ready relink is part of its generation. A new delete of that generation
+// holds the relink's prediction and archive paths with it (purge.js planDeleteStage / App.jsx deleteOnWaveSpeed read
+// them here: generation id -> { p: prediction id | null, paths: [archive paths] }), so its outcome decides them with the
+// rest (sent once it is final, the relink dropped; kept and still ready if it is voided).
+export function relinksOf(ids) {
+  const want = new Set((ids || []).filter(Boolean).map(String)), out = new Map();
+  if (!want.size) return out;
+  try {
+    for (const [tid, r] of Object.entries(readRelinks())) {
+      if (!want.has(tid) || !plainObject(r)) continue;
+      const paths = plainObject(r.a) && Array.isArray(r.a.paths) ? r.a.paths.filter(p => typeof p === "string" && p) : [];
+      const p = typeof r.p === "string" && r.p ? r.p : null;
+      if (p || paths.length) out.set(tid, { p, paths });
+    }
+  } catch {}
+  return out;
+}
+// And a relink whose generation's delete is FINAL here (storage deleteHoldAt null: a confirm no restore superseded, nothing
+// pending or in a call) is not left to lapse: its prediction id goes to the WaveSpeed queue (with its generation id, so
+// the flush still asks whether that generation is live) and its archive paths to the file queue (the flush's ownership
+// and paths_in_use checks still apply), unless a hold still holds them (that hold decides). Each part leaves the relink
+// only once its queue holds it (read back). Runs first in every readyRelinks (App.jsx applyRelinks, after each release).
+// Returns { ws, files } queued.
+export function settleFinalRelinks(now = Date.now()) {
+  const out = { ws: [], files: [] };
+  try {
+    const m = readRelinks(), tids = Object.keys(m);
+    if (!tids.length) return out;
+    const held = { ws: new Set(), files: new Set() };
+    for (const g of Object.values(readHeldPurges())) {
+      if (!plainObject(g)) continue;
+      for (const p of Object.keys(plainObject(g.files) ? g.files : {})) held.files.add(p);
+      for (const pid of Object.keys(plainObject(g.ws) ? g.ws : {})) held.ws.add(pid);
+    }
+    const ws = {}, files = new Set(), parts = [];
+    for (const tid of tids) {
+      const r = m[tid];
+      if (!plainObject(r) || deleteHoldAt(tid) !== null) continue;
+      const p = typeof r.p === "string" && r.p && !held.ws.has(r.p) ? r.p : null;
+      const paths = (plainObject(r.a) && Array.isArray(r.a.paths) ? r.a.paths : []).filter(x => typeof x === "string" && x && !held.files.has(x));
+      if (p) Object.assign(ws, queueDeletes({}, [{ id: tid, taskId: p, status: "processing" }], now));
+      for (const x of paths) files.add(x);
+      if (p || paths.length) parts.push([tid, p, paths]);
+    }
+    if (!parts.length) return out;
+    let wsIn = new Set(), filesIn = new Set();
+    if (Object.keys(ws).length) {
+      const q = readWsDeletes();
+      for (const [pid, e] of Object.entries(ws)) if (!q[pid]) q[pid] = e;
+      writeWsDeletes(q);
+      wsIn = new Set(Object.keys(readWsDeletes()));
+    }
+    if (files.size) {
+      writeFileDeletes(queueFileDeletes(readFileDeletes(), [...files], now));
+      filesIn = new Set(Object.keys(readFileDeletes()));
+    }
+    const done = [];
+    for (const [tid, p, paths] of parts) {
+      const d = {};
+      if (p && wsIn.has(p)) { d.p = true; out.ws.push(p); }
+      const allIn = paths.length && paths.every(x => filesIn.has(x));
+      if (allIn) { d.a = true; out.files.push(...paths); }
+      if (d.p || d.a) done.push([tid, d]);
+    }
+    if (done.length) dropRelinks(done);
+  } catch {}
+  return out;
+}
 // The relinks ready to apply: generation id -> { p (ready prediction id) | null, a (ready archive patch) | null }.
 export function readyRelinks(now = Date.now()) {
   const out = new Map();
+  settleFinalRelinks();   // task B13a: a relink of a generation whose delete is final is sent, never left to lapse
   try {
     const m = readRelinks();
     let changed = false;
@@ -1373,10 +1503,11 @@ export function heldGoneCandidates(evidence, now = Date.now()) {
 // cloud holds (task rows and items of History entries), local: ids this tab keeps, complete: every source read },
 // history: { present: History entry ids, local, complete } }. It decides undecided owners only when its restore is the
 // latest this browser knows (a restore learned during the pass: the reads may predate it) and newer than the hold time.
-// Task B12b: `opts.alive` ({ task, history }: ids this browser has just given back, a voided clear's put-back) are alive
-// whatever else holds; `opts.probe(kind, id, decision)` sees every evidence decision (heldGoneCandidates).
-function heldPurgeRule(now, evidence, { alive = null, probe = null } = {}) {
-  const aliveSets = { task: toIdSet(alive?.task), history: toIdSet(alive?.history) };
+// `opts.probe(kind, id, decision)` sees every evidence decision (heldGoneCandidates). Owner ruling 2026-10-23: a voided
+// clear's put-back no longer marks its owners alive here (task B12b's `opts.alive`, removed): a restore that cancelled a
+// delete may also have removed the generation, so the next pass that read the cloud after it decides (kept if the
+// generation came back or this browser keeps it, deleted if not; CLAUDE.md).
+function heldPurgeRule(now, evidence, { probe = null } = {}) {
   const flights = Object.values(readFlights()).filter(f => plainObject(f) && Number(f.until) > now && plainObject(f.ids));
   const kinds = {};
   for (const kind of ["task-delete", "history-delete"]) {
@@ -1389,6 +1520,9 @@ function heldPurgeRule(now, evidence, { alive = null, probe = null } = {}) {
   }
   const rk = Number(evidence?.restoreKnownAt);
   const usable = rk > 0 && rk >= knownRestoreAt();
+  // Task B13b (simulator class D): the pass's reads show the cloud after every restore this browser knows of (none was
+  // learned during the pass; no restore at all counts). Only then may a tombstone it read decide an owner.
+  const current = Number.isFinite(rk) && rk >= 0 && rk >= knownRestoreAt();
   let stored = null;
   const sets = {};   // per rule (never cached on the caller's evidence object: the pass may add to it, task B12b)
   const seen = (kind, id) => {
@@ -1401,7 +1535,15 @@ function heldPurgeRule(now, evidence, { alive = null, probe = null } = {}) {
     if (probe) probe(kind, id, d);
     return d;
   };
-  const owner = (o, at, hAt) => {
+  // Task B13b (simulator class D): ids the pass read as DELETED in the cloud (`evidence.task.deleted`: user task
+  // tombstones, a restore's own excluded; `evidence.history.deleted`: History tombstones).
+  const deletedOf = (kind) => {
+    const key = kind === "task-delete" ? "task" : "history";
+    const s = sets[`deleted:${key}`] || (sets[`deleted:${key}`] = toIdSet(evidence?.[key]?.deleted));
+    return s;
+  };
+  // `raw`: an undecided owner is returned as "ev" (its fate rests on restore evidence) instead of being decided.
+  const owner = (o, at, hAt, raw = false) => {
     const isLog = o.startsWith(HISTORY_OWNER), kind = isLog ? "history-delete" : "task-delete", k = kinds[kind];
     const id = isLog ? o.slice(HISTORY_OWNER.length) : o, since = isLog ? hAt : at;
     if (k.pending.has(id) || k.flying.has(id)) return "wait";
@@ -1410,8 +1552,15 @@ function heldPurgeRule(now, evidence, { alive = null, probe = null } = {}) {
       if (k.final.has(id)) return "gone";
       if (k.superseded.has(id)) return "wait";   // the next pass decides the record first
     }
-    // Given back by this browser (a voided clear's put-back): alive, for every tab, at once (task B12b).
-    if ((isLog ? aliveSets.history : aliveSets.task).has(id)) return "alive";
+    // Task B13b (simulator class D): an undecided owner that a user deleted elsewhere (another browser's delete: the
+    // server's tombstone) is gone without waiting for a restore's evidence, which may never come: a pass whose reads show
+    // the cloud after every restore known here, with complete evidence, that read a tombstone for it while neither the
+    // cloud (no row, no History item) nor this browser keeps it. A tombstone exists only while the id is absent (any
+    // insert, a restore's or an upload's, clears it), so a generation a restore brought back is never "gone" here.
+    // Anything else: the rules below, as before (a final confirm in the shared record at or after the hold is "gone"
+    // above already).
+    if (current && deletedOf(kind).has(id) && seen(kind, id) === "gone") return "gone";
+    if (raw) return "ev";
     // Undecided: only a pass that read the cloud after a restore newer than the hold time decides it.
     return usable && rk > since ? seen(kind, id) : "wait";
   };
@@ -1423,14 +1572,29 @@ function heldPurgeRule(now, evidence, { alive = null, probe = null } = {}) {
   const group = (at) => (intentsPendingAt(at) || flights.some(f => Number(f.at) === at)
     ? "wait" : voided.has(at) ? "cancel" : "go");
   const clean = (v) => (Array.isArray(v) ? v.filter(o => typeof o === "string" && o) : []);
-  const decide = (list, at, hAt) => {
-    const d = list.map(o => owner(o, at, hAt));
+  const isEntry = (o) => o.startsWith(ENTRY_OWNER);
+  // Task B13a (review round 26 #1): an "entry:<id>" owner (an item-less History entry whose removal rides on the delete,
+  // purge.js pathOwners). The delete's own outcome decides it as before: its group (every other owner of the hold) still
+  // pending, in a call or superseded: wait; confirmed for all of them: gone. When the
+  // outcome rests on a restore's evidence (an owner voided or dropped, or the owner-less group voided), the ENTRY decides:
+  // a pass that read the cloud after a restore newer than its time keeps it if the entry is back (cloud or this browser)
+  // and sends it if not, like a "history:<id>" owner. Without such evidence it follows the group as before.
+  const entry = (o, at, hAt, groupOwners) => {
+    const id = o.slice(ENTRY_OWNER.length);
+    const others = groupOwners.filter(x => !isEntry(x));
+    const d = others.length ? others.map(x => owner(x, at, hAt, true)) : [{ wait: "wait", go: "gone", cancel: "ev" }[group(at)]];
+    if (d.includes("wait")) return "wait";
+    if (d.every(x => x === "gone")) return "gone";
+    if (usable && rk > hAt) return seen("history-delete", id);
+    return "wait";   // no usable evidence yet: it waits, as the group does
+  };
+  const decide = (list, at, hAt, groupOwners = []) => {
+    const d = list.map(o => (isEntry(o) ? entry(o, at, hAt, groupOwners) : owner(o, at, hAt)));
     return d.includes("alive") ? "cancel" : d.every(x => x === "gone") ? "go" : "wait";
   };
   return (owners, at, hAt, groupOwners) => {
-    const list = clean(owners);
-    if (list.length) return decide(list, at, hAt);
-    const all = clean(groupOwners);
+    const list = clean(owners), all = clean(groupOwners).filter(o => !isEntry(o));
+    if (list.length) return decide(list, at, hAt, all);
     return all.length ? decide(all, at, hAt) : group(at);
   };
 }
@@ -1440,17 +1604,15 @@ function heldPurgeRule(now, evidence, { alive = null, probe = null } = {}) {
 // items stay. Review round 24 #2/#4: an item leaves the hold only once its queue holds it (the write stored and read back):
 // a full localStorage leaves it held for the next release, still counted by heldPurgeLeft. Returns { files, ws (queued),
 // cancelled, kept (decided "go" but left held: the queue write failed) }.
-// Task B12b (review round 25 #10): `opts.alive` ({ task, history } ids): owners this browser has just given back (a voided
-// clear's put-back); they are alive, so every held item they own is cancelled at once, for every tab. Task B12b (review
-// round 25 #6/#7/#12/#13/#14/#15): a cancelled item whose generation waits for a relink (relinks below: a late result or
+// Task B12b (review round 25 #6/#7/#12/#13/#14/#15): a cancelled item whose generation waits for a relink (relinks below: a late result or
 // an archive held while its delete was undecided) marks that relink ready, in the same step and BEFORE the item leaves the
 // hold (a refused write keeps the item held for the next release); a "go" item drops it (the generation is gone).
-export function releaseHeldPurges(now = Date.now(), evidence = null, opts = {}) {
+export function releaseHeldPurges(now = Date.now(), evidence = null) {
   const out = { files: [], ws: [], cancelled: 0, kept: 0 };
   try {
     const m = readHeldPurges(), keys = Object.keys(m);
     if (!keys.length) return out;
-    const rule = heldPurgeRule(now, evidence, { alive: opts?.alive || null });
+    const rule = heldPurgeRule(now, evidence);
     const decided = [], goFiles = new Set(), wsGo = {};
     let changed = false;
     for (const k of keys) {
@@ -1563,7 +1725,11 @@ export function heldDeleteRefs() {
 // Review round 22 #3: the sequence, the queue time and the record are three writes, each in its own try, and a malformed
 // value of any of them cannot make another throw. Only a record that could not be written leaves the intents settled
 // nothing: the replay then sends that group again and its answer records it.
-export function confirmDeleteIntents(kind, ids, at) {
+// Task B13a (review round 26 #3/#5): `opts.assumed` (Clear Outputs' unnamed History-only ids whose row a read found in
+// the cloud: the server left it alone): the confirm is recorded WITHOUT the final mark (FINAL_CONFIRMS_KEY), so a row of
+// it is released, never deleted again. Every other confirm is marked final first (before its record: a pass in between
+// sees a marked id with its intent still pending, and waits).
+export function confirmDeleteIntents(kind, ids, at, { assumed = false } = {}) {
   const isDelete = kind === "task-delete" || kind === "history-delete";
   const list = [...new Set((ids || []).filter(Boolean))];
   const bound = at == null ? null : Number(at);
@@ -1573,6 +1739,8 @@ export function confirmDeleteIntents(kind, ids, at) {
     // device clock off by more than a few ms would otherwise keep a stale upload or drop a real one (round 19
     // follow-up, scripts/test-confirm-clock.mjs). The sequence orders it against reconcile passes (round 20 #4).
     const all = readConfirmed(), now = serverNow(), cut = now - CONFIRMED_FOR_MS, seq = takeConfirmSeq(), moved = {};
+    // The final mark carries the record's queue time (the group's, or the record's own time when none is given).
+    writeFinalMarks(kind, list, assumed ? null : (queuedAt ?? now));
     for (const k of Object.keys(all)) for (const [id, v] of Object.entries(all[k])) {
       if (!(recordAt(v) > cut)) { delete all[k][id]; continue; }
       // A 21d8266 object: back to a plain number, its seq into the separate key (round 21 #6).
@@ -1635,6 +1803,7 @@ export function forgetConfirmed(kind, ids) {
     localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
     try { writeConfirmSeqs(pruneConfirmSeqs(readConfirmSeqs(), all)); } catch {}
     try { writeConfirmQueued(pruneConfirmQueued(readConfirmQueued(), all)); } catch {}
+    writeFinalMarks(kind, ids, null);   // task B13a: the mark goes with its record
   } catch {}
 }
 // The live records of one kind (recorded within 30 days): id -> { at, seq, q, r }.
@@ -1680,6 +1849,7 @@ export function releaseConfirmed(kind, ids, sinceSeq) {
       localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
       try { writeConfirmSeqs(pruneConfirmSeqs(seqs, all)); } catch {}
       try { writeConfirmQueued(pruneConfirmQueued(readConfirmQueued(), all)); } catch {}
+      writeFinalMarks(kind, out, null);   // task B13a: released here, so not a vanished mark
     }
   } catch {}
   return out;
@@ -1707,6 +1877,7 @@ export function resolveSuperseded(kind, present, { restoreKnownAt, complete = fa
     if (out.length) {
       localStorage.setItem(CONFIRMED_KEY, JSON.stringify(all));
       try { writeConfirmSeqs(pruneConfirmSeqs(readConfirmSeqs(), all)); } catch {}
+      writeFinalMarks(kind, out, null);   // task B13a: a restore brought them back
     }
     if (out.length || checked) { try { writeConfirmQueued(pruneConfirmQueued(qs, all)); } catch {} }
   } catch {}
@@ -1803,16 +1974,24 @@ export function sharedDeleteState(kind, { deleting = new Set(), cloudIds = null,
   const pending = pendingDeleteIds(del), flying = inFlightIds(del);
   const seqs = confirmSeqs(del);
   const back = known ? releaseRestored(seqs.keys(), new Set([...pending, ...flying]), cloudIds, seqs, sinceSeq) : [];
-  // An ASSUMED confirm (the server never named the id: assumedConfirms) whose row is in the cloud is the server's own
-  // answer (it left that row alone): released, as before. Every other confirm's returning row is deleted again.
-  const qAll = confirmQueuedAt(del), assumed = assumedConfirms(del, qAll);
-  const keepBack = back.filter(id => assumed.has(id));
+  // Task B13a (review round 26 #3/#5): only a confirm this build MARKED final (the server named the id, or the settle
+  // check confirmed it: finalMarked) is deleted again when its row comes back. Any other confirm (a previous build's, an
+  // assumed one: the server left that row alone) is released, as before F1.
+  const qAll = confirmQueuedAt(del), marked = finalMarked(del, qAll);
+  const keepBack = back.filter(id => !marked.has(id));
   const released = [...resolved, ...(keepBack.length ? releaseConfirmed(del, keepBack, sinceSeq) : [])];
   const { final, superseded } = confirmStates(del);
   const q = confirmQueuedAt(del), rk = Number(restoreKnownAt) || 0;
-  const reappeared = back.filter(id => final.has(id) && !assumed.has(id)).map(id => ({ id, at: Math.max(Number(q.get(id)) || 0, rk) }));
+  const reappeared = back.filter(id => final.has(id) && marked.has(id)).map(id => ({ id, at: Math.max(Number(q.get(id)) || 0, rk) }));
+  // #3: a marked confirm whose record a previous-build tab released (no record now, nothing pending or in a call, no
+  // restore known after it) while its row is back: deleted again too, and blocked meanwhile (in `deleting`).
+  if (known) {
+    const have = new Set(reappeared.map(r => r.id));
+    for (const r of vanishedFinalMarks(del, { cloudIds, busy: new Set([...pending, ...flying]), rk: Math.max(rk, knownRestoreAt()), records: new Set(q.keys()) }))
+      if (!have.has(r.id)) reappeared.push(r);
+  }
   const confirmed = new Set([...final, ...superseded]);
-  const all = new Set([...(deleting || []), ...pending, ...flying, ...confirmed]);
+  const all = new Set([...(deleting || []), ...pending, ...flying, ...confirmed, ...reappeared.map(r => r.id)]);
   return { released, reappeared, deleting: all, confirmed, final, superseded,
     stale: (rows) => (known ? (rows || []).filter(r => r?.id && final.has(r.id) && !cloudIds.has(r.id)).map(r => r.id) : []) };
 }
@@ -1837,11 +2016,78 @@ export function markAssumedConfirms(kind, ids, at) {
     localStorage.setItem(ASSUMED_CONFIRMS_KEY, JSON.stringify(all));
   } catch {}
 }
-// The assumed ids of a kind whose confirm record still carries that queue time (`queued`: confirmQueuedAt(kind)).
-function assumedConfirms(kind, queued) {
-  const m = readAssumed()[kind] || {}, out = new Set();
-  for (const [id, ts] of Object.entries(m)) if (queued.has(id) && Number(queued.get(id)) === Number(ts)) out.add(id);
+// Task B13a: this key is no longer READ by this build (a confirm without a final mark, below, is released); it is still
+// WRITTEN for assumed confirms, so a tab on the previous build (bf37422), which re-deletes every final confirm whose row
+// is back unless this key names it (with the record's queue time), never deletes a row the server left alone.
+
+// ─── Task B13a (review round 26 #3/#5): THE KEY RULE for confirm records ───
+// F1 (task B12b) changed what a FINAL confirm whose row shows up again means (deleted again, not released) but kept the
+// confirm records' keys, so a previous build decided the same records differently: a tab on d0b3af6 released such a
+// record (its row then lived on in every tab, #3), and a bf37422 tab re-deleted a confirm a previous build made without
+// the server naming the id (a row the server left alone on purpose, rule (g), #5). So this build marks, in a NEW key no
+// previous build reads, the final confirms it made itself because the server named the id or the clear's settle check
+// confirmed it gone (confirmDeleteIntents; Clear Outputs' unnamed History-only ids only once a read showed no row for
+// them). F1's re-delete applies only to a confirm with that mark (its queue time equal to the record's); a confirm
+// without it (a previous build's, an assumed one, or one whose mark could not be written) is released as before. A
+// marked id whose confirm record vanished while no delete of it is pending or in a call (a previous-build tab released
+// it), with no restore known after its queue time, and whose row is back in the cloud is treated as reappeared and
+// deleted again (at its queue time: the server voids that if any restore came after it). Layout: kind -> id -> the
+// confirm's queue time (server ms). A mark goes with its record (released by a restore, forgotten by a new delete) and
+// CONFIRMED_FOR_MS after its queue time; one whose record vanished with a restore known after its queue time goes too.
+const FINAL_CONFIRMS_KEY = "proximaai-final-confirms";
+const readFinalMarks = () => readKinds(FINAL_CONFIRMS_KEY);
+// Sets (`q` finite) or removes (`q` null) the marks of `ids`; prunes marks older than CONFIRMED_FOR_MS. Says whether it was
+// stored.
+function writeFinalMarks(kind, ids, q) {
+  if (kind !== "task-delete" && kind !== "history-delete") return true;
+  const list = [...new Set((ids || []).filter(Boolean).map(String))];
+  try {
+    const all = readFinalMarks(), cut = serverNow() - CONFIRMED_FOR_MS, recs = readConfirmed();
+    let changed = false;
+    for (const k of Object.keys(all)) {
+      const m = plainObject(all[k]) ? all[k] : {}, live = plainObject(recs[k]) ? recs[k] : {};
+      // A mark older than CONFIRMED_FOR_MS goes once its record is gone too (a record lives 30 days from its confirm,
+      // which may come long after its queue time).
+      for (const [id, v] of Object.entries(m)) if (!(Number(v) > cut) && !(id in live)) { delete m[id]; changed = true; }
+      all[k] = m;
+    }
+    if (list.length) {
+      const m = plainObject(all[kind]) ? all[kind] : {};
+      for (const id of list) {
+        if (q != null && Number.isFinite(Number(q))) { m[id] = Number(q); changed = true; }
+        else if (id in m) { delete m[id]; changed = true; }
+      }
+      all[kind] = m;
+    }
+    if (!changed) return true;
+    for (const k of Object.keys(all)) if (!Object.keys(all[k]).length) delete all[k];
+    if (Object.keys(all).length) localStorage.setItem(FINAL_CONFIRMS_KEY, JSON.stringify(all)); else localStorage.removeItem(FINAL_CONFIRMS_KEY);
+    return true;
+  } catch { return false; }
+}
+// The marked ids of a kind whose confirm record carries the mark's queue time (`queued`: confirmQueuedAt(kind)).
+function finalMarked(kind, queued) {
+  const m = readFinalMarks()[kind] || {}, out = new Set();
+  for (const [id, q] of Object.entries(m)) if (queued.has(id) && Number(queued.get(id)) === Number(q)) out.add(id);
   return out;
+}
+// Marked ids whose confirm record vanished (#3): [{ id, at }] for those whose row is back (`cloudIds`) with no delete of
+// them pending or in a call (`busy`) and no restore known after the mark (`rk`). A mark with a restore known after it
+// goes (that restore may be what released the record).
+function vanishedFinalMarks(kind, { cloudIds, busy, rk, records }) {
+  const m = readFinalMarks()[kind] || {}, out = [], stale = [];
+  for (const [id, v] of Object.entries(m)) {
+    const q = Number(v);
+    if (records.has(id) || busy.has(id) || !Number.isFinite(q)) continue;
+    if (q < rk) { stale.push(id); continue; }
+    if (cloudIds.has(id)) out.push({ id, at: q });
+  }
+  if (stale.length) writeFinalMarks(kind, stale, null);
+  return out;
+}
+// Test and wiring hook: the marks of a kind (id -> queue time).
+export function finalConfirmMarks(kind) {
+  return new Map(Object.entries(readFinalMarks()[kind] || {}).map(([id, q]) => [id, Number(q)]));
 }
 
 // ─── Task B12b (simulator finding F3): History entries a delete trimmed here are re-taken from the cloud once it settles ───
@@ -2040,7 +2286,8 @@ export function buildClearStash({ uploads = [], tasks = [], logs = [], cloudTask
   const local = (items, kind, cloud) => (items || []).filter(x => x && x.id && !(cloud && cloud.has(x.id)) && !queued.has(`${kind}\u0000${x.id}`));
   return { uploads: (uploads || []).filter(e => e && e.kind && e.id), tasks: local(tasks, "task", cloudTaskIds), logs: local(logs, "history", cloudLogIds) };
 }
-// Says whether it was stored (a full localStorage refuses it; the clear goes on, as it did before stashes existed).
+// Says whether it was stored (a full localStorage refuses it). Task B13a (review round 26 #4): a clear writes its stash
+// inside its reservation (reserveDelete `stash`), so a refused stash stops the clear with nothing changed.
 // Optional parts (review round 15), stored only when present: `favorites` (Reset: the local favorites state it replaced,
 // S3) and `archives` (task id -> an archive that finished while this clear held its task, S5).
 export function writeClearStash(at, stash) {

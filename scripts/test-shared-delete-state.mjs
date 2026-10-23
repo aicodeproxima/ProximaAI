@@ -190,12 +190,15 @@ test("release: a pending intent (deleted again) or an id the cloud lacks is neve
   localStorage.setItem("proximaai-confirmed-deletes", JSON.stringify({ "task-delete": { old: C.serverNow() - 1000, gone: C.serverNow() - 1000 } }));
   S.confirmDeleteIntents("task-delete", ["again"]);
   S.queueDeleteIntents("task-delete", ["again"]);   // came back by a restore and is being deleted again
-  const p = pass(tab(), { ids: { ...NONE(), tasks: new Set(["old", "again"]) } });
-  // Task B12b (F1): rewritten from released ["old"]: no restore is known, so "old"'s row is not a restore's: it stays
-  // confirmed and is listed to delete again (at its queue time); "again" (pending) and "gone" (absent) neither.
-  assert.deepEqual(p.t.released, []);
-  assert.deepEqual(p.t.reappeared.map(r => r.id), ["old"]);
-  assert.ok(p.t.deleting.has("old"));
+  S.confirmDeleteIntents("task-delete", ["mine"]);   // a confirm THIS build made (final mark, task B13a)
+  const p = pass(tab(), { ids: { ...NONE(), tasks: new Set(["old", "again", "mine"]) } });
+  // Task B12b (F1) rewrote this from released ["old"] to reappeared ["old"]. Task B13a (review round 26 #5) rewrites it
+  // again: "old" was written by a previous build (no final mark), so its returning row is released as before; only a
+  // confirm this build marked final ("mine") is listed to delete again (at its queue time). "again" (pending) and
+  // "gone" (absent) neither.
+  assert.deepEqual(p.t.released, ["old"]);
+  assert.deepEqual(p.t.reappeared.map(r => r.id), ["mine"]);
+  assert.ok(!p.t.deleting.has("old") && p.t.deleting.has("mine"));
   assert.ok(p.t.deleting.has("again") && p.t.deleting.has("gone"));
   assert.deepEqual(S.confirmSeqs("task-delete").get("gone"), 0);
   // A record re-confirmed after the pass started is not forgotten by that pass's release (the shared write re-checks).

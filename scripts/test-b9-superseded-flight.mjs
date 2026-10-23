@@ -541,7 +541,13 @@ test("wiring: every delete call records itself in flight before it fires and end
   const calls = [["const replayDeleteIntents = async", "deleteQueuedRemote("], ["const dropLogItemsFor = useCallback(", "deleteHistoryRemote("],
     ["const purgeEverywhere = useCallback(", "deleteHistoryRemote("], ["const deleteSelectedTasks = async", "deleteTasksRemote("],
     ["const deleteSelectedLogs = async", "deleteHistoryRemote("], ["const cloudLogIds = isSupabaseConfigured()", "clearQueuedRemote(\"history\""],
-    ["const rowIds = realTasks.map(t => t.id);", "clearQueuedRemote(\"task\""], ["const clearedLogIds = [...plannedLogIds];", "resetQueuedRemote("]];
+    ["const rowIds = realTasks.map(t => t.id);", "clearQueuedRemote(\"task\""], ["const clearedLogIds = [...plannedLogIds];", "resetQueuedRemote("],
+    // Task B13b (simulator class E): Clear Outputs names its plain unnamed History-only ids inside the clear's own flight
+    // (those ids are among its cleared ids, at the same queue time), so that call has no flight of its own.
+    ["const rowIds = realTasks.map(t => t.id);", "deleteTasksRemote(plainIds, queuedAt)"]];
+  assert.match(src, /const clearedTaskIds = removed\.map\(t => t\.id\);/);
+  assert.match(src, /const removed = \[\.\.\.realTasks, \.\.\.historyOnly\.map\(/);
+  assert.match(src, /const outputsFlight = beginDeleteFlight\(\{ "task-delete": clearedTaskIds,/);
   for (const [from, call] of calls) {
     const i = src.indexOf(from); assert.ok(i >= 0, from);
     const c = src.indexOf(call, i), b = src.lastIndexOf("beginDeleteFlight(", c);
@@ -551,7 +557,7 @@ test("wiring: every delete call records itself in flight before it fires and end
   assert.equal(src.match(/beginDeleteFlight\(/g).length, 8, "eight delete calls");
   assert.equal(src.match(/finally \{[^}]*endDeleteFlight\(|\.finally\(\(\) => endDeleteFlight\(|endDeleteFlight\(taskFlight\)|endDeleteFlight\(logFlight\)/g).length, 8, "each ended in a finally");
   for (const fn of ["deleteTasksRemote", "deleteHistoryRemote", "deleteQueuedRemote", "clearQueuedRemote", "resetQueuedRemote"])
-    assert.equal((src.match(new RegExp(`\\b${fn}\\(`, "g")) || []).length, { deleteTasksRemote: 1, deleteHistoryRemote: 3, deleteQueuedRemote: 1, clearQueuedRemote: 2, resetQueuedRemote: 1 }[fn], fn);
+    assert.equal((src.match(new RegExp(`\\b${fn}\\(`, "g")) || []).length, { deleteTasksRemote: 2, deleteHistoryRemote: 3, deleteQueuedRemote: 1, clearQueuedRemote: 2, resetQueuedRemote: 1 }[fn], fn);
 });
 test("wiring: the reconcile decides superseded confirms from the cloud after the restore; History uploads plan with historyUploadPlan", () => {
   const rc = between("const reconcileWithCloud = useCallback(", "\n  }, []);");

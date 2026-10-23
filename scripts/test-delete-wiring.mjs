@@ -108,7 +108,12 @@ test("Clear Outputs: only cloud-only entries created after the snapshot are late
   // Round 19 #3: confirmed through the confirm helper (was a plain settleDeleteIntents, which left them in the stashes).
   // Task B12b: the same ids, through a variable (marked assumed first, storage.js markAssumedConfirms).
   assert.match(h, /const unnamedHistoryOnly = historyOnly\.filter\(g => !localLogIds\.has\(g\.batchId\)\)\.map\(g => g\.id\);/);
-  assert.match(h, /confirmIntents\("task-delete", unnamedHistoryOnly, queuedAt\)/);
+  // Task B13a (review round 26 #2): rewritten: every unnamed id is confirmed, split by a read of their rows (assumed: a
+  // row the server left in place; the others normally).
+  assert.match(h, /confirmIntents\("task-delete", assumedIds, queuedAt, \{ assumed: true \}\)/);
+  // Task B13b (simulator E): rewritten: the plain ones are still confirmed normally, after a named delete_queued_rows at
+  // the clear's time (tombstones them since migration 20261023500000).
+  assert.match(h, /const plainIds = unnamedHistoryOnly\.filter\(id => !assumedSet\.has\(id\)\);[\s\S]{0,1600}?if \(plainIds\.length && isSupabaseConfigured\(\)\) \{ try \{ await deleteTasksRemote\(plainIds, queuedAt\); \} catch \{\} \}\s*if \(plainIds\.length\) confirmIntents\("task-delete", plainIds, queuedAt\);/);
 });
 // Review round 12 (F1): Clear Outputs and Reset planned over tasksRef / logsRef read AFTER the snapshot, so an entry or
 // task another device synced in during the awaits (created after the snapshot) was planned, named or given an intent.
@@ -143,7 +148,8 @@ test("Clear Logs takes the server's time before anything changes and clears / qu
   assert.ok(snap >= 0 && take > snap, "snapshot before the queue is touched");
   assert.match(h.slice(snap, take), /if \(snap == null\)[\s\S]*return;/, "no server time -> nothing done");
   // Task B12a: its intents at the snapshot through its reservation, before the take (was: queueDeleteIntents after it).
-  const r = h.indexOf('if (!reserveDelete({ intents: [{ kind: "history-delete", ids: clearedLogIds, at: snap }] })) {');
+  // Task B13a (review round 26 #4): the reservation now carries the stash too (rewritten anchor).
+  const r = h.indexOf('if (!reserveDelete({ intents: [{ kind: "history-delete", ids: clearedLogIds, at: snap }],');
   assert.ok(r > snap && r < take, "reserved after the snapshot, before the queue is touched");
   assert.match(h, /clearQueuedRemote\("history", snap, clearedLogIds\)/);
 });
@@ -298,9 +304,9 @@ test("voided branches: Reset restores the favorites it reset; Clear Outputs puts
 test("each clear stores its stash BEFORE its take and drops it once answered", () => {
   for (const [name, h, at, take] of [["Clear Logs", logsH(), "snap", 'takeQueuedUploads("history"'], ["Clear Outputs", outputs(), "clearAt", 'takeQueuedUploads("task"'],
     ["Reset", reset(), "resetAt", 'takeQueuedUploads("task"']]) {
-    // Reset spreads the built stash to add its favorites (round 15 S3): `writeClearStash(resetAt, { ...buildClearStash(`.
-    // Clear Logs writes the stash clearLogsStash built (round 16 #6): `writeClearStash(snap, logsStash.full)`.
-    const w = h.search(new RegExp(`writeClearStash\\(${at}, ((\\{ \\.\\.\\.)?buildClearStash\\(|logsStash\\.full\\))`)), t = h.indexOf(take);
+    // Task B13a (review round 26 #4): rewritten: each stash is written INSIDE the clear's reservation (reserveDelete
+    // `stash: { at, value }`), still before the take.
+    const w = h.search(new RegExp(`stash: \\{ at: ${at}, value: (outputsStash|resetStash|logsStash\\.full)`)), t = h.indexOf(take);
     assert.ok(w >= 0 && t > w, `${name}: stash written before the take`);
     assert.doesNotMatch(h.slice(w, t), /await /, `${name}: nothing awaited between the stash and the take`);
     // Round 17: dropped once confirmed; a void gives it back (applyClearStashes) instead of dropping it.
@@ -341,12 +347,14 @@ test("round 15 S1/S2: a stash is given back only when its clear has no pending i
   const c = replay.indexOf("confirmIntents(kind, r.deleted, ts)"), a = replay.indexOf("if (r.voided.length) applyClearStashes(voidedClearStashes(ts));");
   assert.ok(c >= 0 && a > c, "the group's confirmed ids are settled before its stash is considered");
   assert.equal(src.match(/confirmDeleteIntents\(/g)?.length, 1, "only confirmIntents calls it (it queues held archives' files)");
-  assert.match(between("function confirmIntents(kind, ids, at)", "// ─── LOGIN SCREEN ───"), /queueArchivedFileDeletes\(confirmDeleteIntents\(kind, ids, at\)\)/);
+  // Task B13a: + the optional opts (assumed confirms), passed through.
+  assert.match(between("function confirmIntents(kind, ids, at, opts)", "// ─── LOGIN SCREEN ───"), /queueArchivedFileDeletes\(confirmDeleteIntents\(kind, ids, at, opts\)\)/);
   assert.ok((src.match(/confirmIntents\(/g)?.length || 0) >= 9, "every confirm site");
 });
 test("round 15 S3: a Reset voided later puts its favorites back, only while they are still the ones it wrote", () => {
   const h = reset();
-  const w = h.indexOf("writeClearStash(resetAt, { ...buildClearStash("), fav = h.indexOf("resetAt: resetFavoritesAt", w);
+  // Task B13a (review round 26 #4): the stash is built for the reservation (`const resetStash = { ...buildClearStash(`).
+  const w = h.indexOf("const resetStash = { ...buildClearStash("), fav = h.indexOf("resetAt: resetFavoritesAt", w);
   assert.ok(w >= 0 && fav > w && fav < h.indexOf('takeQueuedUploads("task"'), "favorites in the stash");
   assert.match(h.slice(w, fav), /favorites: \{ scope: favoriteScope, byType: favoritesBefore\.byType, updatedAt: favoritesBefore\.updatedAt,/);
   const r = between("const restoreStashedFavorites = (fav) =>", "// A clear voided LATER");
@@ -367,7 +375,8 @@ test("round 15 S4: Clear Logs stashes the uploads it takes (fresh peek) and the 
   assert.doesNotMatch(h.slice(w, t), /await /, "no await between the peek and the take");
   // Round 16 #6 replaced the inline stashLoaded / stashStoredOnly lists with clearLogsStash (loaded + stored, quota fallback).
   assert.match(h.slice(w, t), /clearLogsStash\(\{ loaded: logsRef\.current, stored: storedLogs, uploads: stashUploads, /);
-  assert.match(h.slice(w, t), /if \(!writeClearStash\(snap, logsStash\.full\)\) writeClearStash\(snap, logsStash\.loadedOnly\);/, "quota fallback kept");
+  // Task B13a (review round 26 #4): the fallback is kept inside the reservation (rewritten from the plain write pair).
+  assert.match(h.slice(w, t), /stash: \{ at: snap, value: logsStash\.full, fallback: logsStash\.loadedOnly \}/, "quota fallback kept");
   assert.doesNotMatch(h, /uploads: queuedLogsAtSnap\.filter/, "never the pre-await peek");
 });
 // Review round 16 #6: Clear Logs used savedLogIds ("stored here") as "the cloud has it", so a saved entry with no queued
@@ -390,7 +399,7 @@ test("round 16 #5: a Reset chains its favoritesBefore; a settled stash whose ids
   const empty = h.indexOf("favoriteModelsRef.current = emptyFavorites");
   assert.ok(set >= 0 && chain > set && empty > chain, "chained after the setting is read, before the local reset");
   assert.doesNotMatch(h.slice(chain, empty), /await /, "nothing awaited between the chain and the reset");
-  assert.ok(h.indexOf("writeClearStash(resetAt, { ...buildClearStash(") > chain, "the stash carries the chained state");
+  assert.ok(h.indexOf("const resetStash = { ...buildClearStash(") > chain, "the stash carries the chained state");   // task B13a anchor
   // Task B5: the merge (moveClearStash) is gone; the drop happens only on stashDecision's "drop" (nothing pending at its
   // time nor at any time its ids moved to, none of them voided).
   const settle = between("const settleClearStashes = () =>", "// Force-flush all pending");
@@ -482,7 +491,8 @@ test("round 18 #3: every void answer settles through voidDeleteIntents with its 
   // Round 19 #3: no plain settleDeleteIntents is left in App.jsx (was one: a confirmed clear's unnamed History-only ids).
   const settles = src.match(/settleDeleteIntents\([^\n]*/g) || [];
   assert.equal(settles.length, 0, `plain settles left: ${settles.join(" | ")}`);
-  assert.match(src, /if \(cr\.ok\) \{ markAssumedConfirms\("task-delete", unnamedHistoryOnly, queuedAt\); confirmIntents\("task-delete", unnamedHistoryOnly, queuedAt\); \}/);   // task B12b
+  // Task B12b; task B13a (review round 26 #2) rewrote it: split by a read of the rows, both halves through confirmIntents.
+  assert.match(src, /if \(assumedIds\.length\) \{ markAssumedConfirms\("task-delete", assumedIds, queuedAt\); confirmIntents\("task-delete", assumedIds, queuedAt, \{ assumed: true \}\); \}/);
   // Every branch on a voided answer settles through the recording helper.
   // (`else if` ones are the toasts after a settled void; the replay's second branch is its give-back.)
   const branches = [...src.matchAll(/(else )?if \((?:(?:r|hr|cr|rr)\.voided(?:\.length)?|voided\.length)\) (\{|applyClearStashes\(voidedClearStashes\(ts\)\))/g)]
@@ -642,16 +652,17 @@ test("B7a: addFailedSync refuses a task / History upload the shared delete state
 
 // ─── Task B7b (review round 20 #2/#6, #7) ───
 test("B7b (#7): every confirm site passes its group's queue time; the confirm settles only up to it", () => {
-  const sites = src.match(/\bconfirmIntents\([^\n]*/g).filter(s => !s.startsWith("confirmIntents(kind, ids, at)"));
+  // Task B13a: the helper takes an optional 4th argument (opts.assumed); the Clear Outputs sites pass assumedIds / plainIds.
+  const sites = src.match(/\bconfirmIntents\([^\n]*/g).filter(s => !s.startsWith("confirmIntents(kind, ids, at, opts)"));
   assert.ok(sites.length >= 9, `confirm sites: ${sites.length}`);
-  const want = /confirmIntents\((kind|"task-delete"|"history-delete"), (r\.deleted|hr\.deleted|ids|done|unnamedHistoryOnly|historyOnly\.filter\(g => !localLogIds\.has\(g\.batchId\)\)\.map\(g => g\.id\)), (ts|emptiedAt|at|plan\.historyQueuedAt|queuedAt)\);/;
+  const want = /confirmIntents\((kind|"task-delete"|"history-delete"), (r\.deleted|hr\.deleted|ids|done|unnamedHistoryOnly|assumedIds|plainIds|historyOnly\.filter\(g => !localLogIds\.has\(g\.batchId\)\)\.map\(g => g\.id\)), (ts|emptiedAt|at|plan\.historyQueuedAt|queuedAt)(, \{ assumed: true \})?\);/;
   for (const s of sites) assert.match(s, want, `three arguments: ${s}`);
   for (const [h, at] of [[logsH(), "snap"], [outputs(), "queuedAt"], [reset(), "resetAt"]])
     assert.match(h, new RegExp(`await settleCloudClear\\(\\{ [^}]*at: ${at} \\}\\)`), `settleCloudClear at ${at}`);
   assert.match(between("const settleCloudClear = async ({ tasks, history, at }) =>", "return clean;"), /confirmIntents\(kind, done, at\);/);
   const st = storageSrc();
   const c = st.slice(st.indexOf("export function confirmDeleteIntents("), st.indexOf("export function forgetConfirmed("));
-  assert.match(c, /export function confirmDeleteIntents\(kind, ids, at\)/);
+  assert.match(c, /export function confirmDeleteIntents\(kind, ids, at, \{ assumed = false \} = \{\}\)/);   // task B13a: + opts
   assert.match(c, /settleDeleteIntents\(kind, ids, at\);/);
 });
 test("B7b (#2/#6): the inline voided branches put back only through inlineVoidPutBack, after the void, before the stashes", () => {

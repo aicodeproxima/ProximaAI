@@ -413,8 +413,11 @@ await test("#1 wiring: the reconcile decides the holds with its evidence after i
   // count as present, IndexedDB (every tab's) as kept, and the evidence is complete only when every source was read.
   const plans = rec.indexOf("const logPlan = planLogSync("), dec = rec.indexOf("releaseHeldPurges(Date.now(), evidence);");
   assert.ok(plans > 0 && dec > plans && dec < rec.indexOf("setTimeout(() => { flushWsDeletes(); flushFileDeletes(); }, 1500);"));
-  assert.match(rec, /task: \{ present: \[\.\.\.\(ids\.tasks \|\| \[\]\), \.\.\.\(cloudItemIds \|\| \[\]\), \.\.\.\(restoreRemoved \|\| \[\]\)\], local: keptTaskIds,\s*complete: ids\.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared \}/);
-  assert.match(rec, /history: \{ present: \[\.\.\.\(ids\.history \|\| \[\]\)\], local: keptLogIds, complete: ids\.history instanceof Set && !!shared \}/);
+  // Task B13a (simulator G): rewritten: the restore's own removals are no longer present (a generation the restore removed
+  // did not come back); tombstones are still required read for a complete decision.
+  // Task B13b (simulator D): rewritten: each part also carries the ids the cloud says were deleted (`deleted`).
+  assert.match(rec, /task: \{ present: \[\.\.\.\(ids\.tasks \|\| \[\]\), \.\.\.\(cloudItemIds \|\| \[\]\)\], local: keptTaskIds, deleted: userTaskTombstones,\s*complete: ids\.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared \}/);
+  assert.match(rec, /history: \{ present: \[\.\.\.\(ids\.history \|\| \[\]\)\], local: keptLogIds, deleted: [^\n]*,\s*complete: ids\.history instanceof Set && !!shared \}/);
   assert.ok(rec.indexOf("const restoreKnownAt = knownRestoreAt();") < rec.indexOf("await Promise.all([pullAllRemoteData(), pullCloudIds()])"), "known before the reads");
 });
 

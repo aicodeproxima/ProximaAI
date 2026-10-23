@@ -11,8 +11,14 @@ import { RESUME_WINDOW_MS } from "./taskResume.js";
 const IN_FLIGHT = new Set(["pending", "processing"]);
 const REMOVED_ERROR = "Removed or expired before it finished";
 
+// Task B13b (simulator class C): an item carries its generation's WaveSpeed prediction id (`taskId`) once the task has
+// one. A generation History alone holds (a restore keeps 500 tasks rows but up to 1000 entries; a row that never reached
+// the cloud) had its prediction id nowhere but on WaveSpeed: deleting it (Clear Outputs' History-only generations, a
+// pass removing an item a user tombstone names) could not delete its result. Additive: a previous build ignores the
+// field (its own rewrites from a task drop it until a newer build rewrites the entry); the server keeps items as sent;
+// the flush still keeps a prediction a cloud row or a live generation holds (predictions_in_use, generations_live).
 const itemOf = (t) => ({ id: t.id, model: t.modelName, status: t.status, wallClockMs: t.wallClockMs || 0, cost: t.price || 0,
-  outputs: t.outputs || [], error: t.error ?? null });
+  outputs: t.outputs || [], error: t.error ?? null, ...(typeof t.taskId === "string" && t.taskId ? { taskId: t.taskId } : {}) });
 
 export const batchLogItems = (tasks) => tasks.map(itemOf);
 export const isOpenLog = (log) => (log?.tasks || []).some(i => IN_FLIGHT.has(i?.status));
@@ -121,7 +127,8 @@ export function historyOnlyGenerations(logs, taskIds) {
   const have = taskIds instanceof Set ? taskIds : new Set(taskIds || []);
   const out = new Map();
   for (const l of logs || []) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) {
-    if (i?.id && !have.has(i.id) && !out.has(i.id)) out.set(i.id, { id: i.id, batchId: l.id, outputs: i.outputs || [], status: i.status });
+    // Task B13b: with the item's prediction id (itemOf), so a purge of it deletes its WaveSpeed result too.
+    if (i?.id && !have.has(i.id) && !out.has(i.id)) out.set(i.id, { id: i.id, batchId: l.id, outputs: i.outputs || [], status: i.status, ...(typeof i.taskId === "string" && i.taskId ? { taskId: i.taskId } : {}) });
   }
   return [...out.values()];
 }
