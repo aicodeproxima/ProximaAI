@@ -7,7 +7,8 @@
 // <= LEGACY_MAX), when its name is recorded under another version: the first migrations were recorded by an
 // older tool under other versions with the same names (round 11 R1, round 13 B2). A recorded version with another
 // name, or a recorded name on a file newer than LEGACY_MAX, is a clash and refused (round 12 F3). A file
-// that is not recorded but older than the newest recorded version is refused unless --allow-old is given. Any refusal
+// that is not recorded but older than the newest recorded version is refused unless --allow-old is given. Two files
+// of one run sharing a version or a name are refused too (round 15 S7). Any refusal
 // exits 2 before anything is applied, dry run included. Any other flag (a typo such as --dryrun) is refused before the database is touched (R2).
 // Also refuses a file not named <14 digits>_<name>.sql. Its recorded text is dollar-quoted with a tag the file does not
 // use (buildApplyScript). Stops at the first failure.
@@ -63,7 +64,24 @@ export function planApply(files, recordedRows, { allowOld = false } = {}) {
     if (n != null && !byName.has(n)) byName.set(n, { version: v, name: n });
     if (v > newest) newest = v;
   }
+  // Round 15 S7: the files of one run are checked against each other too. A file that the recorded rows would let
+  // apply (or refuse as old) but that shares a version or a name with an earlier file of the batch is refused
+  // (version-clash / name-clash), dry run included, naming both files. Recorded-history results come first.
+  const batchVersion = new Map(), batchName = new Map();
+  const label = f => f.f || `${f.version}_${f.name}.sql`;
   return [...files].sort((a, b) => (a.version < b.version ? -1 : a.version > b.version ? 1 : 0)).map(f => {
+    const bv = batchVersion.get(f.version), bn = batchName.get(f.name);
+    if (!bv) batchVersion.set(f.version, f);
+    if (!bn) batchName.set(f.name, f);
+    const p = againstRecorded(f);
+    if (p.action !== "apply" && p.action !== "refused-old") return p;
+    if (bv) return { ...f, action: "version-clash", as: { version: bv.version, name: bv.name },
+      reason: `version-clash: ${label(f)} and ${label(bv)} in this run share version ${f.version}; renumber one` };
+    if (bn) return { ...f, action: "name-clash", as: { version: bn.version, name: bn.name },
+      reason: `name-clash: ${label(f)} and ${label(bn)} in this run share name ${f.name}; rename one` };
+    return p;
+  });
+  function againstRecorded(f) {
     const v = byVersion.get(f.version);
     if (v) {
       if (v.name === f.name) return { ...f, action: "recorded", by: "version", as: v };
@@ -81,7 +99,7 @@ export function planApply(files, recordedRows, { allowOld = false } = {}) {
         reason: `refused-old: ${f.version} is older than the newest recorded version ${newest} (--allow-old to apply anyway)` };
     }
     return { ...f, action: "apply" };
-  });
+  }
 }
 
 export const isRefusal = p => p.action === "refused-old" || p.action === "version-clash" || p.action === "name-clash";

@@ -63,11 +63,23 @@ export function splitSql(sql) {
 // (round 14 T4b); COMMIT/ROLLBACK PREPARED start with commit/rollback.
 const TOP_TX = /^(begin|start\s+transaction|prepare\s+transaction|commit|end|rollback(?!\s+(work\s+|transaction\s+)?to\b)|abort)\b/;
 
-// Round 14 T4a: a SQL-standard body opens only after a CREATE [OR REPLACE] FUNCTION|PROCEDURE header: "begin atomic"
-// must follow a closing parenthesis with no parenthesis in between (the parameter list or a RETURNS TABLE (...),
-// then routine options such as RETURNS int LANGUAGE sql). A view column alias, a table column or a parameter named
-// "begin atomic" does not open it.
-const ATOMIC_HEADER = /^create (or replace )?(function|procedure)\b[\s\S]*?\)[^()]*?\bbegin atomic\b/;
+// Round 14 T4a: a SQL-standard body opens only after a CREATE [OR REPLACE] FUNCTION|PROCEDURE header; a view column
+// alias or a table column named "begin atomic" does not open it. Round 15 S6b: "begin atomic" must sit at parenthesis
+// depth 0 after the parameter list has closed, so a parameter or a RETURNS TABLE (...) column named begin of type
+// atomic (even after a typmod such as numeric(10)) does not open it either. t is lower-cased top-level code.
+const ROUTINE_HEAD = /^create (or replace )?(function|procedure)\b/;
+export function opensAtomicBody(t) {
+  if (!ROUTINE_HEAD.test(t)) return false;
+  let depth = 0, closedParams = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (c === "(") depth++;
+    else if (c === ")") { depth = Math.max(0, depth - 1); if (depth === 0) closedParams = true; }
+    else if (depth === 0 && closedParams && t.startsWith("begin atomic", i)
+      && !/[a-z0-9_$]/.test(t[i - 1] || "") && !/[a-z0-9_$]/.test(t[i + 12] || "")) return true;
+  }
+  return false;
+}
 
 // Returns the first top-level transaction-control statement in sql ("commit", "end", ...) or null.
 // Dollar-quoted bodies are not scanned (round 12 F2/F6): PostgreSQL refuses transaction control inside DO blocks and
@@ -80,14 +92,16 @@ const ATOMIC_HEADER = /^create (or replace )?(function|procedure)\b[\s\S]*?\)[^(
 // "begin atomic end"); it covers the body's statements and ends at the first segment that is just "end". Any other
 // top-level "end" (it COMMITS) is refused. Round 14 T4a narrowed the CREATE to a FUNCTION/PROCEDURE header.
 export function transactionControl(sql) {
-  const { code } = splitSql(String(sql || "").toLowerCase());
+  // Round 15 S6a: split the original text (dollar tags compare case-sensitively, as in PostgreSQL), then lower-case
+  // only the top-level code for keyword matching.
+  const code = splitSql(String(sql || "")).code.toLowerCase();
   let atomic = false;
   for (const s of code.split(";")) {
     const t = s.trim().replace(/\s+/g, " ");
     if (atomic && t === "end") { atomic = false; continue; }
     const m = t.match(TOP_TX);
     if (m) return m[0];
-    if (!atomic && ATOMIC_HEADER.test(t) && !/\bbegin atomic end$/.test(t)) atomic = true;
+    if (!atomic && opensAtomicBody(t) && !/\bbegin atomic end$/.test(t)) atomic = true;
   }
   return null;
 }

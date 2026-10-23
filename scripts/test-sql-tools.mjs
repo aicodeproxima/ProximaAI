@@ -276,6 +276,47 @@ test("sql-tx parseArgs: --test required, unknown flags refused", () => {
   assert.throws(() => parseTxArgs(["--test"]), /needs a file/);
 });
 
+// Round 15 S6a: the scanner lower-cased the SQL before splitting it, but PostgreSQL compares dollar tags case
+// sensitively ($A$ and $a$ differ), so a crafted mixed-case pair hid a top-level COMMIT.
+test("transactionControl: dollar tags are compared case-sensitively", () => {
+  const crafted = "select $a$ x $A$ y $a$;\ncommit;\nselect $A$ z $A$;\n";
+  assert.equal(transactionControl(crafted), "commit");
+  assert.match(checkFiles([{ name: "caseTag.sql", sql: crafted }]), /transaction control "commit"/);
+  assert.equal(transactionControl("select $A$ body $a$ commit; $A$;\ncommit;"), "commit");
+  assert.equal(transactionControl("do $Body$ begin commit; end $Body$;\nCOMMIT;"), "commit");
+  assert.equal(transactionControl("do $Body$ begin commit; end $Body$;\nselect 1;"), null);
+  assert.equal(transactionControl("SELECT 1; COMMIT;"), "commit");
+  assert.equal(transactionControl("CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; END;"), null);
+});
+
+// Round 15 S6b: ATOMIC_HEADER accepted "begin atomic" after any ")" (a typmod inside the parameter list or RETURNS
+// TABLE), so a parameter or column named begin of type atomic opened the exemption. It must sit at depth 0.
+test("transactionControl: begin atomic inside the parameter list or RETURNS TABLE does not open the body", () => {
+  assert.equal(transactionControl("create function f(begin atomic) returns int language sql as 'select 1'; commit;"), "commit");
+  assert.equal(transactionControl("create function f(a numeric(10), begin atomic) returns int language sql return 1;\nend;\nselect 1;"), "end");
+  assert.equal(transactionControl("create function f() returns table (x numeric(5), begin atomic) language sql return 1;\nend;"), "end");
+  assert.equal(transactionControl("create function f() returns table(begin atomic) language sql as 'select 1'; commit;"), "commit");
+  assert.equal(transactionControl("create function f(a numeric(10)) returns table (x numeric(5)) language sql begin atomic select 1, 2; end; select 1;"), null);
+  assert.equal(transactionControl("create function f(a int default (1)) returns int language sql\nbegin atomic\n  select a;\nend;"), null);
+});
+
+// Round 15 S7: planApply compared each file only with the recorded rows, so two files of one batch sharing a version
+// or a name both came back "apply".
+test("planApply: files of one batch sharing a version or a name are refused, naming both files", () => {
+  const recorded = [{ version: "20261022350000", name: "revoke_browser_delete" }];
+  const mk = (v, nm) => ({ version: v, name: nm, f: `supabase/migrations/${v}_${nm}.sql` });
+  const plan = planApply([mk("20261023100000", "foo"), mk("20261023100000", "foo_v2"), mk("20261023110000", "foo")], recorded);
+  assert.equal(plan.filter(p => p.action === "apply").length, 1);
+  const vc = plan.find(p => p.action === "version-clash");
+  assert.ok(vc, "a shared version is a version-clash");
+  assert.match(vc.reason, /20261023100000_foo\.sql/); assert.match(vc.reason, /20261023100000_foo_v2\.sql/);
+  const nc = plan.find(p => p.action === "name-clash");
+  assert.ok(nc, "a shared name is a name-clash");
+  assert.match(nc.reason, /20261023100000_foo\.sql/); assert.match(nc.reason, /20261023110000_foo\.sql/);
+  assert.ok(plan.filter(isRefusal).length === 2);
+  assert.deepEqual(planApply([mk("20261023100000", "a"), mk("20261023110000", "b")], recorded).map(p => p.action), ["apply", "apply"]);
+});
+
 // Found along the way (round 10): supabase-admin.mjs cut a failed query's text at 2000 characters, so a long RESULT
 // (test-queued-deletes-db.sql has 21 cases) lost its later cases. A test's RESULT must reach the caller whole.
 {
