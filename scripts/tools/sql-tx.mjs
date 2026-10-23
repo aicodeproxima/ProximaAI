@@ -16,6 +16,66 @@ import { fileURLToPath } from "node:url";
 export const GUARD = "do $sqltx$ begin raise exception 'SQLTX_ROLLBACK'; end $sqltx$;";
 const SB_QUERY = path.join(path.dirname(fileURLToPath(import.meta.url)), "sb-query.mjs");
 
+// Splits SQL into top-level code (comments dropped, string literals and identifiers blanked, dollar-quoted bodies
+// replaced by " $$ ") and the dollar-quoted bodies. Same reading as sql-guard.mjs scan() (not exported there):
+// nested block comments, E'..' backslash escapes, no dollar-quote opened inside an identifier.
+export function splitSql(sql) {
+  let code = "", i = 0;
+  const bodies = [];
+  while (i < sql.length) {
+    const c = sql[i], two = sql.slice(i, i + 2);
+    if (two === "--") { const j = sql.indexOf("\n", i); i = j < 0 ? sql.length : j; continue; }
+    if (two === "/*") {
+      let depth = 1, j = i + 2;
+      while (j < sql.length && depth > 0) {
+        if (sql.startsWith("/*", j)) { depth++; j += 2; } else if (sql.startsWith("*/", j)) { depth--; j += 2; } else j++;
+      }
+      i = j; code += " "; continue;
+    }
+    if (c === "'" || c === '"') {
+      const escapes = c === "'" && /[e]$/i.test(code) && !/[a-z0-9_$\u0080-￿]$/i.test(code.slice(0, -1));
+      let j = i + 1;
+      while (j < sql.length) {
+        if (escapes && sql[j] === "\\") { j += 2; continue; }
+        if (sql[j] === c) { if (sql[j + 1] === c) { j += 2; continue; } break; }
+        j++;
+      }
+      i = j + 1; code += ` ${c}${c} `; continue;
+    }
+    const tag = c === "$" && !/[a-z0-9_$\u0080-￿]/i.test(sql[i - 1] || "")
+      && /^\$([a-z_\u0080-￿][a-z0-9_\u0080-￿]*)?\$/i.exec(sql.slice(i));
+    if (tag) {
+      const end = sql.indexOf(tag[0], i + tag[0].length);
+      bodies.push(sql.slice(i + tag[0].length, end < 0 ? sql.length : end));
+      i = end < 0 ? sql.length : end + tag[0].length; code += " $$ "; continue;
+    }
+    code += c; i++;
+  }
+  return { code, bodies };
+}
+
+// Statements that would end sql-tx's always-abort transaction early and so commit what came before (round 11 R2).
+// SAVEPOINT, RELEASE and ROLLBACK TO keep the transaction open and are allowed.
+const TOP_TX = /^(begin|start\s+transaction|commit|end|rollback(?!\s+(work\s+|transaction\s+)?to\b)|abort)\b/;
+const BODY_TX = /\b(commit|rollback(?!\s+(work\s+|transaction\s+)?to\b))\b/;
+
+// Returns the first transaction-control statement in sql ("commit", "rollback (in a DO/function body)", ...) or null.
+export function transactionControl(sql) {
+  const { code, bodies } = splitSql(String(sql || "").toLowerCase());
+  for (const s of code.split(";")) {
+    const m = s.trim().match(TOP_TX);
+    if (m) return m[0].replace(/\s+/g, " ");
+  }
+  const queue = [...bodies];
+  while (queue.length) {
+    const inner = splitSql(queue.shift());
+    const m = inner.code.match(BODY_TX);
+    if (m) return `${m[0]} (in a DO/function body)`;
+    queue.push(...inner.bodies);
+  }
+  return null;
+}
+
 // files: [{ name, sql }] in run order (migrations first, test last).
 export function buildScript(files) {
   const parts = ["begin;"];
@@ -64,15 +124,38 @@ async function runSbQuery(args) {
   }
 }
 
+export const USAGE = "usage: node scripts/tools/sql-tx.mjs [migration.sql ...] --test <test.sql>";
+
+// Throws on a flag other than --test, a missing or repeated --test, or a --test with no file after it.
+export function parseArgs(argv) {
+  const migrations = [];
+  let test = null;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--test") {
+      if (test !== null) throw new Error("--test given twice");
+      const next = argv[i + 1];
+      if (!next || next.startsWith("-")) throw new Error("--test needs a file");
+      test = next; i++;
+    } else if (a.startsWith("-")) throw new Error(`unknown flag ${a}`);
+    else migrations.push(a);
+  }
+  if (!test) throw new Error("no --test file given");
+  return { migrations, test };
+}
+
 async function main(argv) {
-  const ti = argv.indexOf("--test");
-  const test = ti >= 0 ? argv[ti + 1] : null;
-  const migrations = argv.filter((a, i) => i !== ti && i !== ti + 1 && !a.startsWith("--"));
-  if (!test) { console.error("usage: node scripts/tools/sql-tx.mjs [migration.sql ...] --test <test.sql>"); return 2; }
+  let args;
+  try { args = parseArgs(argv); } catch (e) { console.error(`${e.message}\n${USAGE}`); return 2; }
+  const { migrations, test } = args;
   const files = [];
   for (const f of [...migrations, test]) {
     try { files.push({ name: f, sql: fs.readFileSync(f, "utf8") }); }
     catch (e) { console.error(`cannot read ${f}: ${e.message}`); return 2; }
+  }
+  for (const f of files) {
+    const tc = transactionControl(f.sql);
+    if (tc) { console.error(`refused: ${f.name} has transaction control "${tc}"; it would end the always-abort transaction and commit`); return 2; }
   }
   const tmp = path.join(os.tmpdir(), `sql-tx-${process.pid}-${Date.now()}.sql`);
   fs.writeFileSync(tmp, buildScript(files));

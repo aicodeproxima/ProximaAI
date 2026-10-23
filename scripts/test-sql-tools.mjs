@@ -75,8 +75,105 @@ test("buildApplyScript: runs the sql then records version, name and text", () =>
   assert.match(s, /insert into supabase_migrations\.schema_migrations \(version, name, statements\) values \('20261022302000', 'x_y', array\[\$mig\$create table a\(\);\n\$mig\$\]\);/);
 });
 
-test("buildApplyScript: refuses $mig$", () => {
-  assert.throws(() => buildApplyScript("select $mig$x$mig$;", { version: "20261022302000", name: "x" }), /\$mig\$/);
+// Found along the way (round 11): a file using $mig$ itself (20261022120000_rls_session_header.sql) was refused, so the
+// tool could neither apply nor classify it. The recorded text is quoted with a tag the file does not contain.
+test("buildApplyScript: quotes the recorded text with a tag the file does not use", () => {
+  const sql = "do $mig$ begin null; end $mig$; select $mig0$x$mig0$;\n";
+  const s = buildApplyScript(sql, { version: "20261022302000", name: "x" });
+  assert.ok(s.includes("array[$mig1$" + sql + "$mig1$]"), "first free tag");
+  assert.ok(s.startsWith("do $mig$ begin null; end $mig$;"));
+});
+
+// Round 11 R1: a file counts as recorded by version OR name; older unrecorded files are refused unless --allow-old.
+const { planApply, parseArgs: parseApplyArgs } = await import("./tools/apply-migration.mjs");
+const { transactionControl, parseArgs: parseTxArgs } = await import("./tools/sql-tx.mjs");
+const rows = [
+  { version: "20261020145422", name: "sync_tombstones" },
+  { version: "20261022300000", name: "newest_one" },
+];
+const f = (version, name) => ({ version, name });
+
+test("planApply: recorded by name under another version (old tool's versions)", () => {
+  const [p] = planApply([f("20261020000001", "sync_tombstones")], rows);
+  assert.equal(p.action, "recorded"); assert.equal(p.by, "name");
+  assert.deepEqual(p.as, { version: "20261020145422", name: "sync_tombstones" });
+});
+
+test("planApply: recorded by version", () => {
+  const [p] = planApply([f("20261022300000", "renamed_file")], rows);
+  assert.equal(p.action, "recorded"); assert.equal(p.by, "version");
+});
+
+test("planApply: an unrecorded file older than the newest recorded version is refused", () => {
+  const [p] = planApply([f("20261021000000", "never_applied")], rows);
+  assert.equal(p.action, "refused-old"); assert.equal(p.newest, "20261022300000");
+});
+
+test("planApply: --allow-old lets an old unrecorded file apply; newer files apply", () => {
+  assert.equal(planApply([f("20261021000000", "never_applied")], rows, { allowOld: true })[0].action, "apply");
+  assert.equal(planApply([f("20261022400000", "next")], rows)[0].action, "apply");
+  assert.equal(planApply([f("20261021000000", "x")], [])[0].action, "apply");
+});
+
+test("planApply: files come back in version order", () => {
+  const p = planApply([f("20261022500000", "b"), f("20261022400000", "a")], rows);
+  assert.deepEqual(p.map(x => x.name), ["a", "b"]);
+});
+
+test("apply-migration parseArgs: known flags, unknown flags and no file", () => {
+  assert.deepEqual(parseApplyArgs(["a.sql", "--dry-run"]), { files: ["a.sql"], dryRun: true, allowOld: false });
+  assert.deepEqual(parseApplyArgs(["--allow-old", "a.sql", "b.sql"]), { files: ["a.sql", "b.sql"], dryRun: false, allowOld: true });
+  assert.throws(() => parseApplyArgs(["a.sql", "--dryrun"]), /unknown flag --dryrun/);
+  assert.throws(() => parseApplyArgs(["a.sql", "-n"]), /unknown flag -n/);
+  assert.throws(() => parseApplyArgs(["--dry-run"]), /no migration file/);
+  assert.throws(() => parseApplyArgs([]), /no migration file/);
+});
+
+// Round 11 R2: a file that ends sql-tx's always-abort transaction early would commit.
+test("transactionControl: top-level commit/end/rollback/abort/begin refused", () => {
+  assert.equal(transactionControl("create table a();\ncommit;\n"), "commit");
+  assert.equal(transactionControl("select 1; END;"), "end");
+  assert.equal(transactionControl("select 1; rollback;"), "rollback");
+  assert.equal(transactionControl("abort"), "abort");
+  assert.equal(transactionControl("begin; select 1;"), "begin");
+  assert.equal(transactionControl("start  transaction; select 1;"), "start transaction");
+});
+
+test("transactionControl: commit inside a string, identifier or comment is allowed", () => {
+  assert.equal(transactionControl("select 'commit'; -- commit\n/* rollback; /* nested */ end; */ select \"commit\";"), null);
+  assert.equal(transactionControl("select E'it\\'s; commit;'; select 1;"), null);
+});
+
+test("transactionControl: savepoint, release and rollback to savepoint are allowed", () => {
+  assert.equal(transactionControl("savepoint s; select 1; rollback to savepoint s; release s;"), null);
+  assert.equal(transactionControl("do $$ begin null; end $$;"), null);
+});
+
+test("transactionControl: commit/rollback inside a DO or function body refused", () => {
+  assert.match(transactionControl("do $$ begin update t set x = 1; commit; end $$;"), /^commit \(in a DO/);
+  assert.match(transactionControl("create procedure p() language plpgsql as $f$ begin rollback; end $f$;"), /^rollback \(in a DO/);
+  assert.match(transactionControl("do $a$ begin execute $q$ commit $q$; end $a$;"), /^commit/);
+  assert.equal(transactionControl("do $$ begin raise notice 'commit'; end $$;"), null);
+});
+
+test("transactionControl: a normal migration with $$ bodies and case..end is allowed", () => {
+  const sql = `create or replace function public.f(p int) returns int language plpgsql security definer set search_path = '' as $$
+begin
+  if p > 0 then return case when p = 1 then 1 else 2 end; end if;
+  return 0;
+end;
+$$;
+revoke all on function public.f(int) from public;
+select case when true then 1 end;
+comment on function public.f(int) is 'never commits';`;
+  assert.equal(transactionControl(sql), null);
+});
+
+test("sql-tx parseArgs: --test required, unknown flags refused", () => {
+  assert.deepEqual(parseTxArgs(["m.sql", "--test", "t.sql"]), { migrations: ["m.sql"], test: "t.sql" });
+  assert.throws(() => parseTxArgs(["--test", "t.sql", "--dry-run"]), /unknown flag --dry-run/);
+  assert.throws(() => parseTxArgs(["m.sql"]), /no --test/);
+  assert.throws(() => parseTxArgs(["--test"]), /needs a file/);
 });
 
 // Found along the way (round 10): supabase-admin.mjs cut a failed query's text at 2000 characters, so a long RESULT
