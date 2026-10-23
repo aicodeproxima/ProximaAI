@@ -244,6 +244,35 @@ await test("resetQueuedRemote: one reset_queued_rows call with the snapshot time
   c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
   assert.deepEqual(await sb.resetQueuedRemote(1, [], []), { ok: false, voided: false, deleted: null });
 });
+// Review round 11 (R4): Reset bounds settings and favorites by its exact snapshot (p_prefs_at), rows by the slack bound.
+await test("resetQueuedRemote: p_prefs_at sent (floored) only when a finite prefsAt is given", async () => {
+  const c = fakeClient(); const seen = [];
+  c.rpc = async (fn, args) => { seen.push(args); return { data: { ok: true, voided: false, deleted: null }, error: null }; };
+  sb.__setClientForTests(c);
+  await sb.resetQueuedRemote(1000, ["a"], ["h"], 2000.9);
+  await sb.resetQueuedRemote(1000, ["a"], ["h"]);
+  await sb.resetQueuedRemote(1000, ["a"], ["h"], NaN);
+  assert.equal(seen[0].p_prefs_at, 2000);
+  assert.equal(seen[0].p_queued_at, 1000);
+  assert.equal("p_prefs_at" in seen[1], false);
+  assert.equal("p_prefs_at" in seen[2], false);
+});
+// Review round 11 (R6): a clear's snapshot is the server's own time (server_time_ms), not this device's estimate.
+await test("serverTimeRemote: server_time_ms as a Number; a failure or a non-number -> null", async () => {
+  const c = fakeClient(); let seen;
+  c.rpc = async (fn, args) => { seen = [fn, args]; return { data: "1760000000123", error: null }; };
+  sb.__setClientForTests(c);
+  assert.equal(await sb.serverTimeRemote(), 1760000000123);
+  assert.deepEqual(seen, ["server_time_ms", { p_session_token: "tok" }]);
+  c.rpc = async () => ({ data: 1760000000456, error: null });
+  assert.equal(await sb.serverTimeRemote(), 1760000000456);
+  c.rpc = async () => ({ data: null, error: { message: "boom", code: "XX000" } });
+  assert.equal(await sb.serverTimeRemote(), null);
+  c.rpc = async () => ({ data: "soon", error: null });
+  assert.equal(await sb.serverTimeRemote(), null);
+  c.rpc = async () => ({ data: null, error: null });
+  assert.equal(await sb.serverTimeRemote(), null);
+});
 
 // Review round 9: a clear covers the rows that existed when it was queued plus the ids its device named (p_ids), so a
 // row another device created later stays; Reset's settings and favorites clears go through it too.

@@ -336,6 +336,17 @@ export async function deleteHistoryRemote(ids, queuedAt = serverNow()) {
   return { ok: r.ok && !r.voided.length, voided: r.voided, deleted: r.deleted, ...(r.ok ? {} : { error: "delete_queued_rows failed" }) };
 }
 
+// The server's own clock in ms (server_time_ms, review round 11): Clear Outputs / Reset take their snapshot from it, not
+// from this device's estimate. null when it cannot be read; the caller then clears nothing.
+export async function serverTimeRemote() {
+  try {
+    const r = await sessionRpc("server_time_ms", {});
+    if (r == null || r === "") return null;
+    const t = Number(r);
+    return Number.isFinite(t) ? t : null;
+  } catch (err) { warnOnce("serverTimeRemote", err); return null; }
+}
+
 // Clear Logs / Clear Outputs / Reset: every row of one kind of this account, through clear_queued_rows at the action's
 // queue time (review round 8): voided when a restore landed after it; for tasks the server also strips their History.
 // Kinds task, history, settings (the restore marker and form holds stay) and favorites. A clear takes the rows that
@@ -353,11 +364,14 @@ export async function clearQueuedRemote(kind, queuedAt, ids) {
 // Reset Everything: History, generations, settings and favorites of this account through reset_queued_rows, in one
 // transaction under one restore check (review round 10: four separate calls could be half-voided by a restore landing
 // between them). `queuedAt` is the snapshot time taken before the purge read; `taskIds` / `historyIds` the ids this
-// device knew. { ok, voided, deleted: { history, task, settings, favorites } | null }.
-export async function resetQueuedRemote(queuedAt, taskIds, historyIds) {
+// device knew. `prefsAt` (review round 11): the exact snapshot that bounds settings and favorites (nothing else purges
+// them, so no slack); left out, the server uses queuedAt. { ok, voided, deleted: { history, task, settings, favorites } | null }.
+export async function resetQueuedRemote(queuedAt, taskIds, historyIds, prefsAt) {
   const uniq = (ids) => [...new Set((ids || []).filter(Boolean))];
   try {
-    const r = await sessionRpc("reset_queued_rows", { p_queued_at: Math.floor(queuedAt || 0), p_task_ids: uniq(taskIds), p_history_ids: uniq(historyIds) });
+    const args = { p_queued_at: Math.floor(queuedAt || 0), p_task_ids: uniq(taskIds), p_history_ids: uniq(historyIds) };
+    if (Number.isFinite(prefsAt)) args.p_prefs_at = Math.floor(prefsAt);
+    const r = await sessionRpc("reset_queued_rows", args);
     return { ok: !!r?.ok && !r?.voided, voided: !!r?.voided, deleted: r?.deleted ?? null };
   } catch (err) { warnOnce("resetQueuedRemote", err); return { ok: false, voided: false, deleted: null }; }
 }

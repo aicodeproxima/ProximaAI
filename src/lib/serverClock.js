@@ -6,9 +6,10 @@ const KEY = "proximaai-clock-offset";
 let offset = (() => { try { return Number(localStorage.getItem(KEY)) || 0; } catch { return 0; } })();
 
 export const serverNow = () => Date.now() + offset;
-// The estimate can be off by the Date header's whole second plus half the quickest round trip (at most 1.5 s), so a
-// snapshot time this much earlier is never after the server's real time (review round 10: Clear Outputs / Reset).
-export const CLOCK_MARGIN_MS = 3000;
+// A clear's snapshot (Clear Outputs / Reset) is the SERVER's time, read from server_time_ms, never this estimate (review
+// round 11: a stale offset put it after the server's real time). Its row bound leaves out the last second: rows whose
+// write began just before the snapshot may not be visible to the purge read yet; a visible one was read and is named.
+export const SNAPSHOT_SLACK_MS = 1000;
 
 // One sample: the header has whole seconds (its midpoint is +500 ms) against the request's midpoint. The server stamps
 // Date when it answers, so a slow request (an upload, a large pull) puts it late and biases the estimate by up to half
