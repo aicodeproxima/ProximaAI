@@ -982,7 +982,9 @@ export function stashedItems(stash, { deletingTasks = new Set(), deletingLogs = 
 // intent to the newer queue time). The earlier clear can then end with no intent of its own while the later one is still
 // pending, and dropping its stash as "confirmed" would throw away what it holds (a Reset's real favorites, the uploads it
 // took). So every stash whose clear lost ids to time `to` (or that already points at a time that lost them: a plain
-// delete keeps no stash) records `to` in `movedTo`, and settleClearStashes moves it there (moveClearStash).
+// delete keeps no stash) records `to` in `movedTo`, and it is decided only once every one of those times is (stashDecision).
+// Task B5: it stays under its own key until then (the merge into the newest pending target, moveClearStash, is gone: a
+// stash whose ids moved to TWO times followed only the newest one, and lost the other's ids when that one was confirmed).
 function noteStashMoves(fromTimes, to) {
   for (const s of readClearStashes()) {
     if (s.at === to) continue;
@@ -1014,29 +1016,32 @@ export function chainedFavoritesBefore(before, scope) {
   }
   return before;
 }
-// A settled clear's stash whose ids moved to a clear or delete still pending (noteStashMoves) goes into that one's stash
-// (created if it has none): its uploads, local items, archive records and favorites, the target's own versions winning.
-// Says whether it moved; false: nothing pending to hold it (the caller drops it, as a confirmed clear).
-export function moveClearStash(at) {
-  const s = readClearStash(at);
-  if (!s || intentsPendingAt(s.at)) return false;
-  const pending = (s.movedTo || []).filter(t => t !== s.at && intentsPendingAt(t));
-  if (!pending.length) return false;
-  const to = Math.max(...pending);
-  const t = readClearStash(to) || { uploads: [], tasks: [], logs: [], at: to };
-  const byKey = (list, key) => { const m = new Map(); for (const x of list) if (x && !m.has(key(x))) m.set(key(x), x); return [...m.values()]; };
-  const merged = {
-    uploads: byKey([...t.uploads, ...s.uploads], e => `${e.kind}\u0000${e.id}`),
-    tasks: byKey([...t.tasks, ...s.tasks], x => x.id),
-    logs: byKey([...t.logs, ...s.logs], x => x.id),
-    archives: { ...(s.archives || {}), ...(t.archives || {}) },
-    favorites: chainStashFavorites(t.favorites, s.favorites),
-    movedTo: [...new Set([...(t.movedTo || []), ...(s.movedTo || [])])].filter(x => x !== to),
-  };
-  if (!merged.favorites) delete merged.favorites;
-  if (!writeClearStash(to, merged)) return false;
-  dropClearStash(s.at);
-  return true;
+// Task B5: what a settle pass does with a stash (App.jsx settleClearStashes). "wait" while an intent is pending at its own
+// queue time or at ANY time its ids moved to (movedTo): each of those voids or confirms its own ids. Once none is:
+// "give-back" if one of them is a recorded voided time (what is left in it is only content whose deletes were not
+// confirmed: confirmed ids already left every stash, forgetStashedIds), otherwise "drop" (its archive paths deleted).
+// Stashes merged by older builds (content inside a target's stash) simply follow that target.
+export function stashDecision(stash, voided = voidedTimes()) {
+  if (!stash) return "wait";
+  const times = [stash.at, ...(stash.movedTo || [])];
+  if (times.some(t => intentsPendingAt(t))) return "wait";
+  return times.some(t => voided.has(t)) ? "give-back" : "drop";
+}
+// After a give-back (App.jsx applyClearStashes): the stash goes, unless a time its ids moved to is still pending. Then
+// only the local items still pending deletion at another time stay (stashGiveBack left them out; their archive records
+// moved to that time's stash, its uploads were put back), so that time's own void gives them back (as a follower) and its
+// confirm removes them (forgetStashedIds). Task B5: dropping the whole stash lost them on a later void.
+export function dropGivenBackStash(stash) {
+  if (!stash) return;
+  const movedTo = (stash.movedTo || []).filter(t => t !== stash.at);
+  if (movedTo.some(t => intentsPendingAt(t))) {
+    const deletingTasks = pendingDeleteIds("task-delete", { exceptAt: stash.at });
+    const deletingLogs = pendingDeleteIds("history-delete", { exceptAt: stash.at });
+    const tasks = (stash.tasks || []).filter(x => x?.id && deletingTasks.has(x.id));
+    const logs = (stash.logs || []).filter(x => x?.id && deletingLogs.has(x.id));
+    if ((tasks.length || logs.length) && writeClearStash(stash.at, { uploads: [], tasks, logs, movedTo })) return;
+  }
+  dropClearStash(stash.at);
 }
 // Review round 17 (#1, #3, #6): a stash's fate follows the clear its ids moved to. The followers of the clear at `ts`:
 // stashes with no intent of their own pending whose `movedTo` includes `ts` (transitive: noteStashMoves records every
@@ -1049,8 +1054,8 @@ export function stashFollowers(ts) {
   for (const s of readClearStashes()) if (s.at !== at && (s.movedTo || []).includes(at) && !intentsPendingAt(s.at)) out.add(s.at);
   return out;
 }
-// Which stashes a VOIDED clear at `ts` gives back (App.jsx applyClearStashes): its own, with whatever moveClearStash
-// merged into it, and its followers. Read before any settle pass can drop a follower as confirmed.
+// Which stashes a VOIDED clear at `ts` gives back (App.jsx applyClearStashes): its own (with whatever an older build's
+// merge put into it) and its followers. Read before any settle pass can drop a follower as confirmed.
 export function voidedClearStashes(ts) {
   const at = Number(ts), followers = stashFollowers(at);
   return (s) => s === at || followers.has(s);
@@ -1105,11 +1110,11 @@ export function voidDeleteIntents(kind, ids, at) {
   settleDeleteIntents(kind, ids);
   if ((ids || []).some(Boolean)) recordVoidedAt(at);
 }
-// Whether this stash is settled (no intent of its own pending) and tied to a voided time with nothing left pending: its
-// own queue time or one its ids moved to. Such a stash is given back, never dropped as confirmed.
+// Whether this stash is decided and tied to a voided time: nothing pending at its own queue time nor at any time its ids
+// moved to (task B5), and one of them recorded voided. Such a stash is given back, never dropped as confirmed.
 export function stashTiedToVoided(stash, voided = voidedTimes()) {
   if (!stash || intentsPendingAt(stash.at) || !voided.size) return false;
-  return [stash.at, ...(stash.movedTo || [])].some(t => voided.has(t) && !intentsPendingAt(t));
+  return stashDecision(stash, voided) === "give-back";
 }
 // Clear Logs' stash (round 16 #6): every planned History entry the cloud lacks, loaded or stored only, plus the uploads
 // it takes (an entry with a stashed upload is carried by it). `cloudLogIds`: the cloud's History ids read before the

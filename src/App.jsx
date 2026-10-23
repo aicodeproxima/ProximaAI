@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, moveClearStash, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashTiedToVoided, pruneVoidedAt } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, pruneVoidedAt } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
@@ -1473,26 +1473,24 @@ export default function ProximaApp() {
       reapplyArchives(back.archives, new Map([...heldTasks, ...backTasks.map(t => [t.id, t])]));
       queueArchivedFileDeletes(back.orphanPaths);
       favorites = restoreStashedFavorites(back.favorites) || favorites;
-      dropClearStash(s.at);
+      dropGivenBackStash(s);   // task B5: the part still pending at a time its ids moved to stays for that one
     }
     if (any) setFailedSyncCount(getFailedSyncs().length);
     return { favorites };
   };
-  // A clear none of whose intents is queued any more was confirmed (or given back above): its stash goes. Archive records
-  // still in it belong to tasks that are gone: their files go through the file-delete queue (S5). Unless its ids moved
-  // to another clear or delete that is still pending (review round 16 #5: a Reset pressed again re-queues them at its own
-  // time): then its favorites, uploads, items and archive records move into that one's stash (storage.js moveClearStash).
-  // Review round 18 #3: first, a stash tied to a recorded VOIDED time (its own clear, or a clear or delete its ids moved
-  // to, answered voided: storage.js voidDeleteIntents records every void) is given back, never dropped as confirmed. That
-  // covers a void site that gave back too early to see it (a follower whose own last group settled later).
+  // A stash is decided only once nothing is pending at its clear's queue time AND at every time its ids moved to (review
+  // round 16 #5: a Reset pressed again, or a plain delete, re-queues them at its own time; storage.js stashDecision,
+  // task B5). Until then it is left alone: no move, no drop. Then, if one of those times is a recorded VOIDED time
+  // (storage.js voidDeleteIntents records every void, round 18 #3), it is given back: what is left in it is only content
+  // whose deletes were not confirmed (confirmed ids left every stash, forgetStashedIds). Otherwise it was confirmed: it
+  // goes, and archive records still in it belong to tasks that are gone (their files go through the file-delete queue,
+  // S5). Task B5 removed the merge into the newest pending target (moveClearStash): a stash whose ids moved to two times
+  // followed only the newest one, and lost the other's ids when that one was confirmed.
   const settleClearStashes = () => {
     const voided = voidedTimes();
-    const back = new Set(readClearStashes().filter(s => stashTiedToVoided(s, voided)).map(s => s.at));
+    const back = new Set(readClearStashes().filter(s => stashDecision(s, voided) === "give-back").map(s => s.at));
     if (back.size) applyClearStashes(at => back.has(at));
-    const queued = new Set([...intentGroups("task-delete"), ...intentGroups("history-delete")].map(([ts]) => ts));
-    for (const s of readClearStashes()) if (!queued.has(s.at)) {
-      if (stashTiedToVoided(s, voided)) continue;   // never dropped (given back above)
-      if (moveClearStash(s.at)) continue;
+    for (const s of readClearStashes()) if (stashDecision(s, voided) === "drop") {
       queueArchivedFileDeletes(stashArchivePaths(s)); dropClearStash(s.at);
     }
     pruneVoidedAt();

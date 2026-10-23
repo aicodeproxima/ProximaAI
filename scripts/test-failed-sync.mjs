@@ -8,7 +8,7 @@ const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueued
   restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload, pendingDeleteIds, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads,
   buildClearStash, writeClearStash, readClearStashes, dropClearStash, stashedItems, allStoredHistory, allStoredTasks,
   intentsPendingAt, readClearStash, stashGiveBack, forgetStashedIds, recordStashArchive, stashArchivePaths,
-  chainStashFavorites, chainedFavoritesBefore, moveClearStash, clearLogsStash, voidedTimes, stashTiedToVoided, pruneVoidedAt } = await import("../src/lib/storage.js");
+  chainStashFavorites, chainedFavoritesBefore, stashDecision, dropGivenBackStash, clearLogsStash, voidedTimes, stashTiedToVoided, pruneVoidedAt } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -503,17 +503,14 @@ const favoritesRig = () => {
       if (!back) continue;
       putBackQueuedUploads(back.uploads);
       restoreStashedFavorites(back.favorites);
-      dropClearStash(s.at);
+      dropGivenBackStash(s);
     }
   };
-  const settleClearStashes = () => {   // round 18 #3: a stash tied to a recorded voided time is given back first
+  const settleClearStashes = () => {   // round 18 #3 / task B5: decided once nothing is pending at its times (stashDecision)
     const voided = voidedTimes();
-    const back = new Set(readClearStashes().filter(s => stashTiedToVoided(s, voided)).map(s => s.at));
+    const back = new Set(readClearStashes().filter(s => stashDecision(s, voided) === "give-back").map(s => s.at));
     if (back.size) applyClearStashes(at => back.has(at));
-    const queued = new Set([...intentGroups("task-delete"), ...intentGroups("history-delete")].map(([ts]) => ts));
-    for (const s of readClearStashes()) if (!queued.has(s.at)) {
-      if (stashTiedToVoided(s, voided)) continue;
-      if (moveClearStash(s.at)) continue;
+    for (const s of readClearStashes()) if (stashDecision(s, voided) === "drop") {
       dropClearStash(s.at);
     }
     pruneVoidedAt();
@@ -549,7 +546,10 @@ test("round 16 #5: two Resets voided together give back the original favorites (
   assert.deepEqual(getFailedSyncs().filter(e => e.kind === "model-favorites").map(e => e.data.updatedAt), [500], "the queued upload is back, once");
   assert.deepEqual(readClearStashes(), []);
 });
-test("round 16 #5: a Reset whose ids all moved to a pending Reset moves its stash there instead of being dropped", () => {
+// Task B5: this asserted the merge itself (A's stash moved INTO B's, moveClearStash). It now asserts the outcome: A's
+// stash is neither moved nor dropped while B is pending, and B's void gives back A's upload and items and the original
+// favorites; B's confirm drops A's stash with its archive paths, and gives nothing back.
+test("round 16 #5: a Reset whose ids all moved to a pending Reset keeps its stash until that one answers", () => {
   const rig = favoritesRig();
   addFailedSync({ kind: "history", id: "h1", data: { id: "h1" } });
   rig.reset(1000, ["t1", "t2"], { uploads: peekQueuedUploads(["history"]) });
@@ -557,21 +557,36 @@ test("round 16 #5: a Reset whose ids all moved to a pending Reset moves its stas
   rig.reset(2000, ["t1", "t2"]);   // B's cloud read still held t1, t2: A's intents moved to 2000
   assert.equal(intentsPendingAt(1000), false);
   assert.deepEqual(readClearStash(1000).movedTo, [2000], "the move is recorded on A's stash");
+  assert.equal(stashDecision(readClearStash(1000)), "wait");
   rig.settleClearStashes();        // B's replay failed: B is still pending
-  assert.equal(readClearStash(1000), null, "A's stash left its key");
-  const b = readClearStash(2000);
-  assert.deepEqual(b.uploads.map(e => e.id), ["h1"], "A's taken upload moved to B");
-  assert.deepEqual(b.tasks.map(t => t.id), ["loc"], "A's local-only items moved to B");
-  assert.deepEqual(b.archives.t1.paths, ["p1"], "A's archive record moved to B");
-  assert.equal(b.favorites.updatedAt, 500);
-  assert.equal(b.favorites.resetAt, 2000);
+  const a = readClearStash(1000);
+  assert.ok(a, "A's stash is not dropped");
+  assert.deepEqual(a.uploads.map(e => e.id), ["h1"], "A's taken upload stays in A's stash");
+  assert.deepEqual(a.tasks.map(t => t.id), ["loc"]);
+  assert.deepEqual(a.archives.t1.paths, ["p1"]);
+  assert.equal(readClearStash(2000).uploads.length, 0, "nothing moved into B's stash");
+  assert.equal(readClearStash(2000).favorites.updatedAt, 500, "B's own favorites are the chained original");
   dropDeleteIntentsBefore(3000);
   rig.applyClearStashes(at => at < 3000);
   assert.deepEqual(rig.ref.byType, { image: ["m1", "m2"] });
   assert.equal(rig.ref.updatedAt, 500, "the original favorites at their original updatedAt");
   assert.deepEqual(getFailedSyncs().filter(e => e.kind === "history").map(e => e.id), ["h1"], "A's upload given back");
+  assert.deepEqual(readClearStashes(), []);
 });
-test("round 16 #5: chainStashFavorites / chainedFavoritesBefore / moveClearStash edges", () => {
+test("round 16 #5 / task B5: the same Resets, B confirmed: A's stash is dropped by the settle pass, nothing comes back", () => {
+  const rig = favoritesRig();
+  addFailedSync({ kind: "history", id: "h1", data: { id: "h1" } });
+  rig.reset(1000, ["t1", "t2"], { uploads: peekQueuedUploads(["history"]) });
+  rig.reset(2000, ["t1", "t2"]);
+  rig.settleClearStashes();
+  confirmDeleteIntents("task-delete", ["t1", "t2"]); dropClearStash(2000);   // B's inline ok
+  assert.equal(stashDecision(readClearStash(1000)), "drop");
+  rig.settleClearStashes();
+  assert.deepEqual(readClearStashes(), []);
+  assert.deepEqual(getFailedSyncs().filter(e => e.kind === "history"), [], "the taken upload stays taken");
+  assert.deepEqual(rig.ref.byType, { image: [] }, "the favorites stay reset");
+});
+test("round 16 #5: chainStashFavorites / chainedFavoritesBefore / stashDecision + dropGivenBackStash edges", () => {
   const older = { scope: "s", byType: { a: ["x"] }, updatedAt: 5, setting: { v: 1 }, queued: [{ id: "s" }], resetAt: 10 };
   assert.deepEqual(chainStashFavorites({ scope: "s", byType: {}, updatedAt: 10, setting: null, queued: [], resetAt: 20 }, older),
     { ...older, resetAt: 20 }, "the newer reset replaced the older one's emptied state: the older state, newer time");
@@ -586,21 +601,32 @@ test("round 16 #5: chainStashFavorites / chainedFavoritesBefore / moveClearStash
   assert.deepEqual(chainedFavoritesBefore(before, "s").queued, [{ id: "s" }]);
   assert.deepEqual(chainedFavoritesBefore(before, "other"), before, "another scope's reset is not this one's");
   assert.deepEqual(chainedFavoritesBefore({ ...before, updatedAt: 11 }, "s").updatedAt, 11, "favorites changed since: unchanged");
-  // moveClearStash: nothing recorded / target settled -> false; a target with no stash of its own gets one.
+  // Task B5 (was moveClearStash: "created at the pending target", A's key dropped): the chain of moves is recorded, the
+  // stash stays under its own key and waits; nothing is created at the target.
   mem.clear();
   writeClearStash(100, { tasks: [{ id: "a" }] });
-  assert.equal(moveClearStash(100), false, "no move recorded");
+  assert.equal(stashDecision(readClearStash(100)), "drop", "no move recorded, nothing pending: confirmed");
   queueDeleteIntents("task-delete", ["a"], 100);
+  assert.equal(stashDecision(readClearStash(100)), "wait");
   queueDeleteIntents("task-delete", ["a"], 300);   // a plain delete (no stash) re-queues it
   assert.deepEqual(readClearStash(100).movedTo, [300]);
   queueDeleteIntents("task-delete", ["a"], 400);   // and again: the chain follows (300 had no stash)
   assert.deepEqual(readClearStash(100).movedTo, [300, 400]);
-  assert.equal(moveClearStash(100), true);
-  assert.deepEqual(readClearStash(400).tasks.map(t => t.id), ["a"], "created at the pending target");
-  assert.equal(readClearStash(100), null);
+  assert.equal(stashDecision(readClearStash(100)), "wait", "400 pending");
+  assert.equal(readClearStash(400), null, "nothing is created at the pending target");
+  // dropGivenBackStash: with a movedTo time pending, only the local items pending at another time stay.
+  writeClearStash(100, { ...readClearStash(100), tasks: [{ id: "a" }, { id: "x" }], uploads: [{ kind: "task", id: "a", data: { id: "a" } }], favorites: { resetAt: 1 } });
+  dropGivenBackStash(readClearStash(100));
+  const kept = readClearStash(100);
+  assert.deepEqual(kept.tasks.map(t => t.id), ["a"], "x is not pending anywhere: it was given back");
+  assert.deepEqual(kept.uploads, [], "uploads were put back by the give-back");
+  assert.equal("favorites" in kept, false);
+  assert.deepEqual(kept.movedTo, [300, 400]);
   settleDeleteIntents("task-delete", ["a"]);
-  assert.equal(moveClearStash(400), false, "nothing pending: the caller drops it");
-  assert.equal(moveClearStash(999), false);
+  assert.equal(stashDecision(readClearStash(100), new Set()), "drop", "nothing pending, nothing voided");
+  dropGivenBackStash(readClearStash(100));
+  assert.equal(readClearStash(100), null, "nothing pending: dropped");
+  dropGivenBackStash(null);
 });
 
 // Review round 16 #6: Clear Logs treated savedLogIds ("stored here") as "the cloud has it", so a saved entry with no

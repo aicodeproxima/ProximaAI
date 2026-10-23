@@ -1,5 +1,5 @@
 // Review round 17 (#1, #3, #6): a clear stash's fate follows the clear its ids moved to. A voided clear gave back only
-// its in-memory sets and dropped its stash (with what moveClearStash had merged into it), and a stash whose ids had moved
+// its in-memory sets and dropped its stash (with what moveClearStash, removed in task B5, had merged into it), and a stash whose ids had moved
 // to it was then dropped as "confirmed" by the next settle pass. These run the critics' reproductions
 // (r17-safety/c1-merge-lost.mjs, r17-correctness/probe1.mjs A and B, r17-regression/movevoid.mjs) on the real storage.js;
 // the App.jsx parts (applyClearStashes, settleClearStashes, the inline answer of Reset / Clear Outputs / Clear Logs,
@@ -13,7 +13,7 @@ globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setI
 const S = await import("../src/lib/storage.js");
 const { addFailedSync, getFailedSyncs, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, intentGroups, peekQueuedUploads,
   takeQueuedUploads, putBackQueuedUploads, buildClearStash, writeClearStash, readClearStash, readClearStashes, dropClearStash,
-  stashGiveBack, stashArchivePaths, moveClearStash, recordStashArchive, stashFollowers, voidedClearStashes,
+  stashGiveBack, stashArchivePaths, stashDecision, dropGivenBackStash, recordStashArchive, stashFollowers, voidedClearStashes,
   voidDeleteIntents, voidedTimes, recordVoidedAt, pruneVoidedAt, stashTiedToVoided, dropDeleteIntentsBefore } = S;
 
 let n = 0, failed = 0;
@@ -40,18 +40,15 @@ const rig = () => {
       for (const [id, rec] of Object.entries(back.archives || {})) st.reapplied.push({ id, base: base.get(id) || rec.task, paths: rec.paths });
       st.fileDeletes.push(...back.orphanPaths);
       if (back.favorites) st.favorites.push(back.favorites);
-      dropClearStash(s.at);
+      dropGivenBackStash(s);
     }
   };
-  // Round 18 #3: a stash tied to a recorded voided time is given back first, never dropped.
+  // Round 18 #3 / task B5: decided only once nothing is pending at its time and its movedTo times (stashDecision).
   const settleClearStashes = () => {
     const voided = voidedTimes();
-    const back = new Set(readClearStashes().filter(s => stashTiedToVoided(s, voided)).map(s => s.at));
+    const back = new Set(readClearStashes().filter(s => stashDecision(s, voided) === "give-back").map(s => s.at));
     if (back.size) applyClearStashes(at => back.has(at));
-    const queued = new Set([...intentGroups("task-delete"), ...intentGroups("history-delete")].map(([ts]) => ts));
-    for (const s of readClearStashes()) if (!queued.has(s.at)) {
-      if (stashTiedToVoided(s, voided)) continue;
-      if (moveClearStash(s.at)) continue;
+    for (const s of readClearStashes()) if (stashDecision(s, voided) === "drop") {
       st.fileDeletes.push(...stashArchivePaths(s)); dropClearStash(s.at);
     }
     pruneVoidedAt();
@@ -119,7 +116,8 @@ test("#1/#3a: an earlier stash merged into a clear answered voided inline: its t
   const c2 = r.clear(T2, { taskIds: ["c1"] });                       // Reset2 re-plans c1 from the cloud read
   assert.deepEqual(readClearStash(T1).movedTo, [T2]);
   r.settleClearStashes();                                            // a Save press while Reset2's call is in flight
-  assert.deepEqual(readClearStashes().map(s => s.at), [T2], "S1 merged into S2");
+  // Task B5: was "S1 merged into S2" (moveClearStash); S1 now waits under its own key and follows S2's answer.
+  assert.deepEqual(readClearStashes().map(s => s.at), [T1, T2], "S1 left alone while T2 is pending");
   r.answer(c2, "voided");
   assert.deepEqual(queuedTaskUploads(), ["c1"], "Reset1's taken upload is queued again");
   assert.equal(getFailedSyncs().find(e => e.kind === "task").data.status, "completed", "the newer version, not the cloud's");
@@ -159,13 +157,14 @@ test("#6: the target voided by the server at replay: the follower is given back 
   assert.deepEqual(r.st.fileDeletes, []);
 });
 
-test("confirmed (inline ok): the merged stash goes, its archive paths are queued for deletion, nothing comes back", () => {
+test("confirmed (inline ok) after a settle pass during the call: the follower goes, its archive paths are queued for deletion, nothing comes back", () => {
   const r = rig();
   addFailedSync({ kind: "task", id: "c1", data: { id: "c1", status: "completed" } });
   r.clear(T1, { taskIds: ["c1"] });
   writeClearStash(T1, { ...readClearStash(T1), archives: { c1: { task: { id: "c1" }, paths: ["p/c1.png"] } } });
   const c2 = r.clear(T2, { taskIds: ["c1"] });
-  r.settleClearStashes();                                            // merged during the call
+  r.settleClearStashes();                                            // during the call: S1 waits (merged before task B5)
+  assert.deepEqual(readClearStashes().map(s => s.at), [T1, T2]);
   r.answer(c2, "ok");
   assert.deepEqual(queuedTaskUploads(), [], "the taken upload stays taken");
   assert.deepEqual(r.st.fileDeletes, ["p/c1.png"]);
@@ -358,6 +357,93 @@ test("round 18 #3: a restore's drop of older intents (restoreGuard) records thei
   dropDeleteIntentsBefore(T4);
   assert.deepEqual([...voidedTimes()].sort((a, b) => a - b), [T1, T2]);
   assert.equal(stashTiedToVoided(readClearStash(9000)), false, "still pending");
+});
+
+// Task B5: the merge (moveClearStash) put a stash whose ids moved to TWO later times wholesale into the newest one still
+// pending, so its whole fate followed that one: a settle pass while both were pending moved S1 into the clear at T5, T5
+// confirmed inline dropped it (the archive files of S1's T4 ids queued for deletion), and T4's later void had nothing to
+// give back. A stash is now decided only once nothing is pending at its own time and at every time in its movedTo.
+const T5 = 6000;
+const splitStash = (r) => {
+  r.clear(T1, { taskIds: ["a", "b"], local: [{ id: "a" }, { id: "b" }], cloudTaskIds: new Set() });   // R1: no answer
+  writeClearStash(T1, { ...readClearStash(T1), archives: { a: { task: { id: "a" }, paths: ["p/a.png"] }, b: { task: { id: "b" }, paths: ["p/b.png"] } } });
+  r.plainDelete("task-delete", ["a"], T4);                          // tab B bulk-deletes a
+  const c5 = r.clear(T5, { taskIds: ["b"] });                        // a Reset re-plans b
+  assert.deepEqual(readClearStash(T1).movedTo, [T4, T5]);
+  assert.equal(S.intentsPendingAt(T1), false);
+  r.settleClearStashes();                                            // a settle pass while T4 and T5 are both pending
+  assert.deepEqual(readClearStashes().map(s => s.at), [T1, T5], "S1 is left alone (no move, no drop) while T4 or T5 is pending");
+  return c5;
+};
+test("B5: ids split between a plain delete (T4) and a clear (T5); T5 confirmed inline, T4 voided: a's content back, b's not", () => {
+  const r = rig();
+  const c5 = splitStash(r);
+  r.answer(c5, "ok");
+  assert.deepEqual(r.st.fileDeletes, ["p/b.png"], "only the confirmed id's archive files go");
+  assert.deepEqual(readClearStashes().map(s => s.at), [T1], "S1 still waits for T4");
+  assert.deepEqual(readClearStash(T1).tasks.map(t => t.id), ["a"], "b left S1 when it was confirmed");
+  r.plainAnswer("task-delete", ["a"], T4, "voided");
+  assert.deepEqual(r.st.tasks.map(t => t.id), ["a"], "a's local item is back, b's is not");
+  assert.deepEqual(r.st.reapplied.map(x => x.id), ["a"], "a's archive record re-applies");
+  assert.deepEqual(r.st.fileDeletes, ["p/b.png"], "a's files are kept");
+  assert.deepEqual(readClearStashes(), []);
+});
+test("B5: the mirror: T4 confirmed, T5 voided inline: b's content back, a's not", () => {
+  const r = rig();
+  const c5 = splitStash(r);
+  r.plainAnswer("task-delete", ["a"], T4, "deleted");
+  assert.deepEqual(r.st.fileDeletes, ["p/a.png"]);
+  r.settleClearStashes();
+  assert.deepEqual(readClearStashes().map(s => s.at), [T1, T5], "S1 still waits for T5");
+  r.answer(c5, "voided");
+  assert.deepEqual(r.st.tasks.map(t => t.id), ["b"], "b's local item is back, a's is not");
+  assert.deepEqual(r.st.reapplied.map(x => x.id), ["b"]);
+  assert.deepEqual(r.st.fileDeletes, ["p/a.png"], "b's files are kept");
+  assert.deepEqual(readClearStashes(), []);
+});
+test("B5: T4 voided while T5 is pending: a's content back at once, b's part kept for T5's void", () => {
+  const r = rig();
+  const c5 = splitStash(r);
+  r.plainAnswer("task-delete", ["a"], T4, "voided");
+  assert.deepEqual(r.st.tasks.map(t => t.id), ["a"], "a is back at T4's void");
+  assert.deepEqual(readClearStash(T5).archives.b.paths, ["p/b.png"], "b's archive record moved to the pending clear's stash");
+  assert.deepEqual(readClearStash(T1).tasks.map(t => t.id), ["b"], "S1 keeps only b's part, still pending at T5");
+  r.settleClearStashes();
+  assert.deepEqual(readClearStashes().map(s => s.at), [T1, T5], "still waiting for T5");
+  r.answer(c5, "voided");
+  assert.deepEqual(r.st.tasks.map(t => t.id).sort(), ["a", "b"], "b's local item is back too");
+  assert.deepEqual(r.st.reapplied.map(x => x.id).sort(), ["a", "b"]);
+  assert.deepEqual(r.st.fileDeletes, []);
+  assert.deepEqual(readClearStashes(), []);
+});
+test("B5: T4 voided while T5 is pending, then T5 confirmed: b's part leaves with the confirm, nothing else is lost", () => {
+  const r = rig();
+  const c5 = splitStash(r);
+  r.plainAnswer("task-delete", ["a"], T4, "voided");
+  r.answer(c5, "ok");
+  assert.deepEqual(r.st.tasks.map(t => t.id), ["a"]);
+  assert.deepEqual(r.st.fileDeletes, ["p/b.png"], "b's archive (moved to T5's stash) is deleted with the confirm");
+  assert.deepEqual(readClearStashes(), []);
+  assert.deepEqual([...voidedTimes()], [], "the record is pruned once no stash refers to it");
+});
+test("B5: stashDecision: wait while its own time or any movedTo time is pending; then give-back if one was voided, else drop", () => {
+  writeClearStash(100, { tasks: [{ id: "a" }, { id: "b" }] });
+  queueDeleteIntents("task-delete", ["a", "b"], 100);
+  queueDeleteIntents("task-delete", ["a"], 300);
+  queueDeleteIntents("task-delete", ["b"], 400);
+  assert.deepEqual(readClearStash(100).movedTo, [300, 400]);
+  assert.equal(S.stashDecision(readClearStash(100)), "wait");
+  voidDeleteIntents("task-delete", ["a"], 300);
+  assert.equal(S.stashDecision(readClearStash(100)), "wait", "400 still pending");
+  assert.equal(stashTiedToVoided(readClearStash(100)), false);
+  confirmDeleteIntents("task-delete", ["b"]);
+  assert.equal(S.stashDecision(readClearStash(100)), "give-back", "300 was voided");
+  assert.equal(stashTiedToVoided(readClearStash(100)), true);
+  assert.equal(S.stashDecision(readClearStash(100), new Set()), "drop", "no voided time: drop");
+  writeClearStash(500, {});
+  queueDeleteIntents("history-delete", ["h"], 500);
+  assert.equal(S.stashDecision(readClearStash(500)), "wait", "its own intent pending");
+  assert.equal(S.stashDecision(null), "wait");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

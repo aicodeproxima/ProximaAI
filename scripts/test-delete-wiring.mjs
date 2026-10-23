@@ -284,7 +284,9 @@ test("restoreGuard voids and replay voids give the stashes back; confirmed clear
   assert.match(apply, /putBackQueuedUploads\(back\.uploads\)/);
   assert.match(apply, /saveTasks\(/); assert.match(apply, /addHistoryEntry\(/);
   assert.match(apply, /!haveTasks\.has\(t\.id\)/, "a version held now is not overwritten");
-  assert.match(apply, /dropClearStash\(s\.at\)/);
+  // Task B5: the given-back stash goes, except the part still pending at a time its ids moved to (dropGivenBackStash).
+  assert.match(apply, /dropGivenBackStash\(s\);/);
+  assert.doesNotMatch(apply, /dropClearStash\(/);
   assert.match(between("const settleCloudClear = async", "return clean;"), /settleClearStashes\(\)/);
   assert.equal(src.match(/await replayDeleteIntents\("history-delete"\); settleClearStashes\(\);/g)?.length, 2, "after both replays");
 });
@@ -341,7 +343,7 @@ test("round 16 #6: Clear Logs reads the cloud's History ids before its snapshot 
 });
 // Review round 16 #5: two unanswered Resets voided together left the favorites empty (B stashed A's emptied state, and
 // A's stash was dropped once its ids moved to B).
-test("round 16 #5: a Reset chains its favoritesBefore; a settled stash whose ids moved is moved, not dropped", () => {
+test("round 16 #5: a Reset chains its favoritesBefore; a settled stash whose ids moved waits, never dropped while they are pending", () => {
   const h = reset();
   const set = h.indexOf("favoritesBefore.setting = await getSetting(localModelFavoritesKey(favoriteScope));");
   const chain = h.indexOf("Object.assign(favoritesBefore, chainedFavoritesBefore(favoritesBefore, favoriteScope));");
@@ -349,9 +351,28 @@ test("round 16 #5: a Reset chains its favoritesBefore; a settled stash whose ids
   assert.ok(set >= 0 && chain > set && empty > chain, "chained after the setting is read, before the local reset");
   assert.doesNotMatch(h.slice(chain, empty), /await /, "nothing awaited between the chain and the reset");
   assert.ok(h.indexOf("writeClearStash(resetAt, { ...buildClearStash(") > chain, "the stash carries the chained state");
+  // Task B5: the merge (moveClearStash) is gone; the drop happens only on stashDecision's "drop" (nothing pending at its
+  // time nor at any time its ids moved to, none of them voided).
   const settle = between("const settleClearStashes = () =>", "// Force-flush all pending");
-  const mv = settle.indexOf("if (moveClearStash(s.at)) continue;"), drop = settle.indexOf("dropClearStash(s.at)");
-  assert.ok(mv >= 0 && drop > mv, "moved before it could be dropped");
+  const dec = settle.indexOf('for (const s of readClearStashes()) if (stashDecision(s, voided) === "drop") {'), drop = settle.indexOf("dropClearStash(s.at)");
+  assert.ok(dec >= 0 && drop > dec, "dropped only when decided");
+});
+test("task B5: no stash merge remains; settleClearStashes waits on the stash's own time and every movedTo time", () => {
+  assert.doesNotMatch(src, /moveClearStash\(/, "App.jsx calls no merge");
+  assert.doesNotMatch(src, /import \{[^}]*\bmoveClearStash\b[^}]*\} from "\.\/lib\/storage\.js";/, "nor imports it");
+  const st = readFileSync(new URL("../src/lib/storage.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.doesNotMatch(st, /export function moveClearStash/, "the merge helper is deleted");
+  assert.match(src, /import \{[^}]*\bstashDecision\b[^}]*\bdropGivenBackStash\b[^}]*\} from "\.\/lib\/storage\.js";/);
+  const settle = between("const settleClearStashes = () =>", "const giveBackVoided = ");
+  assert.doesNotMatch(settle, /intentGroups\(|stashTiedToVoided\(/, "one decision per stash, not the own-time-only check");
+  assert.equal(settle.match(/stashDecision\(s, voided\)/g)?.length, 2, "the give-back and the drop both ask stashDecision");
+  const dec = st.slice(st.indexOf("export function stashDecision("), st.indexOf("export function dropGivenBackStash("));
+  assert.match(dec, /const times = \[stash\.at, \.\.\.\(stash\.movedTo \|\| \[\]\)\];/);
+  assert.match(dec, /if \(times\.some\(t => intentsPendingAt\(t\)\)\) return "wait";/, "waits on its own time AND every movedTo time");
+  assert.match(dec, /return times\.some\(t => voided\.has\(t\)\) \? "give-back" : "drop";/);
+  const keep = st.slice(st.indexOf("export function dropGivenBackStash("), st.indexOf("// Review round 17 (#1, #3, #6)"));
+  assert.match(keep, /movedTo\.some\(t => intentsPendingAt\(t\)\)/, "keeps the part still pending at a movedTo time");
+  assert.match(keep, /dropClearStash\(stash\.at\);\s*\n\}/, "otherwise dropped");
 });
 test("round 15 S5: an archive a clear held is recorded, re-applied on a void, its files deleted on a confirm", () => {
   const a = between("const onCloudArchiveTask = useCallback(", "const onCopyUrlTask = useCallback(");
@@ -409,7 +430,8 @@ test("round 17: a voided clear gives back its stash and its followers, after its
 // Every void now goes through voidDeleteIntents (settle + record the queue time), and the settle pass gives back a stash
 // tied to a recorded voided time instead of dropping it.
 test("round 18 #3: every void answer settles through voidDeleteIntents with its queue time; plain deletes give back", () => {
-  assert.match(src, /import \{[^}]*\bvoidDeleteIntents\b[^}]*\bvoidedTimes\b[^}]*\bstashTiedToVoided\b[^}]*\bpruneVoidedAt\b[^}]*\} from "\.\/lib\/storage\.js";/);
+  // Task B5: settleClearStashes asks stashDecision (which subsumes stashTiedToVoided) instead.
+  assert.match(src, /import \{[^}]*\bvoidDeleteIntents\b[^}]*\bvoidedTimes\b[^}]*\bstashDecision\b[^}]*\bpruneVoidedAt\b[^}]*\} from "\.\/lib\/storage\.js";/);
   // The only settleDeleteIntents left is a confirmed clear's (History-only intents the server tombstoned).
   const settles = src.match(/settleDeleteIntents\([^\n]*/g) || [];
   assert.equal(settles.length, 1, `plain settles left: ${settles.join(" | ")}`);
@@ -443,11 +465,12 @@ test("round 18 #3: every void answer settles through voidDeleteIntents with its 
 });
 test("round 18 #3: settleClearStashes gives back a stash tied to a recorded voided time; no path drops one", () => {
   const settle = between("const settleClearStashes = () =>", "const giveBackVoided = ");
+  // Task B5: the guard is stashDecision: "give-back" (tied to a recorded voided time) first, a drop only on "drop".
+  const pick = settle.indexOf('readClearStashes().filter(s => stashDecision(s, voided) === "give-back")');
   const back = settle.indexOf("if (back.size) applyClearStashes(at => back.has(at));");
-  const guard = settle.indexOf("if (stashTiedToVoided(s, voided)) continue;");
-  const mv = settle.indexOf("if (moveClearStash(s.at)) continue;"), drop = settle.indexOf("dropClearStash(s.at)");
-  assert.ok(settle.indexOf("const voided = voidedTimes();") >= 0 && back > 0, "given back first");
-  assert.ok(guard > back && mv > guard && drop > mv, "a tied stash is never moved or dropped");
+  const guard = settle.indexOf('if (stashDecision(s, voided) === "drop") {'), drop = settle.indexOf("dropClearStash(s.at)");
+  assert.ok(settle.indexOf("const voided = voidedTimes();") >= 0 && pick > 0 && back > pick, "given back first");
+  assert.ok(guard > back && drop > guard, "a tied stash is never dropped");
   assert.equal(settle.match(/dropClearStash\(/g)?.length, 1, "one drop, behind the guard");
   assert.match(settle, /pruneVoidedAt\(\);\s*\n\s*\};/, "the record is pruned after the pass");
   // storage.js: the helper settles and records; the tie needs nothing pending; restoreGuard's drop records too.
@@ -455,7 +478,8 @@ test("round 18 #3: settleClearStashes gives back a stash tied to a recorded void
   const v = st.slice(st.indexOf("export function voidDeleteIntents("), st.indexOf("export function stashTiedToVoided("));
   assert.match(v, /settleDeleteIntents\(kind, ids\);\s*\n\s*if \(\(ids \|\| \[\]\)\.some\(Boolean\)\) recordVoidedAt\(at\);/);
   const tie = st.slice(st.indexOf("export function stashTiedToVoided("), st.indexOf("// Clear Logs' stash (round 16 #6)"));
-  assert.match(tie, /intentsPendingAt\(stash\.at\)/); assert.match(tie, /voided\.has\(t\) && !intentsPendingAt\(t\)/);
+  // Task B5: the tie needs nothing pending at its own time nor at any movedTo time (stashDecision).
+  assert.match(tie, /intentsPendingAt\(stash\.at\)/); assert.match(tie, /stashDecision\(stash, voided\) === "give-back"/);
   assert.match(st.slice(st.indexOf("export function dropDeleteIntentsBefore("), st.indexOf("// The restore check every replay")), /recordVoidedAt\(times\)/);
   assert.equal((st.match(/settleDeleteIntents\(/g) || []).length, 3, "definition, confirmDeleteIntents, voidDeleteIntents");
 });
