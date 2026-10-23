@@ -5,7 +5,9 @@ change's files, commits and accepted items, keep the rules).
 
 Goal: nobody without a valid ProximaAI session reads, changes or deletes the owner's rows in public.tasks / history /
 settings / favorites / presets / sync_tombstones or the files in storage bucket 'generations' (public GETs stay public).
-Single admin; identity = HMAC session token (public._verify_session_token), not Supabase Auth.
+Accounts live in proxima_auth.users since P1's M1 (owner only until P5); identity = HMAC session token ('u:<uuid>', or
+'admin:<owner name>' until M4) verified by public._verify_session_token and resolved by proxima_auth.current_account;
+not Supabase Auth.
 
 ## What is live (design: judge panel wf_89f53ef9-80f, header-token RLS won 3/3 over a minted JWT and RPC-only)
 - Phase 0 — supabase/migrations/20261022100000_rls_phase0_session_helpers.sql (2efff92):
@@ -27,6 +29,13 @@ Single admin; identity = HMAC session token (public._verify_session_token), not 
 - Own-scope rows — supabase/migrations/20261023050000_rls_own_scope_rows.sql (3961a3d, applied 2026-10-23 04:43:16 UTC):
   every select/update/delete policy uses USING (device_id = session_scope), so a session reads and changes only its own
   rows; an upsert colliding with another scope's row is refused (42501 "USING expression"), never "rescued".
+- P1 M2 (RLS session) — supabase/migrations/20261023200000_mu_p1_scope_topic.sql (applied 2026-10-23 08:21:35 UTC,
+  after the lockdown session's M1 20261023100000): session_scope takes the account from proxima_auth.current_account,
+  so 'u:<uuid>' and, until M4, 'admin:<owner name>' tokens both work, and it returns the account's
+  proxima_auth.users.scope (the owner's is still 'user:<name>'); the 28000 wrapper and its messages are unchanged.
+  sync_topic hashes the owner row's name and sessions_valid_after + 1: the old text while the owner row has not moved
+  since M1, else one rotation that the next reconcile picks up. One topic, the owner's, until P4. Rollback
+  supabase/rollback/20261023200000_*.rollback.sql (refuses while M3 is live; M1's rollback refuses while M2 is live).
 - Related: 08e2bb2 (deleteArchivedPath true only when Storage confirms), 1bd2e68 (clear*Remote → {ok, error}).
 
 ## Accepted — do not re-report
@@ -43,7 +52,10 @@ Single admin; identity = HMAC session token (public._verify_session_token), not 
 ## Tests
 JS: scripts/test-session-header.mjs, test-sync-ping.mjs, test-storage-remove.mjs, test-remote-clears.mjs (npm test).
 SQL, each rolls back (run alone against live; to test an unapplied migration, prepend its text in the same call):
-scripts/test-rls-{phase0,tables,storage,triggers,plan,rpcs,rename}.sql; rollback proof =
+scripts/test-rls-{phase0,tables,storage,triggers,plan,rpcs,rename}.sql; P1 M2: scripts/test-mu-scope-topic.sql (38
+checks: both token formats, two accounts' rows, the topic; failing-first with M1 alone 22/14) and
+test-mu-scope-topic-rollback.sql (13), with scripts/fixtures/mu-owner-{unlock,rename}.sql moving the owner between M1
+and M2 (M2 must still apply); rollback proof =
 test-rls-rollback-before.sql + phase-2 migration + its rollback + test-rls-rollback.sql in ONE call;
 test-rls-phase0-rollback.sql likewise; the DELETE revoke's = test-rls-rollback-before.sql + 20261022350000 + its
 rollback + test-rls-grants-unchanged.sql. scripts/test-rls-queued-rpcs.sql: the restore-checked delete RPCs refuse 6 bad

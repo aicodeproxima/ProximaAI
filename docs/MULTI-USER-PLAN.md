@@ -176,6 +176,11 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   - a new auth suite runs two accounts seeded inside a rolled-back block. A's wrong passwords don't lock B. A's
     password change doesn't sign B out.
 - Rollback: the functions go back to the app_secrets rows, which stay untouched until P5.
+- **Progress (2026-10-23):**
+  - M1 applied 08:18:32 UTC by the lockdown session (ef86a00);
+  - M2 applied 08:21:35 UTC by the RLS session (20261023200000): session_scope through current_account, so both token
+    formats work; sync_topic on the owner row; gate scripts/test-mu-scope-topic.sql;
+  - next: M3 (`u:` tokens for the owner too), then M4 at least 12 h 05 min after it. Details: docs/P1-AUTH-DESIGN.md.
 
 **P2 — Browser per-account isolation (client). Size L. Touches App.jsx and storage.js.**
 - The client takes its account id and scope from the server instead of building `user:<name>` itself.
@@ -208,6 +213,14 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   - `USING (device_id = scope)` for every command on all six tables;
   - the storage policies check the account's folders;
   - tombstones are readable for the own scope only.
+- Tombstones per account:
+  - today sync_tombstones' key is (id) and `_rows_not_tombstoned` (BEFORE INSERT, returns NULL) ignores the scope, so a
+    tombstone written for another account's id would silently drop that account's inserts and upserts of it;
+  - the lockdown session's after-M1 migration records rowless tombstones in the caller's scope only, with `on conflict
+    (id) do nothing`, and makes the trigger scope-aware;
+  - P4 changes the key to (device_id, id). Whoever lands second moves sync_tombstone_record to `on conflict
+    (device_id, id)`;
+  - matrix row: A's tombstone of X never drops B's insert or upsert of X.
 - Definer audit:
   - all 48 functions derive the account themselves and filter every statement, including existence checks: e.g.
     `_clear_kind` checks `sync_tombstones` and "no tasks row" by id across every scope (fine with one account and

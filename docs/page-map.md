@@ -106,7 +106,9 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
 ## Data access and security (per-session RLS, since 2026-10-22)
 - Every supabase-js call to `<SUPABASE_URL>/rest/v1/` and `/storage/v1/` carries `x-proxima-session: <token>`
   (src/lib/session.js `withSessionHeader`); the row policies (migrations 20261022100000 + 20261022120000) verify it
-  per statement via `proxima_auth.session_scope()`. Signed out, the client answers table/Storage calls itself with 401
+  per statement via `proxima_auth.session_scope()`, which since P1 M2 (2026-10-23 08:21 UTC) resolves the token's account
+  through `proxima_auth.current_account` (`u:<uuid>`, and `admin:<name>` until M4; measured live over HTTP: both formats
+  200 with the database's exact counts on all five tables). Signed out, the client answers table/Storage calls itself with 401
   "session token missing". A raw `fetch` to those paths WITHOUT the header is refused — use the app's client, or the
   service role for owner-run maintenance (scripts/tools/supabase-admin.mjs).
 - Outsider view (publishable key only), measured right after the apply: any table read/write → 403
@@ -124,7 +126,8 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   as n from logs where source='edge_logs' and log_attributes['request.method'] != 'OPTIONS' and
   log_attributes['request.path'] like '/rest/v1/%' group by dev, xci, st"`.
 - Live updates: no postgres_changes any more. Triggers on tasks/history send an empty Realtime broadcast on a secret
-  topic (`get_my_account` → `sync_topic`); a device reconciles ~0.4–1.4 s after a write elsewhere (measured on both
+  topic (`get_my_account` → `sync_topic`, the owner row's name and epoch since P1 M2; a reconcile re-reads it, so a
+  rotation reaches a visible device within 20 s); a device reconciles ~0.4–1.4 s after a write elsewhere (measured on both
   devices). Manual ping: `node scripts/tools/sb-query.mjs --write "select realtime.send('{}'::jsonb, 'changed',
   proxima_auth.sync_topic(), false)"`.
 - Server key (rotated 2026-10-23 03:46–03:48 UTC with `scripts/tools/rotate-service-key.mjs`): Vercel
