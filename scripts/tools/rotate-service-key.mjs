@@ -141,11 +141,23 @@ async function redeployProduction(fromUid) {
 // Keeps each row's type (a Sensitive row stays Sensitive; Vercel allows Sensitive only for production and preview).
 const setEnv = (env, value) => vercel("PATCH", `/v9/projects/${PROJECT}/env/${env.id}`, { value, type: env.type === "plain" ? "encrypted" : env.type, target: env.target });
 
-// ── The live proxy, for a session minted by the database (12 h + 2 min, like a real sign-in) ──
+// ── The live proxy, for a session minted by the database ──
+// From P1's M1 on, the owner is proxima_auth.users' owner row and proxima_auth.mint_token mints (a u: token from M3);
+// before M1, app_secrets and _sign_session_token (12 h + 2 min, like a real sign-in). Either way the probe must pass the
+// verifier before it is used (agreed with the lockdown session: docs/P1-AUTH-DESIGN.md §4, migration order step 2).
+const lit = (s) => "'" + String(s).replace(/'/g, "''") + "'";
 async function mintSession() {
-  const [m] = await retry(() => sql("select public._sign_session_token('admin:' || (select value->>'username' from public.app_secrets where key = 'admin_username'), now() + interval '12 hours 2 minutes') as t"));
+  const [has] = await retry(() => sql("select to_regclass('proxima_auth.users') is not null as users, to_regprocedure('proxima_auth.mint_token(uuid)') is not null as mint"));
+  const q = has?.users && has?.mint
+    ? "select proxima_auth.mint_token(id) as t from proxima_auth.users where role = 'owner'"
+    : has?.users
+      ? "select public._sign_session_token('admin:' || username, now() + interval '12 hours 2 minutes') as t from proxima_auth.users where role = 'owner'"
+      : "select public._sign_session_token('admin:' || (select value->>'username' from public.app_secrets where key = 'admin_username'), now() + interval '12 hours 2 minutes') as t";
+  const [m] = await retry(() => sql(q));
   if (!m?.t) throw new Error("could not mint a session");
   secrets.push(m.t);
+  const [ok] = await retry(() => sql(`select public._verify_session_token(${lit(m.t)}) is not null as ok`));
+  if (!ok?.ok) throw new Error("the minted probe does not pass the verifier");
   return m.t;
 }
 // 'ok' only when the proxy provably reached the database with its server key: 200, or 400 'no-key' (the lookup worked,
