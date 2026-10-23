@@ -4,8 +4,8 @@ Owner, 2026-10-22: "i do need multi user capabilities but they must work just as
 interfering regardless of simultaneous use".
 
 Status: PLAN, nothing built. Written by the RLS session from 5 parallel research agents (workflow wb1wiq89k) plus its
-own checks of the live build (§8). The owner's decisions are in §6. The work split in §5 is a proposal until the lockdown
-session agrees to it.
+own checks of the live build (§8). The owner ruled on every decision on 2026-10-23 (§6). The work split in §5 is a
+proposal until the lockdown session agrees to it.
 
 ## 1. What "works just as mine, without colliding" means (acceptance rules; each becomes a test in §7)
 - **R1 Parity.** Every member gets everything the owner has:
@@ -53,8 +53,8 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
    devices.
 8. **auto_backups is global** (app_secrets). One account turning backups off turns them off for everyone.
 9. **The proxy rate limit is OFF in production.** The Vercel runtime log at 22:12:22 UTC says "rate limiting DISABLED
-   — UPSTASH not configured", and the limit counts request rate only. One account could flood the shared proxy. This is
-   also a defect today.
+   — UPSTASH not configured", and the limit counts request rate only. One account could flood the shared proxy. Owner
+   ruling 2026-10-23: limits stay off by default, but the capability gets built (P5).
 10. **The browser assumes one account.**
     - There is one IndexedDB database, 'proximaai' (src/lib/storage.js:9).
     - The localStorage keys are global: failed syncs, ws/file deletes, released predictions, form holds and logs.
@@ -93,8 +93,10 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
   - The protection that matters: every definer function and service path filters by the account it derived from the
     token or the webhook route, never by an id alone.
   - Drop genId's non-UUID fallback, and make task_id unique per account.
-- **D6. Each account brings its own WaveSpeed key and webhook secret.** Spend, WaveSpeed rate limits and balance never
-  cross accounts. Keys move into Supabase Vault (installed, unused) before the first member's key is stored.
+- **D6. Each account brings its own WaveSpeed key; its webhook secret is optional.** Spend, WaveSpeed rate limits and
+  balance never cross accounts. Without a webhook secret, generations still complete through the WaveSpeed API alone
+  (the open device polls), exactly as before 2026-10-20. Keys move into Supabase Vault (installed, unused) before the
+  first member's key is stored.
 - **D7. Webhooks are routed per account.**
   - The proxy adds an opaque route id to the callback URL.
   - ws-webhook verifies with that account's secret (the owner's stays the env secret) and applies only to that
@@ -120,7 +122,8 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
 - Stamp every queued browser write with its account at enqueue time, and replay it only while that account is signed in.
 - Take locks in one order: account marker row → tasks → history → favorites → tombstones → backups.
 - Bound every cron run: a batch LIMIT, a per-account exception block, SKIP LOCKED, and SET LOCAL statement_timeout.
-- Fail closed: a missing rate limiter in production answers 503, and an unknown webhook route answers 401.
+- Fail closed where something is switched on: a rate limit that is ON but whose store (Upstash) is missing answers
+  503, and an unknown webhook route answers 401. Rate limits themselves are off by default (owner ruling).
 - Log an opaque account id. Never log names, prompts or outputs.
 
 **Don't**
@@ -143,7 +146,8 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
   therefore map writes still stamped with the old `'user:<name>'` scope onto the new uuid scope, rejecting none.
   Cover it with a test before relying on it.
 - Realtime counts each broadcast once when sent and once per receiving device. A project allows 200 concurrent
-  connections on Free and 500 on Pro, so budget for accounts × open devices.
+  connections on Free and 500 on Pro, so budget for accounts × open devices. The design target of 50 accounts × about 3
+  open devices is about 150 connections: inside Free, with Pro as the step up.
 - One `Clear-Site-Data: "cache", "storage", "executionContexts"` response wipes a shared device (Baseline since 2023).
   Also call `caches.delete`.
 - A Playwright browser context is a separate browser with its own IndexedDB and localStorage. One script can therefore
@@ -229,13 +233,14 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
 **P5 — Members (server, client and Vercel). Size L.**
 - Invite and `/join?code=` (the code is removed from the URL after use), then:
   - the member sets an account name and password, and gets a backup code shown once;
-  - onboarding asks for the WaveSpeed key (validated against its balance endpoint) and the webhook secret.
+  - onboarding asks for the WaveSpeed key (validated against its balance endpoint) and, optionally, the webhook secret.
+    Without the secret, results arrive through the WaveSpeed API alone while a device is open, as before 2026-10-20.
 - Vault holds every key and webhook secret. Settings shows only a masked fingerprint.
-- Rate limits:
-  - Upstash provisioned (owner action);
-  - the proxy fails closed without it;
-  - a per-account cap on in-flight submits;
-  - the owner's limits stay unchanged.
+- Rate limits, built as a capability and **OFF by default** (owner ruling 2026-10-23):
+  - per-account caps on request rate and on in-flight submits, switched on per account or for everyone from the owner
+    console;
+  - a limit that is switched on needs Upstash (owner action) and fails closed without it;
+  - with every limit off, the proxy behaves exactly as today.
 - Owner console (counts only) and an audit log.
 - Account deletion purges everything everywhere: rows, files, WaveSpeed predictions (through that account's key) and
   backups.
@@ -247,8 +252,8 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   - zero foreign rows in any response;
   - every device converges;
   - no failed-sync leftovers.
-- A load test on a Supabase branch (owner decision 2026-06: staging = Branching), with N test accounts × 3 devices and
-  WaveSpeed mocked. Pass means:
+- A load test on a Supabase branch (owner decision 2026-06: staging = Branching), with 50 test accounts × 3 devices
+  (the owner's design target) and WaveSpeed mocked. Pass means:
   - 0 cross-account rows and 0 deadlocks;
   - p95 within budget;
   - each account's final state equals the same script run alone.
@@ -262,26 +267,22 @@ a device list with "sign out other devices".
 - RLS session (owns policies, session_scope, the ping and the isolation tests): P3, P4, and the gates of P6.
 - Never two writers on one file. A shared file changes only after a message and an answer.
 
-## 6. Decisions for the owner
-These are the recommended picks. Work proceeds with them unless the owner says otherwise.
-1. **How people join:** invite codes the owner creates (Recommended). *Scene:* you text a friend a link; it works once,
-   within 7 days. *Alternative:* open sign-up, which needs email checks, a CAPTCHA and abuse limits.
-2. **Who pays WaveSpeed:** each member's own key (Recommended). *Scene:* a member's huge batch drains only their own
-   balance. *Alternative:* your key with per-member caps; you carry their spend and need a credits ledger.
-3. **Members' results with their devices closed:** members also paste their WaveSpeed webhook secret (Recommended).
-   Without it, their results land only while a device is open. Confirming that secrets are per WaveSpeed account
-   needs one check with a second WaveSpeed account.
-4. **Sign-in system:** ProximaAI's own, per account (Recommended). *Alternative:* Supabase Auth, which brings
-   email/Google sign-in and redoes today's lockdown.
-5. **Shared devices:** one account per browser profile; switching parks the other account's data, untouched
-   (Recommended). *Alternative:* side-by-side accounts in tabs, which adds complexity for a rare case.
-6. **Seeing members' generations:** never (Recommended). The console shows counts and storage size only.
-7. **Scale:** how many people, and how many devices open at once (5 / 50 / 500)? This decides the Supabase plan
-   (Realtime: 200 connections on Free, 500 on Pro).
-8. **Deleting an account:** an immediate purge everywhere, matching "delete means delete" (Recommended).
-   *Alternative:* a 30-day grace window.
-9. **Rate limiting:** provision Upstash Redis from the Vercel Marketplace (free tier). The proxy's limiter is off in
-   production today.
+## 6. Owner rulings (2026-10-23)
+1. **How people join:** invite codes ("we can do an invite code"): single-use, 7 days, created in the owner console.
+2. **Who pays WaveSpeed:** each member's own key (the recommendation).
+3. **Members' results with their devices closed:** members may paste their WaveSpeed webhook secret (the
+   recommendation), and "it should also work with just the wavespeed api alone as well just like we had before". So the
+   secret is optional, and without it results arrive by polling while a device is open. One check with a second
+   WaveSpeed account must confirm that signing secrets are per account.
+4. **Sign-in system:** ProximaAI's own, per account (the recommendation).
+5. **Shared devices:** one account per browser profile; switching parks the other account's data, untouched (the
+   recommendation).
+6. **Seeing members' generations:** never (the recommendation). The console shows counts and storage size only.
+7. **Scale:** "build for 50 capability though only 2 to worry about for now me and another user but build as if 50".
+   The design target and the load test are 50 accounts; real use starts with 2.
+8. **Deleting an account:** an immediate purge everywhere, matching "delete means delete" (the recommendation).
+9. **Rate limiting:** "add rate limiting capabilities but i dont want the rate limits on by default". The limits are
+   built and switchable, OFF by default; Upstash is needed only once a limit is switched on.
 
 ## 7. Tests (how R1–R5 are proven)
 - R2 and R3, SQL:
@@ -293,7 +294,7 @@ These are the recommended picks. Work proceeds with them unless the owner says o
 - R2, live: `scripts/tools/mu-probe.mjs` drives two test accounts over REST, Storage and Realtime and reports counts
   only.
 - R1 and R4, browser: Playwright with multiple contexts on the live URL (PC, 384×782 phone and a member).
-- R4, load: a Supabase branch with N × 3 devices, asserting no deadlocks and full convergence.
+- R4, load: a Supabase branch with 50 accounts × 3 devices, asserting no deadlocks and full convergence.
 - R5, at every server phase:
   - per-table row counts before and after;
   - failed-sync queues empty on both owner devices;
