@@ -5275,7 +5275,7 @@ export default function ProximaApp() {
                 <div className="setting-group">
                   <div className="setting-label">About</div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
-                    <strong style={{ color: "var(--text-primary)" }}>ProximaAI v1.0</strong> — Parallel AI Generation Cockpit<br />
+                    <strong style={{ color: "var(--text-primary)" }}>ProximaAI</strong> — Parallel AI Generation Cockpit<br />
                     {Object.values(MODELS).flat().length} models registered across {Object.keys(MODELS).length} categories<br />
                     Powered by WaveSpeed.ai unified API
                   </div>
