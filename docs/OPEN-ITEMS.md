@@ -11,16 +11,10 @@ GitHub repo that auto-deploys to production. A phished password on any of them i
 - GitHub: Settings → Password and authentication → Two-factor authentication.
 Use an authenticator app, and store the recovery codes in the password manager.
 
-## Rotate the Supabase service role key (low priority, parked 2026-10-21)
-On 2026-10-21 the service_role key was revealed and copied several times while making it Sensitive in Vercel (one
-bad paste caused a 13-minute outage, 16:33–16:46 UTC). Rotate it once, calmly:
-1. Supabase → Project Settings → API Keys: create a new secret key (the new-style `sb_secret_…` keys can be rotated
-   without touching the public anon key; rotating the legacy JWT secret would also change the anon key that is built
-   into the site).
-2. Check first that the proxy and webhook accept the new key format: they send it as both `apikey` and
-   `Authorization: Bearer` to PostgREST (api/ws-proxy.ts getUserWaveSpeedKey, api/ws-webhook.ts). Test before swapping.
-3. Vercel → Environment Variables → SUPABASE_SERVICE_ROLE_KEY → Edit → paste the new value (copy it with Supabase's
-   copy button) → Save → Deployments → Redeploy.
-4. Verify within a minute: the app's balance shows (proxy call 200), and Supabase edge logs show
-   `/rest/v1/rpc/get_my_wavespeed_key` answering 200 after the deploy. Keep the old deployment for Instant Rollback.
-5. Only then revoke the old key in Supabase.
+## Change the admin password and the backup code (parked 2026-10-23)
+Owner ruling, 2026-10-23: "skipping admin password and backup code change for now park for another time". Do not raise
+it again until the owner reopens it. Why it was on the list: the password hash and the backup-code hash were last
+changed on 2026-10-20 (20:36 and 19:44 UTC), before Hermes's 2026-10-21 session named both rows (their values may have
+reached z.ai; bcrypt cost 12, so only a weak secret is at real risk), and the backup code was typed in a chat on
+2026-10-20. How, when reopened: Settings → Account → Change Password, then Replace Backup Code (each asks for the
+current password; a password change signs out every device).
