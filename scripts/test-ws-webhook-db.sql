@@ -3,17 +3,24 @@
 -- is the result line. Run before the migration exists by sending "begin;" + the migration + this file in one query;
 -- after it is applied, this file alone. Upserts are written the way PostgREST sends the app's rows: every column
 -- from `excluded`. Since RLS phase 2 (20261022120000) the app writes as a signed-in device: the block mints a session
--- token for the live admin (never printed) and sends it as x-proxima-session, and fixtures live in that account's scope
--- (ids 'wh-*'; everything rolls back, so no device ever sees them).
+-- token for the owner (never printed) and sends it as x-proxima-session, and fixtures live in that account's scope
+-- (ids 'wh-*'; everything rolls back, so no device ever sees them). The owner comes from proxima_auth.users from P1's
+-- M1 on (a rename then writes only that row), from app_secrets before it.
 do $t$
 declare
-  scope text := 'user:' || (select value->>'username' from app_secrets where key = 'admin_username');
-  tok text := _sign_session_token('admin:' || (select value->>'username' from app_secrets where key = 'admin_username'), now() + interval '12 hours');
+  scope text;
+  tok text;
   out text := '';
   r text;
   t record;
   ev record;
 begin
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'select scope, proxima_auth.mint_token(id) from proxima_auth.users where role = ''owner''' into scope, tok;
+  else
+    scope := 'user:' || (select value->>'username' from app_secrets where key = 'admin_username');
+    tok := _sign_session_token('admin:' || (select value->>'username' from app_secrets where key = 'admin_username'), now() + interval '12 hours');
+  end if;
   perform set_config('request.headers', json_build_object('x-proxima-session', tok)::text, true);
   insert into tasks (id, device_id, status, start_time, task_id, outputs) values
     ('wh-run',  scope, 'processing', 1000, 'wh-pred-run',  '[]'),

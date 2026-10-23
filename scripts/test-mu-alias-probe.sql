@@ -2,11 +2,16 @@
 -- can move writes still stamped with a legacy scope onto the session's scope? As anon with a valid session, like the app.
 do $pt$
 declare
-  u text := (select value->>'username' from public.app_secrets where key = 'admin_username');
-  s text; tok text; p text := '__p3_alias_' || txid_current(); r text[] := '{}'; v text;
+  u text; s text; tok text; p text := '__p3_alias_' || txid_current(); r text[] := '{}'; v text;
 begin
-  s := 'user:' || u;
-  tok := public._sign_session_token('admin:' || u, now() + interval '12 hours');
+  -- The owner: proxima_auth.users from P1's M1 on (a rename then writes only that row), app_secrets before it.
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'select scope, proxima_auth.mint_token(id) from proxima_auth.users where role = ''owner''' into s, tok;
+  else
+    u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+    s := 'user:' || u;
+    tok := public._sign_session_token('admin:' || u, now() + interval '12 hours');
+  end if;
 
   -- Control: no alias trigger yet, so a legacy-stamped insert must be refused by WITH CHECK.
   execute 'set local role anon';
