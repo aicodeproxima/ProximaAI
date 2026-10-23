@@ -10,6 +10,7 @@ globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setI
 const C = await import("../src/lib/serverClock.js");
 const S = await import("../src/lib/storage.js");
 const R = await import("../src/lib/syncReconcile.js");
+const R2 = R;
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -160,14 +161,26 @@ test("uploadable: leaves out blocked ids; a confirmed id's queued upload leaves 
 
 // A restore brings a confirmed id back: the pass started after the confirm releases it (the shared record forgets it),
 // so it is added here and its uploads are allowed again in every tab.
-test("a restore that brings a confirmed id back: released by the next pass, then its upload is allowed", () => {
+// Task B12b (simulator F1): rewritten from "released by the next pass" (the row's mere return released it) into the
+// outcome: a confirmed id comes back only by a restore's evidence; without one, its returning row is a late upload, the
+// record keeps blocking it and the pass lists it to delete again.
+test("a restore that brings a confirmed id back: released by the next pass (restore evidence), then its upload is allowed; without a restore it is not (F1)", () => {
   S.queueDeleteIntents("task-delete", ["x"]);
   S.confirmDeleteIntents("task-delete", ["x"]);
   const a = tab();
-  const p = pass(a, { cloud: [X], ids: { ...NONE(), tasks: new Set(["x"]) } });
-  assert.deepEqual(p.t.released, ["x"]);
+  const p0 = pass(a, { cloud: [X], ids: { ...NONE(), tasks: new Set(["x"]) } });
+  assert.deepEqual(p0.t.released, [], "no restore known: not released");
+  assert.deepEqual(p0.t.reappeared.map(r => r.id), ["x"], "deleted again");
+  assert.ok(S.confirmedDeletes("task-delete").has("x"), "the record keeps blocking it");
+  assert.deepEqual(p0.taskPlan.add.map(r => r.id), [], "not re-added here");
+  assert.deepEqual(S.uploadable("task", [X]).map(r => r.id), [], "nor uploaded");
+  // A restore newer than the delete, known before the pass's reads: the cloud's row after it releases x.
+  const R = C.serverNow() + 5;
+  S.noteRestoreKnown(R);
+  const t = S.sharedDeleteState("task", { deleting: a.deleting, cloudIds: new Set(["x"]), sinceSeq: S.confirmSeqNow(), restoreKnownAt: R, evidence: { present: [], complete: true } });
+  assert.deepEqual(t.released, ["x"]);
   assert.equal(S.confirmedDeletes("task-delete").has("x"), false, "the shared record forgets it");
-  assert.deepEqual(p.taskPlan.add.map(r => r.id), ["x"], "re-added here");
+  assert.deepEqual(R2.planTaskSync({ local: [], cloud: [X], cloudIds: new Set(["x"]), tombstones: new Set(), pending: new Set(), deleting: t.deleting, since: C.serverNow() }).add.map(r => r.id), ["x"], "re-added here");
   S.addFailedSync({ kind: "task", id: "x", data: X });
   assert.deepEqual(queued("task"), ["x"], "its upload is queued again");
   assert.deepEqual(S.uploadable("task", [X]).map(r => r.id), ["x"]);
@@ -178,7 +191,11 @@ test("release: a pending intent (deleted again) or an id the cloud lacks is neve
   S.confirmDeleteIntents("task-delete", ["again"]);
   S.queueDeleteIntents("task-delete", ["again"]);   // came back by a restore and is being deleted again
   const p = pass(tab(), { ids: { ...NONE(), tasks: new Set(["old", "again"]) } });
-  assert.deepEqual(p.t.released, ["old"]);
+  // Task B12b (F1): rewritten from released ["old"]: no restore is known, so "old"'s row is not a restore's: it stays
+  // confirmed and is listed to delete again (at its queue time); "again" (pending) and "gone" (absent) neither.
+  assert.deepEqual(p.t.released, []);
+  assert.deepEqual(p.t.reappeared.map(r => r.id), ["old"]);
+  assert.ok(p.t.deleting.has("old"));
   assert.ok(p.t.deleting.has("again") && p.t.deleting.has("gone"));
   assert.deepEqual(S.confirmSeqs("task-delete").get("gone"), 0);
   // A record re-confirmed after the pass started is not forgotten by that pass's release (the shared write re-checks).

@@ -60,10 +60,12 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   `backup-scrub-drain` drains it every minute, and restore drains first and refuses while anything is left. Switching
   OFF scrubs every existing backup of every deleted id, restore-replaced rows included, and trims backed-up History
   entries to their live items (owner rulings 2026-10-22). Files go through the durable queue `proximaai-file-deletes`
-  (`fileDelete.js`): held by `stagePurge` before any network call (`proximaai-held-purges`, with the WaveSpeed deletes),
+  (`fileDelete.js`): held by `stagePurge` before any network call (`proximaai-held-purges-v2`, with the WaveSpeed
+  deletes; a delete whose intents and hold cannot both be written changes nothing and says "storage is full"; when the
+  rule that decides holds changes, they move to a key no previous build reads, see THE KEY RULE in storage.js),
   released to the queues once that delete is confirmed for every owner; if a restore voids or drops it, the next sync
   that read the cloud after that restore decides: kept if the generation came back, deleted if it did not (an uncertain
-  outcome never cancels a hold; a hold that cannot be written stops the delete with "storage full"); settled only on a
+  outcome never cancels a hold); settled only on a
   confirmed remove or a HEAD 400/404, and a path a kept generation uses again is never deleted. Log deletes delete no files. A file a Generate
   form still holds (any live tab, per-tab key `proximaai-form-inputs:<tab>`; the other device's via settings
   `form-inputs:<browser>`) is kept until every form lets go of it, then deleted. A hold counts 7 days after its last

@@ -3,7 +3,9 @@
 // deletes them. History entries are decided in batchLog.js purgeLogsForDeleted, WaveSpeed's copy in wsDelete.js, backup
 // copies by the server (triggers queue into backup_scrub_queue, migration 20261021175100). A file still loaded in a
 // Generate form is held until every form lets go of it (fileDelete.js "form").
-import { purgeLogsForDeleted } from "./batchLog.js";
+import { purgeLogsForDeleted, clientHistoryWork } from "./batchLog.js";
+import { queueDeletes } from "./wsDelete.js";
+import { serverNow } from "./serverClock.js";
 //
 // Files live in the public bucket "generations": uploads/<scope>/<id>.<ext> (source images, end frames, audio,
 // driving video WaveSpeed fetched by URL) and <scope>/... (☁ archives of outputs). A file still used by a generation
@@ -57,6 +59,11 @@ export function ownedPaths(tasks, logs, { taskIds = new Set(), logIds = new Set(
 // a removed History entry owns its outputs (its task id); the entry's own fields (the batch's inputs) belong to all its
 // items. An entry whose removal is its own History delete (`logOwners`: the entries the delete queued intents for), or
 // that holds an item without an id, owns its paths itself ("history:<id>"). Returns { path: [owners] }.
+// Task B12a (review round 25 #4): an entry WITHOUT items and without a History delete of its own (its removal rides on
+// the task delete: the server removes it in the clear's transaction) gets NO owner for its paths: no intent would ever
+// decide "history:<id>", so it waited forever. Owner-less, the path follows the delete it is held for as a whole
+// (storage.js heldPurgeRule: queued once that delete is settled, cancelled if it was voided). A path another owner
+// shares keeps that owner.
 export function pathOwners(removed, goneLogs, paths, { logOwners = new Set() } = {}) {
   const want = new Set(paths || []), out = new Map();
   const add = (list, owners) => {
@@ -66,7 +73,8 @@ export function pathOwners(removed, goneLogs, paths, { logOwners = new Set() } =
   for (const l of goneLogs || []) {
     if (!l?.id) continue;
     const items = Array.isArray(l.tasks) ? l.tasks : [];
-    if (logOwners.has(l.id) || !items.length || items.some(i => !i?.id)) { add(pathsOf(l), [`history:${l.id}`]); continue; }
+    if (logOwners.has(l.id) || items.some(i => !i?.id)) { add(pathsOf(l), [`history:${l.id}`]); continue; }
+    if (!items.length) { add(pathsOf(l), []); continue; }
     for (const i of items) add(list(i.outputs).map(storagePathOf).filter(Boolean), [String(i.id)]);
     add(pathsOf({ ...l, tasks: [] }), items.map(i => String(i.id)));
   }
@@ -90,4 +98,28 @@ export function planPurge(logs, removed, kept, { history = true, alsoLogs = [], 
     keptLogs = base.filter(l => !gone.has(l.id)).map(l => byId.get(l.id) || l);
   }
   return { remove, rewrite, goneLogs, keptLogs, paths: storagePathsToDelete([...removed, ...goneLogs], kept, keptLogs) };
+}
+
+// Task B12a (review round 25 #1): everything a generation delete's purge will do, computed BEFORE anything changes, so
+// the delete can reserve it first (storage.js reserveDelete) and stop with nothing changed when it cannot. Pure apart
+// from the server clock read for the History intents' default queue time. `base`: the History entries planned over
+// (this device's, or Clear Outputs' local + cloud); `serverHistory` (a task delete through delete_queued_rows / the
+// clear): the server strips the deleted items that carry an id, so only entries holding items without one are sent from
+// here (review round 8); `at`: the History intents' queue time (default now); `holdAt`: the queue time of the delete this
+// purge belongs to. Returns { plan, removed, doHistory, send, historyQueuedAt, history, holdAt, hold, intents }: `hold`
+// is holdPurgeDeletes' input (owners per path, the WaveSpeed entries, the History intents' time), `intents` the History
+// delete intents this purge queues (the caller adds its own task / History intents to the reservation).
+export function planDeleteStage(base, removed, kept, { history = true, alsoLogs = [], all = false, serverHistory = false, at, holdAt, now = Date.now() } = {}) {
+  const plan = planPurge(base, removed, kept, { history, alsoLogs, all });
+  const doHistory = !!(history && (plan.remove.length || plan.rewrite.length));
+  const send = doHistory && serverHistory ? clientHistoryWork(base, plan) : { rewrite: plan.rewrite, remove: plan.remove };
+  // The History intents' queue time, taken now so the hold names it (the reservation stamps them with it).
+  const historyQueuedAt = doHistory ? (at ?? serverNow()) : null;
+  // Owners: each removed generation, the items of removed History entries, and an entry itself when its removal is its
+  // own History delete (sent here: send.remove; Reset: every entry it passes, queued at its time).
+  const logOwners = new Set(history ? send.remove : alsoLogs.map(l => l?.id));
+  const hold = { files: pathOwners(removed, plan.goneLogs, plan.paths, { logOwners }), ws: queueDeletes({}, removed, now),
+    historyAt: history ? historyQueuedAt : holdAt };
+  const intents = doHistory && send.remove.length ? [{ kind: "history-delete", ids: send.remove, at: historyQueuedAt }] : [];
+  return { plan, removed, doHistory, send, historyQueuedAt, history, holdAt, hold, intents };
 }

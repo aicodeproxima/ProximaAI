@@ -88,3 +88,11 @@ export function holdHeldIds(queue, heldIds, now) {
   }
   return out;
 }
+// Task B12a (review round 25 #2): ids whose generation's delete is still pending or in a call wait for that delete's
+// outcome however long it takes: re-checked every HELD_RECHECK_MS, never dropped by the HELD_MAX_MS cap (the flush moves
+// them into that delete's hold first; these are the ones the hold could not take).
+export function waitHeldIds(queue, ids, now) {
+  const out = { ...(queue || {}) };
+  for (const id of ids || []) if (out[id]) out[id] = { ...out[id], next: Math.max(out[id].next, now + HELD_RECHECK_MS) };
+  return out;
+}

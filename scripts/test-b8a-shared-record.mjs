@@ -154,7 +154,9 @@ test("#2 (p2-forget-on-abort): a re-delete aborted by a failed backup leaves the
 test("#2 wiring: both bulk deletes forget older confirmations only right after queueing their own intents", () => {
   for (const [name, kind] of [["const deleteSelectedTasks = async", "task-delete"], ["const deleteSelectedLogs = async", "history-delete"]]) {
     const h = between(name, "\n  };\n");
-    const backup = h.indexOf("await createBackup("), q = h.indexOf(`const queuedAt = queueDeleteIntents("${kind}", ids);`), f = h.indexOf(`forgetConfirmed("${kind}", ids);`);
+    // Task B12a (review round 25 #1) rewrote the anchor: the intents are written by the delete's reservation
+    // (reserveDelete, checked) instead of a plain queueDeleteIntents.
+    const backup = h.indexOf("await createBackup("), q = h.indexOf(`if (!reserveDelete({ intents: [{ kind: "${kind}", ids, at: queuedAt }`), f = h.indexOf(`forgetConfirmed("${kind}", ids);`);
     assert.ok(backup >= 0 && q > backup && f > q, `${name}: forgetConfirmed after the backup and the intent`);
     assert.doesNotMatch(h.slice(q, f), /await /, `${name}: nothing awaited in between`);
     assert.equal(h.match(/forgetConfirmed\(/g).length, 1);

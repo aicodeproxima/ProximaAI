@@ -55,7 +55,7 @@ const gen = (id, extra = {}) => ({ id, taskId: `pred-${id}`, status: "completed"
 const pathsOf = (id) => [`scope/${id}-out.png`, `uploads/scope/${id}-src.png`];
 const filesQueued = () => Object.keys(S.readFileDeletes()).sort();
 const wsQueued = () => Object.keys(S.readWsDeletes()).sort();
-const heldNow = () => JSON.parse(mem.get("proximaai-held-purges") || "{}");
+const heldNow = () => JSON.parse(mem.get("proximaai-held-purges-v2") || "{}");
 const heldPaths = () => [...new Set(Object.values(heldNow()).flatMap(g => Object.keys(g.files || {})))].sort();
 const heldWs = () => [...new Set(Object.values(heldNow()).flatMap(g => Object.keys(g.ws || {})))].sort();
 // A reconcile pass's decision step (App.jsx reconcileWithCloud): the evidence its reads give, the restore it knew before them.
@@ -69,16 +69,19 @@ function stage(removed, holdAt, { logs = [], logOwners = new Set(), historyAt = 
     files: P.pathOwners(removed, plan.goneLogs, plan.paths, { logOwners }), ws: W.queueDeletes({}, removed, Date.now()), historyAt });
   return { ...plan, held };
 }
-// App.jsx deleteOnWaveSpeed as it now reads.
+// App.jsx deleteOnWaveSpeed as it now reads (task B12a, review round 25 #18: no direct fallback when the hold is refused;
+// both writes checked; scripts/test-b12a-reserve-first.mjs covers the refusals).
 function deleteOnWaveSpeed(removed, { holdAt } = {}) {
-  const now = Date.now(), direct = [];
+  const now = Date.now(), direct = [], unstored = [];
   for (const t of removed || []) {
+    if (!t?.taskId) continue;
     const h = t?.id && S.deleteHoldAt ? S.deleteHoldAt(t.id) : undefined;
     const at = h === undefined ? holdAt : h;
-    if (at != null && t?.taskId && S.holdPurgeDeletes(at, { ws: W.queueDeletes({}, [t], now) })) continue;
+    if (at != null) { if (!S.holdPurgeDeletes(at, { ws: W.queueDeletes({}, [t], now) })) unstored.push(t.taskId); continue; }
     direct.push(t);
   }
-  if (direct.length) S.writeWsDeletes(W.queueDeletes(S.readWsDeletes(), direct, now));
+  if (direct.length && !S.writeWsDeletes(W.queueDeletes(S.readWsDeletes(), direct, now))) unstored.push(...direct.map(t => t.taskId));
+  return unstored;
 }
 // What the WaveSpeed flush would send now (App.jsx flushWsDeletes' first steps, before its cloud questions).
 function wsDueNow(tasks = []) {
@@ -115,7 +118,7 @@ await test("#3 (r24 p1-flight-lapse): A's clear answered, A frozen >60 s, B drop
   A.sharedDeleteState("task", { cloudIds: new Set(), sinceSeq: A.confirmSeqNow(), restoreKnownAt: rk, evidence: { present: [], complete: true } });
   A.releaseHeldPurges();
   assert.deepEqual([filesQueued(), wsQueued()], [pathsOf("x").sort(), ["pred-x"]], "paths and prediction end up queued");
-  assert.equal(mem.has("proximaai-held-purges"), false);
+  assert.equal(mem.has("proximaai-held-purges-v2"), false);
 });
 await test("#3: a pass after the restore decides an owner whose call lapsed and that the cloud lacks, without its confirm (A dead)", async () => {
   const T = 1_800_000_000_000;
@@ -154,7 +157,7 @@ await test("#1 (r24 probe1 A): bulk delete held at T, restoreGuard drops x, the 
   assert.deepEqual([filesQueued(), wsQueued()], [[], []], "that pass decides nothing");
   pass(T + 60_000);                                                         // the next pass: x absent from rows, History, this browser
   assert.deepEqual([filesQueued(), wsQueued()], [pathsOf("x").sort(), ["pred-x"]], "deleted after the pass");
-  assert.equal(mem.has("proximaai-held-purges"), false);
+  assert.equal(mem.has("proximaai-held-purges-v2"), false);
 });
 await test("#1 (r24 probe1 B): the delete answered 'voided' inline, the restore lacked x -> queued after the pass", () => {
   const T2 = 1_761_300_000_000;
@@ -174,7 +177,7 @@ await test("#1: a restore that DID bring x back (a task row, or an item of a res
     S.restoreGuard({ last_restore_at: T + 60_000 });
     pass(T + 60_000, ev);
     assert.deepEqual([filesQueued(), wsQueued()], [[], []], label);
-    assert.equal(mem.has("proximaai-held-purges"), false, `${label}: cancelled`);
+    assert.equal(mem.has("proximaai-held-purges-v2"), false, `${label}: cancelled`);
   }
 });
 await test("#1: a clear stash or a queued upload of x on this browser keeps it alive at the pass", () => {
@@ -216,7 +219,7 @@ await test("#5: the same, but the restore kept L: the shared paths stay (a live 
   S.sharedDeleteState("task", { cloudIds: new Set(), sinceSeq: S.confirmSeqNow(), restoreKnownAt: rk, evidence: { present: [], complete: true } });
   pass(rk, { logs: ["L"] });
   assert.deepEqual([filesQueued(), wsQueued()], [[], ["pred-x"]], "kept while L is alive");
-  assert.equal(mem.has("proximaai-held-purges"), false);
+  assert.equal(mem.has("proximaai-held-purges-v2"), false);
 });
 await test("#5: L alive while x is still undecided: the path is kept at once; L gone while x is superseded: it waits", () => {
   sharedSetup();
@@ -248,7 +251,7 @@ await test("#2/#4 (r24 p2): the file queue write fails at the release -> the fil
   S.releaseHeldPurges();
   assert.equal(filesQueued().length, paths.length, "the next release queues them");
   assert.equal(wsQueued().length, preds.length);
-  assert.equal(mem.has("proximaai-held-purges"), false);
+  assert.equal(mem.has("proximaai-held-purges-v2"), false);
 });
 await test("#2/#4: the WaveSpeed queue write fails -> the predictions stay held, the files go", () => {
   const T = 1_763_100_000_000;
@@ -272,20 +275,19 @@ await test("#2/#4: writeFileDeletes / writeWsDeletes report whether they stored"
   assert.equal(S.writeFileDeletes({ a: { at: 1, attempts: 0, next: 1 }, b: { at: 1, attempts: 0, next: 1 } }), false);
   assert.equal(S.writeWsDeletes({ p: { at: 1, attempts: 0, next: 1 }, q: { at: 1, attempts: 0, next: 1 } }), false);
 });
-// The bulk delete's steps 3-6 as App.jsx now reads them (deleteSelectedTasks): intents, hold, abort or the server call.
+// The bulk delete's steps 2-6 as App.jsx now reads them (deleteSelectedTasks). Task B12a (review round 25 #1) rewrote this
+// mirror: the plan, then ONE reservation (intents + hold, storage.js reserveDelete) before anything changes, abort or the
+// server call (was: intents queued, the hold, and on a refusal the intents taken back).
 function bulkDelete(targets, serverCalls) {
   const ids = targets.map(t => t.id);
-  const intentsBefore = S.intentsOf ? S.intentsOf("task-delete", ids) : [];
-  const queuedAt = S.queueDeleteIntents("task-delete", ids);
-  const plan = stage(targets, queuedAt);
-  if (!plan.held) {
-    if (S.takeBackDeleteIntents) S.takeBackDeleteIntents("task-delete", ids, queuedAt, intentsBefore);
+  const queuedAt = C.serverNow();
+  const staged = P.planDeleteStage([], targets, [], { serverHistory: true, holdAt: queuedAt });
+  if (!S.reserveDelete({ intents: [{ kind: "task-delete", ids, at: queuedAt }, ...staged.intents], holdAt: queuedAt, hold: staged.hold }))
     return { aborted: true, saveStatus: "error" };
-  }
   serverCalls.push(["deleteTasksRemote", ids, queuedAt]);
   return { aborted: false };
 }
-await test("#2/#7: a delete that cannot hold aborts with no server call; its intents are taken back (an earlier pending one restored)", () => {
+await test("#2/#7: a delete that cannot hold aborts with no server call; its intents were never written (an earlier pending one untouched)", () => {
   const x = gen("x"), y = gen("y");
   S.queueDeleteIntents("task-delete", ["y"], 1000);                         // an earlier delete of y, still pending
   const failedBefore = mem.get("proximaai-failed-syncs");
@@ -293,28 +295,30 @@ await test("#2/#7: a delete that cannot hold aborts with no server call; its int
   const calls = [];
   const r = bulkDelete([x, y], calls);
   assert.deepEqual([r.aborted, calls.length], [true, 0], "stopped before any server call");
-  assert.equal(mem.get("proximaai-failed-syncs"), failedBefore, "intents as before: y still pending at its own time");
+  assert.equal(mem.get("proximaai-failed-syncs"), failedBefore, "intents as before: y still pending at its own time (task B12a: nothing to take back)");
   assert.deepEqual([filesQueued(), wsQueued(), heldWs()], [[], [], []], "nothing queued directly");
   cap = Infinity;
   const ok = bulkDelete([x], calls);
   assert.deepEqual([ok.aborted, calls.length], [false, 1], "with room it proceeds");
 });
-await test("#2/#7 wiring: stagePurge holds first and never queues directly; every caller stops on held: false before its server call", () => {
+// Task B12a (review round 25 #1) rewrote this check: the hold is written with the intents in ONE reservation
+// (reserveDelete), before stagePurge applies anything; the abort has nothing to take back (was: stagePurge held first,
+// returned held: false, and the caller took its intents back). The order of every state change is checked in
+// scripts/test-b12a-reserve-first.mjs.
+await test("#2/#7 wiring: the hold is reserved with the intents before any change and never queued directly; every caller stops before its server call", () => {
   const stageSrc = between("const stagePurge = useCallback(", "const purgeEverywhere = useCallback(");
-  const hold = stageSrc.indexOf("const held = holdAt != null && holdPurgeDeletes(");
-  assert.ok(hold > 0 && hold < stageSrc.indexOf("setLogs(") && hold < stageSrc.indexOf('queueDeleteIntents("history-delete"'), "the hold before any change");
-  assert.match(stageSrc, /if \(!held\) return \{ \.\.\.plan, held: false,/);
+  assert.doesNotMatch(stageSrc, /holdPurgeDeletes\(|queueDeleteIntents\(/, "stagePurge only applies");
   assert.doesNotMatch(stageSrc, /writeWsDeletes\(|writeFileDeletes\(/);
   for (const [name, h, call, at] of [
     ["bulk", between("const deleteSelectedTasks = async", "const renderSelectBar"), "deleteTasksRemote(", "queuedAt"],
-    ["Clear Outputs", between('createBackup("pre-clear-outputs"', ">Clear Outputs</button>"), "clearQueuedRemote(", "queuedAt"],
+    ["Clear Outputs", between('createBackup("pre-clear-outputs"', ">Clear Outputs</button>"), "clearQueuedRemote(", "clearAt"],
     ["Reset", between('createBackup("pre-reset"', ">Reset Everything</button>"), "resetQueuedRemote(", "resetAt"]]) {
-    const st = h.indexOf("const plan = stagePurge("), chk = h.indexOf("if (!plan.held) {"), srv = h.indexOf(call);
-    assert.ok(st > 0 && chk > st && srv > chk, `${name}: stagePurge, its check, then the server call`);
+    const chk = h.indexOf('if (!reserveDelete({ intents: [{ kind: "task-delete"'), st = h.indexOf("const plan = stagePurge(staged)"), srv = h.indexOf(call);
+    assert.ok(chk > 0 && st > chk && srv > st, `${name}: the reservation, stagePurge, then the server call`);
+    assert.match(h.slice(chk, h.indexOf(")) {", chk)), new RegExp(`holdAt: ${at}, hold: staged\\.hold`), `${name}: held for its queue time`);
     const abort = h.slice(chk, h.indexOf("return;", chk));
-    assert.match(abort, new RegExp(`takeBackDeleteIntents\\("task-delete", [a-zA-Z]+, ${at}, intentsBefore(\\.task)?\\)`), name);
     assert.match(abort, /setSaveStatus\("error"\);\s*setAccountToast\(STORAGE_FULL_TOAST\);/, name);
-    assert.ok(h.indexOf("intentsOf(") > 0 && h.indexOf("intentsOf(") < h.indexOf("queueDeleteIntents("), `${name}: intents read before queueing`);
+    assert.doesNotMatch(abort, /takeBackDeleteIntents|putBack/, `${name}: nothing to take back`);
     const removal = h.indexOf("setTasks(prev => prev.filter(");
     assert.ok(removal > chk, `${name}: nothing leaves this device before the check`);
   }
@@ -381,12 +385,13 @@ await test("#6: the deleted-claimant lookup's delete is held for the claimant's 
 });
 await test("#6/#7 wiring: keepLateSubmitId, the claimant lookup and deleteOnWaveSpeed hold; flushWsDeletes holds a pending delete's own entries", () => {
   const late = between("function keepLateSubmitId(", "const submittingIds = useRef(");
-  assert.match(late, /recordStashPrediction\(id, predictionId\);\s*deleteOnWaveSpeed\(\[\{ id, taskId: predictionId, status: "processing" \}\], \{ holdAt: serverNow\(\) \}\);/);
+  // Task B12b (review round 25 #6/#7/#12/#15): both hold with a relink (a kept generation gets its result back).
+  assert.match(late, /recordStashPrediction\(id, predictionId\);\s*deleteOnWaveSpeed\(\[\{ id, taskId: predictionId, status: "processing" \}\], \{ holdAt: serverNow\(\), relink: true \}\);/);
   assert.match(between("const recoverOrphans = useCallback(", "const decided = new Map("),
-    /deleteOnWaveSpeed\(delNow\.map\(id => \(\{ id: claimantOf\.get\(id\), taskId: id, status: "processing" \}\)\)\)/);
+    /deleteOnWaveSpeed\(delNow\.map\(id => \(\{ id: claimantOf\.get\(id\), taskId: id, status: "processing" \}\)\), \{ relink: true \}\)/);
   const dow = between("const deleteOnWaveSpeed = useCallback(", "}, [flushWsDeletes]);");
   assert.match(dow, /const h = t\?\.id \? deleteHoldAt\(t\.id\) : undefined;\s*const at = h === undefined \? holdAt : h;/);
-  assert.match(dow, /holdPurgeDeletes\(at, \{ ws: queueDeletes\(\{\}, \[t\], now\) \}\)/);
+  assert.match(dow, /const ws = queueDeletes\(\{\}, \[t\], now\);\s*const ok = relink && t\.id \? holdLateResult\(at, t\.id, t\.taskId, ws\[t\.taskId\]\) : holdPurgeDeletes\(at, \{ ws \}\);/);
   const flush = between("const flushWsDeletes = useCallback(", "const deleteOnWaveSpeed = useCallback(");
   assert.doesNotMatch(flush, /deletesGoingSince\(|going\.has\(/, "no exemption for a pending delete's own rows");
   assert.match(flush, /const deletingNow = new Set\(\[\.\.\.pendingDeleteIds\("task-delete"\), \.\.\.inFlightIds\("task-delete"\)\]\);/);
@@ -404,10 +409,12 @@ await test("#7: an entry queued directly (a previous build, a hold that failed) 
 });
 await test("#1 wiring: the reconcile decides the holds with its evidence after its plans, in the same pass", () => {
   const rec = between("const reconcileWithCloud = useCallback(", "}, []);\n\n  useEffect(");
-  const plans = rec.indexOf("const logPlan = planLogSync("), dec = rec.indexOf("releaseHeldPurges(Date.now(), { restoreKnownAt,");
+  // Task B12b (review round 25 #3/#10): rewritten for the evidence object the pass now builds: the restore's own removals
+  // count as present, IndexedDB (every tab's) as kept, and the evidence is complete only when every source was read.
+  const plans = rec.indexOf("const logPlan = planLogSync("), dec = rec.indexOf("releaseHeldPurges(Date.now(), evidence);");
   assert.ok(plans > 0 && dec > plans && dec < rec.indexOf("setTimeout(() => { flushWsDeletes(); flushFileDeletes(); }, 1500);"));
-  assert.match(rec, /task: \{ present: \[\.\.\.\(ids\.tasks \|\| \[\]\), \.\.\.\(cloudItemIds \|\| \[\]\)\], local: keptTaskIds, complete: ids\.tasks instanceof Set && !!cloudItemIds \}/);
-  assert.match(rec, /history: \{ present: ids\.history \|\| \[\], local: keptLogs\.map\(l => l\.id\), complete: ids\.history instanceof Set \}/);
+  assert.match(rec, /task: \{ present: \[\.\.\.\(ids\.tasks \|\| \[\]\), \.\.\.\(cloudItemIds \|\| \[\]\), \.\.\.\(restoreRemoved \|\| \[\]\)\], local: keptTaskIds,\s*complete: ids\.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared \}/);
+  assert.match(rec, /history: \{ present: \[\.\.\.\(ids\.history \|\| \[\]\)\], local: keptLogIds, complete: ids\.history instanceof Set && !!shared \}/);
   assert.ok(rec.indexOf("const restoreKnownAt = knownRestoreAt();") < rec.indexOf("await Promise.all([pullAllRemoteData(), pullCloudIds()])"), "known before the reads");
 });
 
