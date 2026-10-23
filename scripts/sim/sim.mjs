@@ -316,7 +316,7 @@ export class Sim {
       case "save": if (usable) await this.run(page, () => page.forceSaveAll()); break;
       case "timer": if (usable) await this.run(page, () => page.fireTimer()); break;
       case "reload": await this.newPage(o.tab); break;
-      case "freeze": if (page) page.frozen = true; break;
+      case "freeze": if (page) { page.publishUnsent().catch(() => {}); page.frozen = true; } break;   // B15: the hidden page publishes first
       case "thaw": if (page && page.frozen) { page.frozen = false; } break;
       case "backup": { const p = this.pages[SLOTS[o.r % SLOTS.length]]; if (p.alive && !p.frozen) await this.run(p, () => p.manualBackup()); } break;
       case "restore": {

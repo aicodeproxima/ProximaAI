@@ -68,7 +68,7 @@ export class Page {
     // Task B13c: the Generate form, modelled as holding the input of the last batch this page generated (a new input is
     // picked for each batch; a new page starts with an empty form), and the last cloud publication (cloudFormPubRef).
     this.formInput = null; this.cloudFormPub = null;
-    this.cloudUnsentPub = null; this.givingBack = new Set();   // task B14 (round 27 #5/#7, #3)
+    this.unsentPub = null;   // task B15 (round 28 #4/#2): App.jsx's module-level unsentPub (per page)
     this.macros = [];   // continuations waiting for a render (IndexedDB awaits)
   }
 
@@ -275,8 +275,33 @@ export class Page {
   // ─── the only senders (App.jsx 47-96) ───
   async sendTask(task) { const send = this.S.uploadable("task", [task]); if (send.length) await this.rawSyncTasksBatch(send); return send; }   // App.jsx 67-71 (rawSyncTask: one row)
   async sendTasks(tasks) { const send = this.S.uploadable("task", tasks); if (send.length) await this.rawSyncTasksBatch(send); return send; }
-  async sendHistory(entries) { const S = this.S; const send = S.uploadable("history", S.withoutBlockedItems(entries)); if (send.length) await this.rawSyncHistoryBatch(send); return send; }
-  async sendHistoryEntry(entry, opts) { const S = this.S; const send = S.uploadable("history", S.withoutBlockedItems([entry], opts)); if (send.length) await this.rawSyncHistoryEntry(send[0]); return send; }
+  async sendHistory(entries) {
+    const S = this.S; let send = S.uploadable("history", S.withoutBlockedItems(entries));
+    if (send.length && S.unsentRowsIn(send).length) { await this.publishUnsentBefore(send); send = S.uploadable("history", S.withoutBlockedItems(send)); }   // B15: re-filtered
+    if (send.length) await this.rawSyncHistoryBatch(send);
+    return send;
+  }
+  async sendHistoryEntry(entry, opts) {
+    const S = this.S; let send = S.uploadable("history", S.withoutBlockedItems([entry], opts));
+    if (send.length && S.unsentRowsIn(send).length) { await this.publishUnsentBefore(send); send = S.uploadable("history", S.withoutBlockedItems(send, opts)); }
+    if (send.length) await this.rawSyncHistoryEntry(send[0]);
+    return send;
+  }
+  // task B15 (round 28 #4/#2): App.jsx publishUnsent / publishUnsentBefore (module level there; per page here)
+  async publishUnsent() {
+    const S = this.S, now = Date.now(), un = S.unsentGenerations();
+    const items = [...un.paths, ...un.ids.map(i => `id:${i}`), ...un.predictions.map(p => `p:${p}`)];
+    if (!F.formPublishDue(this.unsentPub, items, now)) return true;
+    const bid = S.browserId();   // read now: the server callback runs later, under another page's globals
+    try {
+      await this.call("syncSetting", `form-inputs:${bid}:unsent [${items}]`, () => this.srv.setFormHold(`${bid}:unsent`, { at: now, paths: un.paths, ids: un.ids, predictions: un.predictions }));
+      this.unsentPub = { at: now, paths: items };
+      return true;
+    } catch { return false; }
+  }
+  async publishUnsentBefore(entries) {
+    if (this.S.unsentRowsIn(entries).length && !(await this.publishUnsent())) throw new Error("network");
+  }
   async sendQueuedHistory(entries, queuedAt) { const S = this.S; const send = S.uploadable("history", S.withoutBlockedItems(entries)); return send.length ? this.rawUpsertQueuedHistory(send, queuedAt) : { ok: true, voided: [], upserted: [] }; }
 
   // App.jsx 47-60
@@ -304,7 +329,6 @@ export class Page {
     const heldTasks = held.tasks || new Map(), heldLogs = held.logs || new Set();
     for (const s of S.readClearStashes()) {
       if (!which(s.at)) continue;
-      if (this.givingBack.has(s.at)) continue;   // task B14 (round 27 #3): its give-back is still being written
       const back = S.stashGiveBack(s);
       if (!back) continue;
       S.putBackQueuedUploads(back.uploads);
@@ -322,9 +346,7 @@ export class Page {
       if (backTasks.length || backLogs.length) this.sim.trace(`  ${this.label} stash ${s.at} gives back tasks [${ids(backTasks)}] logs [${ids(backLogs)}] uploads [${back.uploads.map(e => e.kind[0] + ":" + e.id)}]`);
       this.queueArchivedFileDeletes(back.goneArchivePaths);   // 1542 (reapplyArchives 1539: no archive records here)
       this.applyRelinks([...heldTasks.values(), ...backTasks]);   // task B13a (round 26 #6)
-      // task B14 (round 27 #3): dropped once the give-back's IndexedDB writes settled (they complete at the next render)
-      this.givingBack.add(s.at);
-      this.macros.push(() => { S.dropGivenBackStash(s); this.givingBack.delete(s.at); });
+      S.dropGivenBackStash(s);   // task B15 (round 28 #1/#3): synchronous again (IndexedDB written first, saveTasksNow)
     }
   }
   // App.jsx 1558-1566
@@ -650,6 +672,7 @@ export class Page {
         for (const l of keptLogs) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) if (i?.id) keptTaskIds.add(i.id);
         const keptLogIds = new Set(ids(keptLogs));
         let shared = null;
+        const earlyKept = S.hasHeldPurges() ? S.storedKeptIds() : null;   // task B15 (round 28 #5): read before IndexedDB
         if (S.hasHeldPurges()) {
           const b = this.b;
           shared = await S.storedEvidenceIds({ tasks: async () => b.allStoredTasks(), history: async () => b.allStoredHistory() });
@@ -660,6 +683,10 @@ export class Page {
         if (shared) {
           for (const id of shared.task) if (!tombT.has(id) && !rmTasks.has(id)) keptTaskIds.add(id);
           for (const id of shared.history) if (!tombH.has(id) && !rmLogs.has(id)) keptLogIds.add(id);
+        }
+        if (earlyKept) {
+          for (const id of earlyKept.task) if (!tombT.has(id)) keptTaskIds.add(id);
+          for (const id of earlyKept.history) if (!tombH.has(id)) keptLogIds.add(id);
         }
         // task B13a (G): the restore's own removals are not present; task B13b (D): the ids the cloud says were deleted.
         const userTaskTombstones = cids.taskTombstones instanceof Set && restoreRemoved ? [...cids.taskTombstones].filter(id => !restoreRemoved.has(id)) : [];
@@ -925,20 +952,12 @@ export class Page {
     S.publishFormPaths([...P.pathsInUse([{ sourceImageUrl: this.formInput }])]);
     const now = Date.now(), mine = [...F.liveFormPaths(S.readFormPublications(), now)];
     const bid = S.browserId();   // read now: the server callback runs later, under another page's globals
-    if (F.formPublishDue(this.cloudFormPub, mine, now)) {
-      try {
-        await this.call("syncSetting", `form-inputs:${bid} [${mine}]`, () => this.srv.setFormHold(bid, { at: now, paths: mine }));
-        this.cloudFormPub = { at: now, paths: mine };
-      } catch {}
-    }
-    // task B14 (round 27 #5/#7): the rows not uploaded yet, in their own row (form-inputs:<browser>:unsent)
-    const un = S.unsentGenerations(), unItems = [...un.paths, ...un.ids.map(i => `id:${i}`), ...un.predictions.map(p => `p:${p}`)];
-    if (F.formPublishDue(this.cloudUnsentPub, unItems, now)) {
-      try {
-        await this.call("syncSetting", `form-inputs:${bid}:unsent [${unItems}]`, () => this.srv.setFormHold(`${bid}:unsent`, { at: now, paths: un.paths, ids: un.ids, predictions: un.predictions }));
-        this.cloudUnsentPub = { at: now, paths: unItems };
-      } catch {}
-    }
+    // both writes start together, as in App.jsx publish() (neither waits for the other)
+    const forms = F.formPublishDue(this.cloudFormPub, mine, now)
+      ? this.call("syncSetting", `form-inputs:${bid} [${mine}]`, () => this.srv.setFormHold(bid, { at: now, paths: mine }))
+        .then(() => { this.cloudFormPub = { at: now, paths: mine }; }).catch(() => {})
+      : Promise.resolve();
+    await Promise.all([forms, this.publishUnsent()]);
   }
   // ─── App.jsx 3007-3037 flushFileDeletes (task B13c: with the forms' holds and the queued uploads' paths) ───
   async flushFileDeletes() {
@@ -997,9 +1016,12 @@ export class Page {
       // task B13b: created closed, so its items are what finishLogs writes for finished tasks (itemOf), prediction id included
       tasks: B.batchLogItems(tasks.map(t => ({ ...t, taskId: `ws-${t.id}` }))), totalCost: 0.01 * n };
     this.setTasks(prev => [...running, ...prev]);
+    // task B15: the rows are queued (syncInFlight) before an entry carrying their prediction ids goes out. In App.jsx the
+    // entry written at the batch's start carries none (no prediction id before the submit); the one that carries them is
+    // the finished batch's rewrite, written after the rows were queued (the History senders then publish them first).
+    for (const t of running) { this.b.saveTask(t); this.syncInFlight(t); }
     this.setLogs(prev => [entry, ...prev]);
     await this.idb();   // rendered: the entry is saved and sent
-    for (const t of running) { this.b.saveTask(t); this.syncInFlight(t); }
   }
   // ─── finish: every running task this page holds gets its result (its own poll, or a poll of a running task another
   // device uploaded: "whichever gets the result first uploads it", syncReconcile.js). The persistence effect then stores,
