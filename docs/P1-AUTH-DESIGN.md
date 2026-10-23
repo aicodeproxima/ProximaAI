@@ -659,7 +659,11 @@ These live in a sibling `scripts/test-mu-p1-catalog.sql` (and inside M3's precon
   own rollback, so they are marked retired rather than kept in the green set.
 
 ## 10. Risks and open questions
-**Open questions for the owner** (each with a recommendation):
+**Owner ruling, 2026-10-23: all seven recommendations approved** (verbatim: "approve all just get with your partner to
+avoid collision"). M1 starts after the RLS session agrees the coordination items (freeze, M2 inputs and rollback guard,
+rotate-service-key change, fixture edits in its suites, the plan §7 line).
+
+**Open questions for the owner** (each with a recommendation; all approved as recommended):
 - **Q1 Generic sign-in error.** A stranger can no longer learn whether a name exists, or whether an account is locked.
   The cost: the sign-in screen loses "N attempts left" and never says "locked"; a locked account answers "Wrong username
   or password" even to the right password, and a paused backup code answers "Wrong backup code" even when it is right.
