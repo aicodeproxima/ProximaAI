@@ -114,7 +114,7 @@ await test("#5 wiring: form-inputs carries the forms only; the unsent row is its
   assert.equal((eff.match(/mine = \[\.\.\.liveFormPaths\(readFormPublications\(\), now\)\];/g) || []).length, 2, "publish() and bye(): forms only");
   // Task B15 (review round 28 #4/#2) rewrote these anchors: the :unsent write moved into the module-level publishUnsent.
   assert.match(eff, /publishUnsent\(\);/);
-  const fn = between("async function publishUnsent({ exiting = false } = {}) {", "\n}\n");
+  const fn = between("async function publishUnsentOnce({ exiting = false } = {}) {", "\n}\n")   /* task B16: the chained body */;
   assert.match(fn, /const items = \[\.\.\.un\.paths, \.\.\.un\.ids\.map\(i => `id:\$\{i\}`\), \.\.\.un\.predictions\.map\(p => `p:\$\{p\}`\)\];/);
   assert.match(fn, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths, ids: un\.ids, predictions: un\.predictions \}\)/);
 });
@@ -140,9 +140,9 @@ await test("#2 wiring: Clear Outputs retries taskRowsPresentRemote up to 3 times
 //    (scripts/test-b15-round28.mjs). Rewritten to that design.
 await test("#3 wiring: the give-back writes IndexedDB in transactions created before the synchronous drop", () => {
   const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
-  assert.match(apply, /saveTasksNow\(backTasks\);/);
-  assert.match(apply, /addHistoryEntriesNow\(backLogs\);/);
-  assert.ok(apply.indexOf("saveTasksNow(backTasks);") < apply.indexOf("dropGivenBackStash(s);"), "written before the drop");
+  assert.match(apply, /saveTasksNow\(\[\.\.\.backTasks, \.\.\.shownTasks\]\);/);   // task B16: + the shown copies
+  assert.match(apply, /addHistoryEntriesNow\(\[\.\.\.backLogs, \.\.\.shownLogs\]\);/);
+  assert.ok(apply.indexOf("saveTasksNow([...backTasks, ...shownTasks]);") < apply.indexOf("dropGivenBackStash(s);"), "written before the drop");
   assert.ok(!/givingBackRef|Promise\.allSettled\(writes\)/.test(src), "no deferred drop");
 });
 

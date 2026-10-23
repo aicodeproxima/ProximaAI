@@ -22,7 +22,7 @@ import { THEMES, BACKGROUNDS } from "./lib/themes.js";
 import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, historyRemovals, tombstonedItems } from "./lib/syncReconcile.js";
-import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations } from "./lib/batchLog.js";
+import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations, restoreStrippedLogs } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
@@ -79,7 +79,18 @@ async function sendTask(task) {
 // the cloud holds the current set (written now, or unchanged since the last confirmed write and not due), false when the
 // write failed. `exiting`: the pagehide publication (keepalive).
 let unsentPub = null;
-async function publishUnsent({ exiting = false } = {}) {
+// Task B16 (review round 29 #1): one write at a time, each computing its set only once the previous one settled, so
+// unsentPub always names what the server applied last (two overlapping writes could land in the other order and leave
+// the cloud row without a generation unsentPub says it names). The pagehide write goes at once: the page may be gone
+// before a queued one runs.
+let unsentChain = Promise.resolve();
+function publishUnsent(opts = {}) {
+  if (opts.exiting) return publishUnsentOnce(opts);   // keepalive, now
+  const p = unsentChain.then(() => publishUnsentOnce(opts));
+  unsentChain = p.catch(() => {});
+  return p;
+}
+async function publishUnsentOnce({ exiting = false } = {}) {
   if (!isSupabaseConfigured()) return true;
   const now = Date.now(), un = unsentGenerations();
   const items = [...un.paths, ...un.ids.map(i => `id:${i}`), ...un.predictions.map(p => `p:${p}`)];
@@ -1559,18 +1570,22 @@ export default function ProximaApp() {
       const { tasks, logs } = back;
       const haveTasks = new Set([...tasksRef.current.map(t => t.id), ...heldTasks.keys()]), haveLogs = new Set([...logsRef.current.map(l => l.id), ...heldLogs]);
       const backTasks = tasks.filter(t => !haveTasks.has(t.id)), backLogs = logs.filter(l => !haveLogs.has(l.id));
+      // Task B16 (review round 29 #2): the kept generations and entries this tab's state still shows go to IndexedDB too
+      // (this tab's copy, the newer one): once the stash is dropped below, another tab's pass finds them nowhere else.
+      const shownTasks = tasks.filter(t => haveTasks.has(t.id) && !heldTasks.has(t.id)).map(t => tasksRef.current.find(x => x.id === t.id) || t);
+      const shownLogs = logs.filter(l => haveLogs.has(l.id) && !heldLogs.has(l.id)).map(l => logsRef.current.find(x => x.id === l.id) || l);
       // Task B15 (review round 28 #1/#3/#5): IndexedDB is written in transactions CREATED here, before the stash is dropped
       // below, so another tab's pass finds these generations in the stash or in IndexedDB whatever the order (it reads the
       // stash before its IndexedDB read too). B14's deferred drop is gone: it re-decided the stash later (#1) and skipped a
       // follower's give-back (#3).
       if (backTasks.length) {
         setTasks(prev => { const have = new Set(prev.map(t => t.id)); const add = backTasks.filter(t => !have.has(t.id)); return add.length ? [...prev, ...add] : prev; });
-        saveTasksNow(backTasks);
       }
+      saveTasksNow([...backTasks, ...shownTasks]);
       if (backLogs.length) {
         setLogs(prev => { const have = new Set(prev.map(l => l.id)); const add = backLogs.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
-        addHistoryEntriesNow(backLogs);
       }
+      addHistoryEntriesNow([...backLogs, ...shownLogs]);
       reapplyArchives(back.archives, new Map([...heldTasks, ...backTasks.map(t => [t.id, t])]));
       // Task B8b (review round 21 #3): an archive record of a task confirmed deleted after this clear is never re-applied
       // (giveBackRule); its files go through the file-delete queue, as a confirm's forgetStashedIds sends them.
@@ -2378,6 +2393,15 @@ export default function ProximaApp() {
       const goneItems = tombstonedItems(logsRef.current, ids?.taskTombstones ?? null, ids?.taskRestoreRemoved ?? null,
         new Set(tasksRef.current.map(t => t.id)));
       if (goneItems.length) dropLogItemsFor(goneItems.map(id => ({ id })));
+      // Task B16 (migration 20261024100000, K2): items of generations a restore removed that the cloud's copy of their entry
+      // lacks (the server stripped them from a late upload) leave this tab's copy too; the cloud already holds that shape.
+      const stripped = remote.historyOk ? restoreStrippedLogs(logsRef.current, remote.history || [], ids?.taskRestoreRemoved ?? null) : [];
+      if (stripped.length) {
+        const byId = new Map(stripped.map(l => [l.id, l]));
+        logsRef.current = logsRef.current.map(l => byId.get(l.id) || l);
+        setLogs(prev => prev.map(l => byId.get(l.id) || l));
+        for (const l of stripped) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
+      }
       // Task B13b (simulator classes A and C): what a user deleted ELSEWHERE and this pass just removed (another tab's
       // final confirm: the stale rows and History items; another device's: the user-tombstoned rows and History-only
       // items) is re-planned here against THIS tab's kept view, once its History drops are done. The deleting device

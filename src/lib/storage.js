@@ -601,8 +601,16 @@ export function forgetFormPaths() { try { localStorage.removeItem(FORM_KEY + TAB
 // next publication (by then the cloud row holds it: paths_in_use).
 export function unsentUploadPaths() {
   try {
-    return pathsInUse(getFailedSyncs().filter(f => (f?.kind === "task" || f?.kind === "history") && f.data && typeof f.data === "object").map(f => f.data));
+    return pathsInUse(unsentUploads().map(f => f.data));
   } catch { return new Set(); }
+}
+// The task and History uploads this browser has not sent yet: the failed-sync queue, and (task B16, review round 29
+// #3/#4) the ones a pending clear took into its stash, which a restore that voids that clear puts back and sends.
+function unsentUploads() {
+  const isUpload = (f) => (f?.kind === "task" || f?.kind === "history") && f.data && typeof f.data === "object";
+  let stashed = [];
+  try { stashed = readClearStashes().flatMap(s => (Array.isArray(s?.uploads) ? s.uploads : [])); } catch {}
+  return [...getFailedSyncs().filter(isUpload), ...stashed.filter(isUpload)];
 }
 // Task B14 (review round 27 #5/#7): what this browser's queued, not yet uploaded rows hold, published in its own settings row
 // (App.jsx: form-inputs:<browser>:unsent, a key no previous build writes): their paths, the ids of the generations they
@@ -613,7 +621,7 @@ export function unsentUploadPaths() {
 // publishUnsentBefore): another device that sees the entry then holds that generation's files and WaveSpeed result.
 export function unsentRowsIn(entries) {
   try {
-    const queued = new Set(getFailedSyncs().filter(f => f?.kind === "task" && f.id).map(f => String(f.id)));
+    const queued = new Set(unsentUploads().filter(f => f.kind === "task" && f.id).map(f => String(f.id)));   // task B16: stashed too
     const out = new Set();
     for (const l of entries || []) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) if (i?.id && queued.has(String(i.id))) out.add(String(i.id));
     return [...out];
@@ -622,9 +630,8 @@ export function unsentRowsIn(entries) {
 export function unsentGenerations() {
   const ids = new Set(), predictions = new Set();
   try {
-    for (const f of getFailedSyncs()) {
-      const d = f?.data;
-      if (!d || typeof d !== "object" || (f.kind !== "task" && f.kind !== "history")) continue;
+    for (const f of unsentUploads()) {   // task B16 (review round 29 #3/#4): with the uploads a pending clear stashed
+      const d = f.data;
       for (const g of f.kind === "task" ? [d] : (Array.isArray(d.tasks) ? d.tasks : [])) {
         if (typeof g?.id === "string" && g.id) ids.add(g.id);
         if (typeof g?.taskId === "string" && g.taskId) predictions.add(g.taskId);

@@ -75,7 +75,7 @@ await test("wiring: the cloud publication carries the queued uploads' paths (in 
   // Task B15 (review round 28 #4/#2) rewrote the anchors: one module-level publishUnsent, called by the effect.
   const eff = between("// This tab's Generate form inputs, published for every tab's file flush", "const mediaDuration = url =>");
   assert.match(eff, /publishUnsent\(\);/);
-  const fn = between("async function publishUnsent({ exiting = false } = {}) {", "\n}\n");
+  const fn = between("async function publishUnsentOnce({ exiting = false } = {}) {", "\n}\n")   /* task B16: the chained body */;
   assert.match(fn, /const now = Date\.now\(\), un = unsentGenerations\(\);/);
   assert.match(fn, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths,/);
   assert.equal(S.unsentGenerations().paths.length, 0, "an empty queue publishes no paths");

@@ -21,6 +21,25 @@ const itemOf = (t) => ({ id: t.id, model: t.modelName, status: t.status, wallClo
   outputs: t.outputs || [], error: t.error ?? null, ...(typeof t.taskId === "string" && t.taskId ? { taskId: t.taskId } : {}) });
 
 export const batchLogItems = (tasks) => tasks.map(itemOf);
+
+// Task B16 (migration 20261024100000, K2): the server strips from a History upload an item whose generation a restore
+// removed (a by_restore tombstone) when its stored entry lacks it, so a restore wins over uploads queued before it. This
+// device's copies follow: an entry the cloud also holds loses the items of `restoreRemoved` its cloud copy lacks (else the
+// two differ for good). An item the cloud copy holds (a restore's History-only comeback) stays; an entry the cloud lacks
+// is not decided here (its upload is stripped by the server, and the next pass sees the result). Returns the rewritten
+// entries only; restore removals unread (null): none.
+export function restoreStrippedLogs(local, cloud, restoreRemoved) {
+  if (!(restoreRemoved instanceof Set) || !restoreRemoved.size) return [];
+  const cloudItems = new Map((cloud || []).filter(l => l?.id).map(l => [l.id, new Set((Array.isArray(l.tasks) ? l.tasks : []).map(i => i?.id).filter(Boolean))]));
+  const out = [];
+  for (const l of local || []) {
+    const have = l?.id ? cloudItems.get(l.id) : null;
+    if (!have || !Array.isArray(l.tasks)) continue;
+    const left = l.tasks.filter(i => !(i?.id && restoreRemoved.has(i.id) && !have.has(i.id)));
+    if (left.length !== l.tasks.length) out.push({ ...l, tasks: left, totalCost: totalOf(left) });
+  }
+  return out;
+}
 export const isOpenLog = (log) => (log?.tasks || []).some(i => IN_FLIGHT.has(i?.status));
 const totalOf = (items) => items.reduce((s, i) => s + (i.status === "completed" ? i.cost || 0 : 0), 0);
 

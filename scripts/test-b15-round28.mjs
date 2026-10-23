@@ -71,8 +71,8 @@ await test("storedKeptIds is exported: the stash and queue traces a pass reads b
 
 await test("wiring: the give-back writes IndexedDB synchronously and drops its stash at once (B14's deferral is gone)", () => {
   const apply = between("const applyClearStashes = (which, held = {}) =>", "const settleClearStashes = ");
-  assert.match(apply, /saveTasksNow\(backTasks\);/);
-  assert.match(apply, /addHistoryEntriesNow\(backLogs\);/);
+  assert.match(apply, /saveTasksNow\(\[\.\.\.backTasks, \.\.\.shownTasks\]\);/);   // task B16: + the shown copies
+  assert.match(apply, /addHistoryEntriesNow\(\[\.\.\.backLogs, \.\.\.shownLogs\]\);/);
   assert.match(apply, /applyRelinks\(\[\.\.\.heldTasks\.values\(\), \.\.\.backTasks\]\);[^\n]*\n(\s*\/\/[^\n]*\n)*\s*dropGivenBackStash\(s\);/);
   assert.ok(!/givingBackRef|Promise\.allSettled\(writes\)/.test(src), "no deferred drop, no skip set");
 });
