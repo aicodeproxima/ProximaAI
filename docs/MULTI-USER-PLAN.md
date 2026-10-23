@@ -288,7 +288,9 @@ a device list with "sign out other devices".
 - R2 and R3, SQL:
   - `scripts/test-mu-matrix.sql` runs rolled back, as anon with minted tokens for two seeded accounts, over every table
     × command, storage operation and browser-callable definer function;
-  - `scripts/test-mu-catalog.sql` holds the catalog gates;
+  - `scripts/test-mu-catalog.sql` holds the catalog gates (built 2026-10-23). Today it reads 11 PASS / 2 FAIL by
+    design: G1 (16 row policies admit any valid session) and G2 (4 storage policies lack a folder check) are the walls P4
+    builds. Failing-first with one planted defect per other gate: all 10 predicted FAILs;
   - `scripts/test-mu-auth.sql` covers the lockout, epoch, backup code and topic per account;
   - the existing test-rls-* and feature suites keep passing unchanged.
 - R2, live: `scripts/tools/mu-probe.mjs` drives two test accounts over REST, Storage and Realtime and reports counts
@@ -312,3 +314,23 @@ a device list with "sign out other devices".
 - Deviations from the research:
   - D5 keeps global UUID ids instead of composite keys;
   - D1 keeps ProximaAI's own sign-in instead of Supabase Auth, with the lenses split 2–1.
+
+## Appendix A. P4 definer audit (2026-10-23)
+Generated from the live catalog (function definitions only, no rows): 49 SECURITY DEFINER functions in public, 23 of
+them browser-callable. All pin search_path, none is executable through PUBLIC, and every browser-callable one checks
+the session except the two that run before a session exists. P4 must make each derive the ACCOUNT (not just "a valid
+session") and filter every statement by it. "Owner" is the session whose files hold the function today; a change goes
+through that owner or a handover.
+
+| Group | Functions | Owner | What P4 needs |
+|---|---|---|---|
+| Before a session exists | verify_admin(p_username, p_password), unlock_admin_with_backup_code | lockdown (P1) | per-account lockout and backup code; one generic error |
+| Account rows in global app_secrets | change_my_password, set_admin_backup_code, set_admin_credentials_rehash, set_my_account, get_my_account, rename_my_account, get_auto_backups, set_auto_backups, _reauth_admin, _revoke_admin_sessions, _verify_session_token, _sign_session_token | lockdown (P1) | move to proxima_auth.users; rename becomes a username update (P3); auto_backups per account |
+| Keys | set_my_wavespeed_key, get_my_wavespeed_key (service role only) | lockdown (P5) | Vault, keyed by the account id |
+| Data RPCs scoped by the token's device_id | delete_queued_rows, clear_queued_rows, reset_queued_rows, upsert_queued_history, generations_live, paths_in_use, purge_my_backups_of, list_my_backups_phase2, delete_my_backup_phase2, snapshot_my_data_phase2, restore_my_backup_phase2, server_time_ms | lockdown (delete/backup area) | already scope their DML; audit existence checks too (e.g. _clear_kind's tombstone and "no tasks row" lookups match by id across scopes) |
+| Webhook (service role) | ws_webhook_apply, ws_webhook_sweep, ws_predictions_deleted, _tasks_take_webhook, _tasks_settle_webhook, _tasks_purge_webhook_events | webhook session | route per account; match (account, task_id); record the account on deleted predictions |
+| Backups and scrubs (cron, triggers) | create_auto_backup, _drain_backup_scrubs, _scrub_backups, _scrub_backups_to_live_items, _backup_scrub_follow_rename, _history_queue_backup_scrub, _history_queue_item_scrub, _tasks_queue_backup_scrub, _auto_backups_on | lockdown (delete/backup area) | per-account loops with batch limits, SKIP LOCKED and timeouts; the per-account switch |
+| Row triggers | _history_drop_emptied, _history_strip_deleted_items, _rows_keep_owner, _rows_not_tombstoned, sync_tombstone_record, sync_tombstone_clear | lockdown / RLS | use NEW/OLD.device_id throughout; tombstone lookups by (device_id, id) |
+
+Browser-callable functions with an account argument: only verify_admin (sign-in by name, by design); the three scrub
+helpers that take p_username are server-only. G6/G7 of scripts/test-mu-catalog.sql keep it that way.
