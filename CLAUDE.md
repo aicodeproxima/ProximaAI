@@ -76,7 +76,8 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   is confirmed to name it (App.jsx publishUnsentBefore); it is also published as the page hides or closes. A hold counts 7 days after its last
   heartbeat (`FORM_HOLD_ALIVE_MS`): a page Chrome froze sends nothing but still holds its form. A History entry with
   an item whose task this device lacks is rewritten, not removed, and the server strips items of deleted tasks from
-  every History upload (`history_strip_deleted_items`). A confirmed delete whose row shows up again without a restore is
+  every History upload (`history_strip_deleted_items`); since 20261024100000 also the items of generations a restore
+  removed that the stored entry lacks (a restore wins over uploads queued before it; every device drops them from its copy). A confirmed delete whose row shows up again without a restore is
   deleted again, but only a confirm this build marked final (`proximaai-final-confirms`; a previous build's is released).
   A restore wins over every delete queued before it: deletes, clears and a delete's History rewrites go only through
   restore-checked functions that take the account's marker (settings `last_restore_at`, server-only since 20261022301000)
