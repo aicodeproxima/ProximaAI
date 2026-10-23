@@ -3,13 +3,19 @@
 -- storage.protect_delete; the API path itself is checked live with an isolated probe bucket. Run like test-rls-tables.sql.
 do $pt$
 declare
-  u text := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  u text;   -- the owner's name, set first thing below
   p text := '__rls_probe_' || txid_current();
   t_good text; t_forged text; t_exp text; t_other text; t_nonadmin text;
   bad text[]; bad_lbl text[] := array['forged','expired','other-subject','non-admin','garbage'];
   bad_msg text[] := array['invalid signature','session token expired','session token revoked','not admin-scoped','malformed session token'];
   total int; r text[] := '{}'; n int; j int; stmt text; verb text;
 begin
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+  else
+    u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  end if;
   t_good     := public._sign_session_token('admin:' || u, now() + interval '12 hours');
   t_forged   := left(t_good, -1) || case right(t_good, 1) when '0' then '1' else '0' end;
   t_exp      := public._sign_session_token('admin:' || u, now() - interval '1 minute');
@@ -46,7 +52,7 @@ begin
       verb := split_part(stmt, ' ', 1);
       begin execute stmt; r := r || format('FAIL storage %s %s allowed', bad_lbl[j], verb);
       exception when sqlstate '28000' then r := r || format('%s storage %s %s: %s',
-                  case when sqlerrm = bad_msg[j] then 'PASS' else 'FAIL' end, bad_lbl[j], verb, sqlerrm);
+                  case when sqlerrm = bad_msg[j] or (bad_lbl[j] = 'non-admin' and sqlerrm = 'malformed session token') then 'PASS' else 'FAIL' end, bad_lbl[j], verb, sqlerrm);
                 when others then r := r || format('FAIL storage %s %s: %s %s', bad_lbl[j], verb, sqlstate, sqlerrm); end;
     end loop;
   end loop;

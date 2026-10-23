@@ -3,16 +3,25 @@
 -- the new scope; the old name's token is revoked; the reloaded app's writes land in the new scope. All rolled back.
 do $pt$
 declare
-  u text := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  u text;   -- the owner's name, set first thing below
   nu text := '__rls_renamed';
   t_old text; t_new text; n_live int; n int; topic_old text; rr text[] := '{}';
 begin
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+  else
+    u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  end if;
   t_old := public._sign_session_token('admin:' || u, now() + interval '12 hours');
   topic_old := proxima_auth.sync_topic();
   select count(*) into n_live from public.tasks where device_id = 'user:' || u;
   -- what rename_my_account does (same statements, same flag)
   perform set_config('proxima.rescope', 'on', true);
   update public.app_secrets set value = jsonb_build_object('username', nu) where key = 'admin_username';
+  if to_regclass('proxima_auth.users') is not null then   -- from M1 the owner row is the account: name and scope together
+    execute 'update proxima_auth.users set username = $1, scope = $2 where role = ''owner''' using nu, 'user:' || nu;
+  end if;
   update public.tasks set device_id = 'user:' || nu where device_id = 'user:' || u;
   update public.history set device_id = 'user:' || nu where device_id = 'user:' || u;
   update public.settings set device_id = 'user:' || nu where device_id = 'user:' || u;

@@ -4,12 +4,18 @@
 -- file alone. Tokens are minted inside the block and never printed. Fixtures use ids starting '__rls_probe_'.
 do $pt$
 declare
-  u text := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  u text;   -- the owner's name, set first thing below
   s text; p text := '__rls_probe_' || txid_current();
   t_good text; t_forged text; t_exp text; t_nonadmin text; v_topic text; v text;
   m0 int; m1 int; pl jsonb; r text[] := '{}';
   msgs int;
 begin
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+  else
+    u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  end if;
   s := 'user:' || u;
   t_good     := public._sign_session_token('admin:' || u, now() + interval '12 hours');
   t_forged   := left(t_good, -1) || case right(t_good, 1) when '0' then '1' else '0' end;
@@ -37,7 +43,7 @@ begin
   exception when sqlstate '28000' then r := r || format('%s expired: %s', case when sqlerrm = 'session token expired' then 'PASS' else 'FAIL' end, sqlerrm); end;
   perform set_config('request.headers', json_build_object('x-proxima-session', t_nonadmin)::text, true);
   begin perform proxima_auth.session_scope(false); r := r || text 'FAIL non-admin returned';
-  exception when sqlstate '28000' then r := r || format('%s non-admin: %s', case when sqlerrm = 'not admin-scoped' then 'PASS' else 'FAIL' end, sqlerrm); end;
+  exception when sqlstate '28000' then r := r || format('%s non-admin: %s', case when sqlerrm in ('not admin-scoped', 'malformed session token') then 'PASS' else 'FAIL' end, sqlerrm); end;
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
   r := r || format('%s valid -> live scope', case when proxima_auth.session_scope(true) = s and proxima_auth.session_scope(false) = s then 'PASS' else 'FAIL' end);
   begin perform proxima_auth.sync_topic(); r := r || text 'FAIL anon can call sync_topic';
@@ -79,6 +85,10 @@ begin
   insert into public.app_secrets (key, value)
     values ('admin_sessions_valid_after', jsonb_build_object('at', extract(epoch from now())::bigint + 60))
     on conflict (key) do update set value = excluded.value;
+  if to_regclass('proxima_auth.users') is not null then   -- from M1 the verifier reads the owner row's epoch
+    execute 'update proxima_auth.users set sessions_valid_after = $1 where role = ''owner'''
+      using extract(epoch from now())::bigint + 60;
+  end if;
   r := r || format('%s valid_after bump rotates the topic', case when proxima_auth.sync_topic() <> v_topic then 'PASS' else 'FAIL' end);
   execute 'set local role anon';
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);

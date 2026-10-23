@@ -2,9 +2,15 @@
 -- present, token as p_session_token). Everything rolls back, including the snapshot and the restore. Run alone (live).
 do $pt$
 declare
-  u text := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  u text;   -- the owner's name, set first thing below
   s text; tok text; r json; n_before int; h_before int; n_after int; h_after int; bid uuid; rr text[] := '{}';
 begin
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+  else
+    u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  end if;
   s := 'user:' || u;
   tok := public._sign_session_token('admin:' || u, now() + interval '12 hours');
   select count(*) into n_before from public.tasks where device_id = s;

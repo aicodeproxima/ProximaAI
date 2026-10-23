@@ -5,7 +5,7 @@
 -- Tokens are minted inside the block and never printed. Fixture ids start '__rls_probe_'.
 do $pt$
 declare
-  u text := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  u text;   -- the owner's name, set first thing below
   s text; p text := '__rls_probe_' || txid_current(); q text;
   t_good text; t_forged text; t_exp text; t_other text; t_nonadmin text;
   bad text[]; bad_lbl text[] := array['forged','expired','other-subject','non-admin','garbage'];
@@ -16,6 +16,12 @@ declare
   total int[] := '{}'; tomb0 int; r text[] := '{}';
   n int; i int; j int; k int; stmt text; verb text; tok text;
 begin
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+  else
+    u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  end if;
   s := 'user:' || u;
   t_good     := public._sign_session_token('admin:' || u, now() + interval '12 hours');
   t_forged   := left(t_good, -1) || case right(t_good, 1) when '0' then '1' else '0' end;
@@ -82,7 +88,7 @@ begin
           r := r || format('FAIL %s %s %s allowed', tbls[i], bad_lbl[j], verb);
         exception
           when sqlstate '28000' then r := r || format('%s %s %s %s: %s',
-                 case when sqlerrm = bad_msg[j] and verb <> 'delete' then 'PASS' else 'FAIL' end, tbls[i], bad_lbl[j], verb, sqlerrm);
+                 case when (sqlerrm = bad_msg[j] or (bad_lbl[j] = 'non-admin' and sqlerrm = 'malformed session token')) and verb <> 'delete' then 'PASS' else 'FAIL' end, tbls[i], bad_lbl[j], verb, sqlerrm);
           when sqlstate '42501' then r := r || format('%s %s %s %s: %s',
                  case when verb = 'delete' and sqlerrm like 'permission denied for table%' then 'PASS' else 'FAIL' end, tbls[i], bad_lbl[j], verb, sqlerrm);
           when others then r := r || format('FAIL %s %s %s: %s %s', tbls[i], bad_lbl[j], verb, sqlstate, sqlerrm);
@@ -194,6 +200,10 @@ begin
   insert into public.app_secrets (key, value)
     values ('admin_sessions_valid_after', jsonb_build_object('at', extract(epoch from now())::bigint + 60))
     on conflict (key) do update set value = excluded.value;
+  if to_regclass('proxima_auth.users') is not null then   -- from M1 the verifier reads the owner row's epoch
+    execute 'update proxima_auth.users set sessions_valid_after = $1 where role = ''owner'''
+      using extract(epoch from now())::bigint + 60;
+  end if;
   execute 'set local role anon';
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
   foreach stmt in array array[

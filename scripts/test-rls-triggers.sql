@@ -3,10 +3,16 @@
 -- Since 20261022350000 browser roles have no DELETE: deletes go through delete_queued_rows, as the app's do.
 do $pt$
 declare
-  u text := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  u text;   -- the owner's name, set first thing below
   s text; p text := '__rls_probe_' || txid_current(); t_good text; r text[] := '{}'; n int; v text;
   qat bigint := (extract(epoch from clock_timestamp()) * 1000)::bigint + 60000;   -- a queue time after any restore
 begin
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+  else
+    u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  end if;
   s := 'user:' || u;
   t_good := public._sign_session_token('admin:' || u, now() + interval '12 hours');
   insert into public.tasks (id, device_id)     values (p || '_orphan',  'user:__rls_orphan');   -- what a rename can leave behind

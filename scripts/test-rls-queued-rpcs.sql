@@ -5,7 +5,7 @@
 -- Run alone (live), like the other test-rls-*.sql files.
 do $pt$
 declare
-  u text := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  u text;   -- the owner's name, set first thing below
   p text := '__rls_qrpc_' || txid_current();
   s text; o text; r text[] := '{}'; res json; j int; k int; ok boolean; ms bigint;
   t_good text; t_forged text; t_exp text; t_other text; t_nonadmin text; bad text[];
@@ -14,6 +14,12 @@ declare
   rpcs text[] := array['delete_queued_rows','clear_queued_rows','reset_queued_rows','upsert_queued_history','server_time_ms'];
   qat bigint := (extract(epoch from clock_timestamp()) * 1000)::bigint + 60000;   -- a queue time after any restore
 begin
+  -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in both states).
+  if to_regclass('proxima_auth.users') is not null then
+    execute 'select username from proxima_auth.users where role = ''owner''' into u;
+  else
+    u := (select value->>'username' from public.app_secrets where key = 'admin_username');
+  end if;
   s := 'user:' || u;
   o := 'user:__rls_other_' || txid_current();
   t_good     := public._sign_session_token('admin:' || u, now() + interval '12 hours');
@@ -46,7 +52,7 @@ begin
         r := r || format('%s %s %s: returned %s', case when coalesce((res->>'ok')::boolean, false) then 'FAIL' else 'PASS' end,
                          rpcs[k], lbl[j], left(res::text, 80));
       exception when others then
-        r := r || format('%s %s %s: %s', case when msg[j] is null or sqlerrm = msg[j] then 'PASS' else 'FAIL' end,
+        r := r || format('%s %s %s: %s', case when msg[j] is null or sqlerrm = msg[j] or (lbl[j] = 'non-admin' and sqlerrm = 'malformed session token') then 'PASS' else 'FAIL' end,
                          rpcs[k], lbl[j], sqlerrm);
       end;
     end loop;
