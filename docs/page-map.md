@@ -157,6 +157,9 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
 - Cloud: Supabase `vhznmpxlcjbdzntmfvvy`, tables `tasks`, `history`, `sync_tombstones`; scope column
   `device_id = "user:<username>"`. Sync design: `src/lib/syncReconcile.js`. Since 2026-10-22 every row is readable and
   writable only with a valid session, and writes only into the session's own scope (see "Data access and security").
+- Tombstone rule (migration 20261023500000, applied 2026-10-23 21:30:50 UTC): every id a delete/clear/reset names gets a user tombstone in
+  the caller's scope even without a row, and a tombstone drops inserts/upserts of its id only in its own scope
+  (`_rows_not_tombstoned`); test: `scripts/test-tombstone-rowless-db.sql`; sim: `run.mjs --server v2`.
 
 ## Gotchas
 - The Claude in Chrome JS tool times out at 45 s: start long work without awaiting it, store the result on `window`,

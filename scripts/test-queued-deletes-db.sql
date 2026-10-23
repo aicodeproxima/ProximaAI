@@ -108,7 +108,11 @@ begin
 
   -- 8. Review round 6 (migration 20261022263000): a user delete of a generation without a tasks row (History-only, e.g.
   --    after a restore) records a user tombstone, so other devices drop its History item and uploads are stripped of it.
-  --    A restore's tombstone becomes a user one; an id nothing holds gets no tombstone.
+  --    A restore's tombstone becomes a user one. An id nothing holds: before 20261023500000 no tombstone; from it (sim
+  --    F1, review tombcrit #2) every named rowless id gets a user tombstone in the caller's scope. Stage-aware: the rule
+  --    counts as live when delete_queued_rows' body carries that migration's marker '20261023500000'.
+  declare v_rowless boolean := position('20261023500000' in
+            (select prosrc from pg_proc where oid = 'public.delete_queued_rows(text,text,text[],bigint)'::regprocedure)) > 0;
   begin
     insert into history (id, device_id, timestamp, tasks, total_cost) values
       ('qd-HE', u, 1000, '[{"id":"qd-honly","status":"completed","cost":1,"outputs":[]},{"id":"qd-capped","status":"completed","cost":1,"outputs":[]}]', 2);
@@ -116,8 +120,11 @@ begin
     r := delete_queued_rows(v_tok, 'task', array['qd-honly', 'qd-capped', 'qd-nothing'], 9e12::bigint);
     out := out || case when exists (select 1 from sync_tombstones where id = 'qd-honly' and kind = 'task' and device_id = u and not by_restore)
                         and exists (select 1 from sync_tombstones where id = 'qd-capped' and not by_restore)
-                        and not exists (select 1 from sync_tombstones where id = 'qd-nothing')
-      then 'ok user-tombstone-for-history-only; '
+                        and case when v_rowless
+                                 then exists (select 1 from sync_tombstones where id = 'qd-nothing' and kind = 'task' and device_id = u and not by_restore)
+                                      and (select count(*) from sync_tombstones where id = 'qd-nothing') = 1
+                                 else not exists (select 1 from sync_tombstones where id = 'qd-nothing') end
+      then format('ok user-tombstone-for-history-only (%s); ', case when v_rowless then 'rowless rule live' else 'before rowless rule' end)
       else format('FAIL user-tombstone-for-history-only %s; ', (select string_agg(id || ':' || by_restore, ',') from sync_tombstones where id like 'qd-%')) end;
   exception when others then out := out || format('FAIL user-tombstone-for-history-only %s %s; ', sqlstate, sqlerrm); end;
 
