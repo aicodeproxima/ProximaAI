@@ -5,7 +5,8 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload, pendingDeleteIds, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload, pendingDeleteIds, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads,
+  buildClearStash, writeClearStash, readClearStashes, dropClearStash, stashedItems, allStoredHistory, allStoredTasks } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -340,6 +341,55 @@ test("putBackQueuedUploads: re-inserts the exact entries; a newer entry of the s
   putBackQueuedUploads([]); putBackQueuedUploads(undefined);
   assert.equal(getFailedSyncs().length, 3);
 });
+
+// Review round 14: a clear whose call got no answer and that a restore voids later, at a replay, lost the uploads it took
+// and its local-only items (the in-memory copies died with the page). It stores them first, keyed by its queue time.
+test("buildClearStash keeps only what the cloud cannot give back", () => {
+  const uploads = [{ kind: "task", id: "q", data: { id: "q" }, ts: 1 }, { kind: "history", id: "Lq", data: { id: "Lq" }, ts: 1 }, null];
+  const s = buildClearStash({ uploads, tasks: [{ id: "q" }, { id: "inCloud" }, { id: "local" }, null, {}],
+    logs: [{ id: "Lq" }, { id: "Lc" }, { id: "Ll" }], cloudTaskIds: new Set(["inCloud"]), cloudLogIds: new Set(["Lc"]) });
+  assert.deepEqual(s.uploads.map(e => e.id), ["q", "Lq"]);
+  assert.deepEqual(s.tasks.map(t => t.id), ["local"], "cloud rows and items carried by a queued upload are left out");
+  assert.deepEqual(s.logs.map(l => l.id), ["Ll"]);
+  const noRead = buildClearStash({ logs: [{ id: "a" }, { id: "b" }] });
+  assert.deepEqual(noRead.logs.map(l => l.id), ["a", "b"], "no cloud read: every planned local item counts");
+  assert.deepEqual(buildClearStash(), { uploads: [], tasks: [], logs: [] });
+});
+test("writeClearStash / readClearStashes / dropClearStash: one key per clear queue time, oldest first", () => {
+  assert.equal(writeClearStash(200, { uploads: [{ kind: "task", id: "t", data: { id: "t" } }], tasks: [{ id: "x" }] }), true);
+  assert.equal(writeClearStash(100, { logs: [{ id: "L" }] }), true);
+  assert.equal(writeClearStash(NaN, {}), false);
+  mem.set("proximaai-clear-stash:300", "{broken");
+  mem.set("unrelated", "1");
+  assert.ok(mem.has("proximaai-clear-stash:200"), "the key names the queue time");
+  const all = readClearStashes();
+  assert.deepEqual(all.map(s => s.at), [100, 200], "unparsable stash skipped");
+  assert.deepEqual(all[1], { uploads: [{ kind: "task", id: "t", data: { id: "t" } }], tasks: [{ id: "x" }], logs: [], at: 200 });
+  dropClearStash(100);
+  assert.deepEqual(readClearStashes().map(s => s.at), [200]);
+  assert.equal(mem.get("unrelated"), "1");
+});
+test("stashedItems: stashed items plus the taken uploads' data, each id once, none being deleted again", () => {
+  const stash = { tasks: [{ id: "a" }], logs: [{ id: "L1" }],
+    uploads: [{ kind: "task", id: "b", data: { id: "b" } }, { kind: "task", id: "gone", data: { id: "gone" } }, { kind: "history", id: "L2", data: { id: "L2" } },
+      { kind: "model-favorites", id: "x", data: { id: "x" } }] };
+  const r = stashedItems(stash, { deletingTasks: new Set(["gone"]) });
+  assert.deepEqual(r.tasks.map(t => t.id), ["a", "b"]);
+  assert.deepEqual(r.logs.map(l => l.id), ["L1", "L2"]);
+  assert.deepEqual(stashedItems(null), { tasks: [], logs: [] });
+});
+
+// Review round 14: Clear Logs / Reset plan over every stored entry, not only the 500 loaded. Without IndexedDB (node)
+// History falls back to localStorage and tasks to none.
+mem.clear();
+mem.set("proximaai-logs", JSON.stringify([{ id: "a" }, null, { id: "b" }]));
+try {
+  assert.deepEqual((await allStoredHistory()).map(l => l.id), ["a", "b"]);
+  assert.deepEqual(await allStoredTasks(), []);
+  mem.clear();
+  assert.deepEqual(await allStoredHistory(), []);
+  n++; console.log("ok - allStoredHistory / allStoredTasks fall back without IndexedDB");
+} catch (e) { failed++; console.log("FAIL - allStoredHistory / allStoredTasks fallback\n   ", e.message); }
 
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

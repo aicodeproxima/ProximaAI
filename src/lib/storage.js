@@ -159,6 +159,21 @@ export async function getHistory(limit = 500) {
   }
 }
 
+// Every History entry this device stores, not only the 500 loaded (Clear Logs / Reset plan over them, review round 14),
+// newest first; the localStorage fallback when IndexedDB is unavailable. Nothing is pruned or written.
+export async function allStoredHistory() {
+  try {
+    const store = await tx("history");
+    const all = (await wrapRequest(store.getAll())) || [];
+    return all.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  } catch {
+    try {
+      const logs = JSON.parse(localStorage.getItem("proximaai-logs") || "[]");
+      return Array.isArray(logs) ? logs.filter(l => l && l.id) : [];
+    } catch { return []; }
+  }
+}
+
 export async function clearHistory() {
   try {
     const store = await tx("history", "readwrite");
@@ -271,6 +286,15 @@ export async function deleteTask(id) {
 export async function deleteTasks(ids) {
   if (!Array.isArray(ids) || ids.length === 0) return;
   await batchDelete("tasks", ids);
+}
+
+// Every task this device stores, any status, not only the 500 loaded (Reset plans over them, review round 14). Nothing
+// is pruned or written; none when IndexedDB is unavailable.
+export async function allStoredTasks() {
+  try {
+    const store = await tx("tasks");
+    return (await wrapRequest(store.getAll())) || [];
+  } catch { return []; }
 }
 
 export async function getCompletedTasks(limit = 200) {
@@ -806,6 +830,61 @@ export function putBackQueuedUploads(entries) {
     }
     localStorage.setItem(FAILED_KEY, JSON.stringify(list));
   } catch {}
+}
+
+// A clear whose call got no answer may be voided later, at a replay, by a restore that landed after it (restoreGuard,
+// or the server's restore check). The rule then is that nothing of this device is lost (review round 14), but the
+// in-memory copies the clear kept for its own voided branch are gone with the page. So before it takes anything from the
+// queue, the clear stores what the cloud cannot give back: the queued upload entries it takes, and the planned
+// tasks / History entries that only this device holds (not in its cloud read, no queued upload). Keyed by the clear's
+// queue time (its intents' ts). Dropped when the clear answers, or once none of its intents is left queued.
+const CLEAR_STASH_PREFIX = "proximaai-clear-stash:";
+// The stash of one clear, kept small: only what the cloud does not have. `uploads`: the queue entries the clear will
+// take; `tasks` / `logs`: the planned local items; `cloudTaskIds` / `cloudLogIds`: ids the cloud read held (null = no
+// read: every planned local item counts as local-only). An item whose upload is stashed is carried by that entry.
+export function buildClearStash({ uploads = [], tasks = [], logs = [], cloudTaskIds = null, cloudLogIds = null } = {}) {
+  const queued = new Set((uploads || []).map(e => `${e?.kind}\u0000${e?.id}`));
+  const local = (items, kind, cloud) => (items || []).filter(x => x && x.id && !(cloud && cloud.has(x.id)) && !queued.has(`${kind}\u0000${x.id}`));
+  return { uploads: (uploads || []).filter(e => e && e.kind && e.id), tasks: local(tasks, "task", cloudTaskIds), logs: local(logs, "history", cloudLogIds) };
+}
+// Says whether it was stored (a full localStorage refuses it; the clear goes on, as it did before stashes existed).
+export function writeClearStash(at, stash) {
+  if (!Number.isFinite(Number(at))) return false;
+  try {
+    localStorage.setItem(CLEAR_STASH_PREFIX + Number(at), JSON.stringify({ uploads: stash?.uploads || [], tasks: stash?.tasks || [], logs: stash?.logs || [], at: Number(at) }));
+    return true;
+  } catch { return false; }
+}
+// Every stored stash, oldest first.
+export function readClearStashes() {
+  const out = [];
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(CLEAR_STASH_PREFIX)) keys.push(k); }
+    for (const k of keys) {
+      const at = Number(k.slice(CLEAR_STASH_PREFIX.length));
+      if (!Number.isFinite(at)) continue;
+      try {
+        const s = JSON.parse(localStorage.getItem(k) || "null");
+        if (s) out.push({ uploads: Array.isArray(s.uploads) ? s.uploads : [], tasks: Array.isArray(s.tasks) ? s.tasks : [], logs: Array.isArray(s.logs) ? s.logs : [], at });
+      } catch {}
+    }
+  } catch {}
+  return out.sort((a, b) => a.at - b.at);
+}
+export function dropClearStash(at) {
+  try { localStorage.removeItem(CLEAR_STASH_PREFIX + Number(at)); } catch {}
+}
+// The local items a voided clear's stash gives back: its tasks and History entries plus the data of the upload entries
+// it took, each id once, none that is queued for deletion again (a later delete of the same id).
+export function stashedItems(stash, { deletingTasks = new Set(), deletingLogs = new Set() } = {}) {
+  const pick = (items, kind, deleting) => {
+    const byId = new Map();
+    for (const x of [...(items || []), ...(stash?.uploads || []).filter(e => e?.kind === kind).map(e => e.data)])
+      if (x && typeof x === "object" && x.id && !deleting.has(x.id) && !byId.has(x.id)) byId.set(x.id, x);
+    return [...byId.values()];
+  };
+  return { tasks: pick(stash?.tasks, "task", deletingTasks), logs: pick(stash?.logs, "history", deletingLogs) };
 }
 
 export function clearFailedSyncs() {

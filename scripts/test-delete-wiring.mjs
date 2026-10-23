@@ -103,7 +103,9 @@ test("Clear Outputs and Reset plan over this device's state captured BEFORE the 
     const snap = h.indexOf("await serverTimeRemote()");
     const lt = h.indexOf("const localTasks = tasksRef.current.slice()"), ll = h.indexOf("const localLogs = logsRef.current.slice()");
     assert.ok(lt >= 0 && ll >= 0 && lt < snap && ll < snap, `${name}: local state captured before the snapshot`);
-    assert.match(h, /new Map\(localTasks\.map\(t => \[t\.id, t\]\)\)/, `${name}: tasks planned from the capture`);
+    // Reset's copy also holds every task stored here beyond the loaded ones (round 14); the loaded version wins.
+    assert.match(h, name === "Reset" ? /new Map\(\[\.\.\.storedTasks, \.\.\.localTasks\]\.map\(t => \[t\.id, t\]\)\)/ : /new Map\(localTasks\.map\(t => \[t\.id, t\]\)\)/,
+      `${name}: tasks planned from the capture`);
     assert.match(h, new RegExp(`remote\\.tasks[\\s\\S]{0,160}Date\\.parse\\(t\\.createdAt\\) > ${v}`), `${name}: later rows skipped`);
   }
   const h = outputs();
@@ -118,7 +120,7 @@ test("Clear Outputs and Reset plan over this device's state captured BEFORE the 
     "a generation with any row in the read is not History-only");
   assert.doesNotMatch(h, /clearTasksDB\(/, "Clear Outputs removes only the planned ids here");
   assert.match(h, /deleteTasks\(/);
-  assert.match(reset(), /new Map\(localLogs\.map\(l => \[l\.id, l\]\)\)/);
+  assert.match(reset(), /new Map\(\[\.\.\.storedLogs, \.\.\.localLogs\]\.map\(l => \[l\.id, l\]\)\)/);
 });
 // Review round 12 (F5): Clear Logs stamped its clear with the device's estimate of the server time.
 test("Clear Logs takes the server's time before anything changes and clears / queues at it", () => {
@@ -143,8 +145,8 @@ test("the three clears copy their state and peek the queue BEFORE the snapshot, 
   }
   assert.doesNotMatch(src, /dropQueuedUploads/, "nothing drops the whole queue any more");
   const s = logs.indexOf("await serverTimeRemote()");
-  assert.ok(logs.indexOf("const removedLogIds = logsRef.current.map(l => l.id)") < s && logs.indexOf("const removedLogIds") >= 0,
-    "Clear Logs copies its History ids before the snapshot");
+  const copied = logs.indexOf("const removedLogIds = [...new Set([...logsRef.current.map(l => l.id), ...storedLogs.map(l => l.id)])]");
+  assert.ok(copied >= 0 && copied < s, "Clear Logs copies its History ids (loaded and stored) before the snapshot");
   assert.doesNotMatch(logs.slice(s), /removedLogIds = |queuedLogIds/, "nothing read after the snapshot is named");
   assert.match(logs, /takeQueuedUploads\("history", clearedLogIds\)/);
   assert.doesNotMatch(logs, /savedLogIds\.current\.clear\(\)/, "an entry that arrived after the copy stays saved here");
@@ -186,6 +188,98 @@ test("a voided clear puts back this device's tasks, History entries and the queu
 test("History uploads leave out only generations whose delete is still in flight", () => {
   assert.equal(src.match(/withoutDeleting\([^;]*pendingDeleteIds\("task-delete"\)\)/g)?.length, 2);
   assert.doesNotMatch(src, /withoutDeleting\([^;]*deletingIds\.current/);
+});
+
+// ─── Review round 14 ───
+const logsH = () => between('createBackup("pre-clear-logs"', ">Clear Logs</button>");
+const voidedOf = (h, key) => { const i = h.indexOf(key); assert.ok(i >= 0, `voided branch: ${key}`); return h.slice(i, h.indexOf("return;", i)); };
+// Reset wiped this device entirely (a generation another device synced in after the snapshot, or one started here
+// meanwhile, was lost here) and cleared IndexedDB beyond the planned ids.
+test("Reset removes locally ONLY its planned ids, and plans over every task and History entry stored here", () => {
+  const h = reset();
+  assert.doesNotMatch(h, /setTasks\(\[\]\)|setLogs\(\[\]\)/, "no wholesale state wipe");
+  assert.doesNotMatch(h, /clearTasksDB\(|clearHistory\(/, "no wholesale IndexedDB wipe");
+  assert.doesNotMatch(h, /savedTaskIds\.current\.clear\(\)|savedLogIds\.current\.clear\(\)/);
+  assert.match(h, /setTasks\(prev => prev\.filter\(t => !plannedTaskIds\.has\(t\.id\)\)\)/);
+  assert.match(h, /setLogs\(prev => prev\.filter\(l => !plannedLogIds\.has\(l\.id\)\)\)/);
+  assert.match(h, /await deleteTasks\(clearedTaskIds\)/);
+  assert.match(h, /await deleteHistoryEntries\(clearedLogIds\)/);
+  const snap = h.indexOf("await serverTimeRemote()");
+  const st = h.indexOf("await allStoredTasks()"), sl = h.indexOf("await allStoredHistory()");
+  assert.ok(st >= 0 && sl >= 0 && st < snap && sl < snap, "the stored copies are read before the snapshot");
+  assert.doesNotMatch(src, /clearTasksDB|clearHistory\b/, "nothing wipes the local stores wholesale any more");
+  assert.doesNotMatch(h, /comes back on the next pass|wiped entirely/, "comments no longer claim a post-snapshot generation is wiped");
+});
+test("Clear Logs plans over every stored entry and deletes only the planned ids from IndexedDB", () => {
+  const h = logsH();
+  const snap = h.indexOf("await serverTimeRemote()"), stored = h.indexOf("await allStoredHistory()");
+  assert.ok(stored >= 0 && stored < snap, "stored entries read before the snapshot");
+  assert.doesNotMatch(h, /clearHistory\(/);
+  assert.match(h, /await deleteHistoryEntries\(clearedLogIds\)/);
+  assert.doesNotMatch(h, /for \(const l of logsRef\.current\) if \(!clearedLogSet\.has\(l\.id\)\) addHistoryEntry\(l\)/, "no write-back after a wipe");
+});
+// A late submit whose task was merely missing from a stale tasksRef deleted a paid result on WaveSpeed.
+test("keepLateSubmitId deletes the prediction only when the task is being deleted (deletingIds or a queued intent)", () => {
+  const h = between("function keepLateSubmitId(", "const submittingIds = useRef(");
+  assert.match(h, /const deleting = deletingIds\.current\.has\(id\) \|\| pendingDeleteIds\("task-delete"\)\.has\(id\)/);
+  assert.match(h, /if \(!cur\) \{ if \(deleting\) deleteOnWaveSpeed\(/);
+  assert.equal(h.match(/deleteOnWaveSpeed\(/g)?.length, 1);
+});
+// An archive that finished after its task was deleted saved and synced it again (the generation came back).
+test("onCloudArchiveTask: a task deleted meanwhile queues its uploaded files for deletion and is not saved", () => {
+  const h = between("const onCloudArchiveTask = useCallback(", "const onCopyUrlTask = useCallback(");
+  const guard = h.indexOf("if (deletingIds.current.has(task.id) || !tasksRef.current.some(t => t.id === task.id))");
+  assert.ok(guard >= 0 && guard > h.indexOf("await archiveUrl(") && guard < h.indexOf("saveTask(updated)"), "checked after the uploads, before any save");
+  const g = h.slice(guard, h.indexOf("return;", guard));
+  assert.match(g, /writeFileDeletes\(queueFileDeletes\(readFileDeletes\(\), paths, /);
+  assert.doesNotMatch(g, /saveTask|addFailedSync|syncTask/);
+});
+test("voided branches: Reset restores the favorites it reset; Clear Outputs puts back only current History versions", () => {
+  const h = reset();
+  const fav = h.indexOf("const favoritesBefore = "), resetFav = h.indexOf("favoriteModelsRef.current = emptyFavorites");
+  assert.ok(fav >= 0 && fav < resetFav, "favorites state snapshot before the local reset");
+  assert.match(h, /favoritesBefore\.setting = await getSetting\(localModelFavoritesKey\(favoriteScope\)\)/);
+  assert.match(h, /queued: getFailedSyncs\(\)\.filter\(e => e\.kind === "model-favorites"/);
+  const v = voidedOf(h, "if (rr.voided) {");
+  assert.match(v, /favoriteModelsRef\.current = favoritesBefore\.byType/);
+  assert.match(v, /favoriteModelsUpdatedAtRef\.current = favoritesBefore\.updatedAt/);
+  assert.match(v, /setFavoriteModelsByType\(favoritesBefore\.byType\)/);
+  assert.match(v, /setSetting\(localModelFavoritesKey\(favoriteScope\), [^;]*favoritesBefore\.updatedAt\)/);
+  assert.match(v, /putBackQueuedUploads\(favoritesBefore\.queued\)/);
+  const o = outputs();
+  const lb = o.indexOf("const logsBefore = new Map(logsRef.current.map(l => [l.id, l]))"), sp = o.indexOf("const plan = stagePurge(");
+  assert.ok(lb >= 0 && sp > lb, "logsBefore read from logsRef before stagePurge");
+  assert.doesNotMatch(o.slice(lb, sp), /await /, "no await between that read and stagePurge");
+  assert.doesNotMatch(o, /new Map\(\[\.\.\.localLogs, \.\.\.logsRef\.current\]/, "never the pre-snapshot copy");
+  const ov = voidedOf(o, "if (cr.voided) {");
+  assert.match(ov, /putBackQueuedUploads\(logUploadsBefore\.filter\(e => backIds\.has\(e\.id\)\)\)/);
+});
+// A clear whose call got no answer, voided later at a replay, had lost the uploads it took and its local-only items.
+test("each clear stores its stash BEFORE its take and drops it once answered", () => {
+  for (const [name, h, at, take] of [["Clear Logs", logsH(), "snap", 'takeQueuedUploads("history"'], ["Clear Outputs", outputs(), "clearAt", 'takeQueuedUploads("task"'],
+    ["Reset", reset(), "resetAt", 'takeQueuedUploads("task"']]) {
+    const w = h.indexOf(`writeClearStash(${at}, buildClearStash(`), t = h.indexOf(take);
+    assert.ok(w >= 0 && t > w, `${name}: stash written before the take`);
+    assert.doesNotMatch(h.slice(w, t), /await /, `${name}: nothing awaited between the stash and the take`);
+    assert.match(h, new RegExp(`if \\((cr|rr)\\.ok \\|\\| (cr|rr)\\.voided\\) dropClearStash\\(${at}\\)`), `${name}: dropped once answered`);
+  }
+});
+test("restoreGuard voids and replay voids give the stashes back; confirmed clears drop them", () => {
+  assert.equal(src.match(/if \(guard\.restoreAt > 0\) applyClearStashes\(at => at < guard\.restoreAt\)/g)?.length, 3, "forceSaveAll, bootstrap, reconcile pass");
+  for (const site of ["const guard = restoreGuard(await pullSettings());", "const guard = restoreGuard(remote.settings);\n        restoreKnown"]) {
+    const i = src.indexOf(site);
+    assert.ok(i >= 0, `guard site: ${site}`);
+    assert.match(src.slice(i, i + 600), /applyClearStashes\(at => at < guard\.restoreAt\)/, `stash given back right after: ${site}`);
+  }
+  const replay = between("const replayDeleteIntents = async", "const replayHistoryUploads = async");
+  assert.match(replay, /r\.voided\.length[\s\S]*applyClearStashes\(at => at === ts\)/);
+  const apply = between("const applyClearStashes = (which) =>", "const settleClearStashes = ");
+  assert.match(apply, /putBackQueuedUploads\(s\.uploads\)/);
+  assert.match(apply, /saveTasks\(/); assert.match(apply, /addHistoryEntry\(/);
+  assert.match(apply, /!haveTasks\.has\(t\.id\)/, "a version held now is not overwritten");
+  assert.match(apply, /dropClearStash\(s\.at\)/);
+  assert.match(between("const settleCloudClear = async", "return clean;"), /settleClearStashes\(\)/);
+  assert.equal(src.match(/await replayDeleteIntents\("history-delete"\); settleClearStashes\(\);/g)?.length, 2, "after both replays");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);
