@@ -11,6 +11,7 @@ import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, dropClearStash, stashedItems } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
+import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
 import { SNAPSHOT_SLACK_MS } from "./lib/serverClock.js";
 import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry, syncTask, syncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, serverTimeRemote, deleteHistoryRemote, upsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds } from "./lib/supabase.js";
@@ -35,13 +36,8 @@ const loginInputStyle = {
 const loginFocus = e => { e.target.style.borderColor = "#6366f1"; e.target.style.boxShadow = "0 0 0 3px rgba(99,102,241,0.1)"; };
 const loginBlur = e => { e.target.style.borderColor = "rgba(99,102,241,0.15)"; e.target.style.boxShadow = "none"; };
 
-// Server answers from unlock_admin_with_backup_code, in words (shared by the sign-in screen and Account settings).
-function backupCodeError(r) {
-  if (r?.reason === "backup_locked") return `Too many wrong backup codes — try again in ${Math.max(1, Math.ceil((r.retry_after || 900) / 60))} min.`;
-  if (r?.reason === "no_backup_code") return "No backup code is set, so a reset needs a database change.";
-  if (r?.reason === "weak_password") return "New password must be at least 8 characters";
-  return `Wrong backup code · ${r?.attempts_left ?? 0} tr${r?.attempts_left === 1 ? "y" : "ies"} left before a 15-minute pause`;
-}
+// Server answers in words (signin, backup code, account RPCs): src/lib/signinText.js. One generic text per screen, so
+// a stranger never learns whether a name exists or is locked (P1-AUTH-DESIGN §5 C0); works with the old and new server.
 
 // The backup code is masked with CSS and is not a password field. Password managers would still take the last text
 // field before a new-password field as the USERNAME (autocomplete="off" is ignored), so every code field is marked
@@ -75,11 +71,12 @@ function LoginScreen({ onSignedIn, notice = "" }) {
       const r = await signIn(username.trim(), password);
       if (r.ok) { clearSecrets(); onSignedIn({ token: r.token, expires_at: r.expires_at, username: r.username }); return; }
       setPassword("");
-      if (r.reason === "locked") { switchMode("unlock"); setError("Sign-in is locked after 3 failed attempts. Unlock it with your backup code below, or tap “Forgot password?” to set a new one."); }
-      else if (r.reason === "not_provisioned") setError("This account isn't set up on the server yet.");
-      else setError(`Invalid username or password · ${r.attempts_left ?? 0} attempt${r.attempts_left === 1 ? "" : "s"} left before lockout`);
+      // attempts_left / not_provisioned are never shown. Only the OLD server (before M1) answers `locked`: switch to
+      // unlock mode with its message (design §5); the new server's answers are generic.
+      if (signInSwitchesToUnlock(r)) switchMode("unlock");
+      setError(signInError(r));
     } catch {
-      setError("Can't reach the server — check your connection and try again. (This attempt didn't count.)");
+      setError(OFFLINE_SIGNIN);
     } finally {
       setLoading(false);
     }
@@ -104,7 +101,7 @@ function LoginScreen({ onSignedIn, notice = "" }) {
       setBackupCode(""); setShowCode(false);   // a wrong code is not kept around; the new password stays for a retry
       setError(backupCodeError(r));
     } catch {
-      setError("Can't reach the server — check your connection and try again.");
+      setError(OFFLINE);
     } finally {
       setLoading(false);
     }
@@ -202,6 +199,9 @@ function LoginScreen({ onSignedIn, notice = "" }) {
             </div>
           )}
           <button type="submit" disabled={!canSubmit} style={buttonStyle}>{submitLabel}</button>
+          {mode === "signin" && (
+            <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: font, textAlign: "center", lineHeight: 1.5 }}>{SIGNIN_HINT}</div>
+          )}
           {mode === "signin" ? (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <button type="button" style={linkStyle} onClick={() => switchMode("reset")}>Forgot password?</button>
@@ -346,15 +346,7 @@ function FloatingSaveButton({ saveStatus, onForceSave, failedCount = 0 }) {
 }
 
 // ─── ACCOUNT MANAGEMENT MODAL ───
-// Server answers for the password-checked account RPCs, in words.
-function accountError(r, fallback) {
-  if (r?.reason === "invalid") return "Current password is wrong (this counts toward the 3-attempt lockout)";
-  if (r?.reason === "locked") return "Too many wrong passwords — sign-in is now locked. Sign out and unlock it with your backup code.";
-  if (r?.reason === "weak_password") return "New password must be at least 8 characters";
-  if (r?.reason === "invalid_username") return "Username: 2–64 characters, no spaces, dots, colons or slashes";
-  if (r?.reason === "too_short") return "Backup code must be at least 12 characters";
-  return fallback;
-}
+// Server answers for the password-checked account RPCs, in words: accountError in src/lib/signinText.js.
 
 // 20 random characters from a 32-symbol alphabet (no 0/O/1/I), grouped for writing down: ~100 bits.
 function makeBackupCode() {
