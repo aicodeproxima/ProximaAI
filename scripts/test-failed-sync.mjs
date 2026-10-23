@@ -5,7 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k),
   get length() { return mem.size; }, key: i => [...mem.keys()][i] ?? null };
 const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueuedUploads, rekeyFavoriteRetries, queueDeleteIntents, settleDeleteIntents, dropDeleteIntentsBefore,
-  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload, pendingDeleteIds } = await import("../src/lib/storage.js");
+  restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload, pendingDeleteIds, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -296,6 +296,49 @@ test("pendingDeleteIds: the ids with a queued intent of that kind; settled ones 
   assert.deepEqual([...pendingDeleteIds("history-delete")], ["L1"]);
   confirmDeleteIntents("task-delete", ["p1"]);
   assert.deepEqual([...pendingDeleteIds("task-delete")], ["p2"], "a confirmed delete no longer counts");
+});
+
+// Review round 13 (A1/A5): clears read the queue before their snapshot, take only the planned ids, and a voided clear
+// puts the exact entries back.
+test("peekQueuedUploads: copies of the queued uploads of those kinds; nothing removed", () => {
+  addFailedSync({ kind: "task", id: "t1", data: { id: "t1" } });
+  addFailedSync({ kind: "history", id: "h1", data: { id: "h1" } });
+  addFailedSync({ kind: "task-delete", id: "t0", data: "t0" });
+  const peek = peekQueuedUploads(["task"]);
+  assert.deepEqual(peek.map(e => `${e.kind}:${e.id}`), ["task:t1"]);
+  peek[0].data.id = "changed"; peek[0].id = "changed";
+  assert.equal(getFailedSyncs().length, 3, "nothing removed");
+  assert.equal(getFailedSyncs()[0].id, "t1", "a copy: editing it leaves the queue alone");
+  assert.deepEqual(peekQueuedUploads(["task", "history"]).map(e => e.id), ["t1", "h1"]);
+  assert.deepEqual(peekQueuedUploads([]), []);
+});
+test("takeQueuedUploads: removes only that kind's entries with the named ids and returns them exactly", () => {
+  addFailedSync({ kind: "task", id: "t1", data: { id: "t1", v: 1 } });
+  addFailedSync({ kind: "task", id: "t2", data: { id: "t2" } });           // queued after the snapshot: not named
+  addFailedSync({ kind: "history", id: "t1", data: { id: "t1" } });        // same id, other kind
+  addFailedSync({ kind: "task-delete", id: "t1", data: "t1" });
+  const before = getFailedSyncs()[0];
+  const taken = takeQueuedUploads("task", ["t1", "nope"]);
+  assert.deepEqual(taken, [before], "same ts, attempts and data");
+  assert.deepEqual(getFailedSyncs().map(e => `${e.kind}:${e.id}`), ["task:t2", "history:t1", "task-delete:t1"]);
+  assert.deepEqual(takeQueuedUploads("task", []), []);
+  assert.equal(getFailedSyncs().length, 3);
+});
+test("putBackQueuedUploads: re-inserts the exact entries; a newer entry of the same kind+id wins", () => {
+  addFailedSync({ kind: "task", id: "a", data: { id: "a", v: "old" } });
+  addFailedSync({ kind: "task", id: "b", data: { id: "b", v: "old" } });
+  addFailedSync({ kind: "history", id: "L", data: { id: "L" } });
+  const taken = [...takeQueuedUploads("task", ["a", "b"]), ...takeQueuedUploads("history", ["L"])];
+  assert.equal(getFailedSyncs().length, 0);
+  addFailedSync({ kind: "task", id: "b", data: { id: "b", v: "new" } });   // queued after the take
+  putBackQueuedUploads(taken);
+  const q = getFailedSyncs();
+  assert.deepEqual(q.map(e => `${e.kind}:${e.id}:${e.data.v ?? ""}`).sort(), ["history:L:", "task:a:old", "task:b:new"]);
+  assert.deepEqual(q.find(e => e.id === "a"), taken.find(e => e.id === "a"), "same ts/attempts/data");
+  putBackQueuedUploads(taken);
+  assert.equal(getFailedSyncs().length, 3, "putting back twice adds nothing");
+  putBackQueuedUploads([]); putBackQueuedUploads(undefined);
+  assert.equal(getFailedSyncs().length, 3);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

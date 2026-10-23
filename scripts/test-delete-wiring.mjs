@@ -110,7 +110,10 @@ test("Clear Outputs and Reset plan over this device's state captured BEFORE the 
   assert.match(h, /mergeLogs\(localLogs, /);
   const snap = h.indexOf("await serverTimeRemote()"), staged = h.indexOf("stagePurge(");
   assert.ok(staged > snap);
-  assert.doesNotMatch(h.slice(snap, staged), /tasksRef\.current|logsRef\.current/, "Clear Outputs: no live read after the snapshot");
+  // Round 13 (A3): a live read after the snapshot only supplies the CURRENT version of an id already planned (or what a
+  // voided clear puts back); it never decides what is planned.
+  for (const line of h.slice(snap, staged).split("\n").filter(x => /tasksRef\.current|logsRef\.current/.test(x)))
+    assert.match(line, /const (currentTasks|logsBefore) = /, `Clear Outputs: no live read plans anything: ${line.trim()}`);
   assert.match(h, /historyOnlyGenerations\(mergedLogs, new Set\(\[\.\.\.all\.keys\(\), \.\.\.remote\.tasks\.map\(t => t\.id\)\]\)\)/,
     "a generation with any row in the read is not History-only");
   assert.doesNotMatch(h, /clearTasksDB\(/, "Clear Outputs removes only the planned ids here");
@@ -120,11 +123,64 @@ test("Clear Outputs and Reset plan over this device's state captured BEFORE the 
 // Review round 12 (F5): Clear Logs stamped its clear with the device's estimate of the server time.
 test("Clear Logs takes the server's time before anything changes and clears / queues at it", () => {
   const h = between('createBackup("pre-clear-logs"', ">Clear Logs</button>");
-  const snap = h.indexOf("const snap = isSupabaseConfigured() ? await serverTimeRemote() : Date.now()"), drop = h.indexOf("dropQueuedUploads(");
-  assert.ok(snap >= 0 && drop > snap, "snapshot before dropQueuedUploads");
-  assert.match(h.slice(snap, drop), /if \(snap == null\)[\s\S]*return;/, "no server time -> nothing done");
+  const snap = h.indexOf("const snap = isSupabaseConfigured() ? await serverTimeRemote() : Date.now()"), take = h.indexOf("takeQueuedUploads(");
+  assert.ok(snap >= 0 && take > snap, "snapshot before the queue is touched");
+  assert.match(h.slice(snap, take), /if \(snap == null\)[\s\S]*return;/, "no server time -> nothing done");
   assert.match(h, /queueDeleteIntents\("history-delete", clearedLogIds, snap\)/);
   assert.match(h, /clearQueuedRemote\("history", snap, clearedLogIds\)/);
+});
+// Review round 13 (A1, A4): queued ids were read with dropQueuedUploads AFTER the awaits, so an upload queued after the
+// snapshot (a generation started meanwhile) was dropped and named without being planned; Clear Logs read logsRef after
+// its snapshot. Each clear now copies its state and peeks the queue BEFORE the snapshot and takes only those ids.
+test("the three clears copy their state and peek the queue BEFORE the snapshot, then take only those ids from the queue", () => {
+  const logs = between('createBackup("pre-clear-logs"', ">Clear Logs</button>");
+  for (const [name, h, peek] of [["Clear Logs", logs, 'peekQueuedUploads(["history"])'], ["Clear Outputs", outputs(), 'peekQueuedUploads(["task"])'],
+    ["Reset", reset(), 'peekQueuedUploads(["task", "history"])']]) {
+    const snap = h.indexOf("await serverTimeRemote()"), p = h.indexOf(peek);
+    assert.ok(snap >= 0 && p >= 0 && p < snap, `${name}: queue peeked before the snapshot`);
+    assert.doesNotMatch(h, /dropQueuedUploads\(/, `${name}: no wholesale drop of the queue`);
+    assert.match(h, /takeQueuedUploads\("(task|history)", /, `${name}: only the planned ids leave the queue`);
+  }
+  assert.doesNotMatch(src, /dropQueuedUploads/, "nothing drops the whole queue any more");
+  const s = logs.indexOf("await serverTimeRemote()");
+  assert.ok(logs.indexOf("const removedLogIds = logsRef.current.map(l => l.id)") < s && logs.indexOf("const removedLogIds") >= 0,
+    "Clear Logs copies its History ids before the snapshot");
+  assert.doesNotMatch(logs.slice(s), /removedLogIds = |queuedLogIds/, "nothing read after the snapshot is named");
+  assert.match(logs, /takeQueuedUploads\("history", clearedLogIds\)/);
+  assert.doesNotMatch(logs, /savedLogIds\.current\.clear\(\)/, "an entry that arrived after the copy stays saved here");
+});
+// Review round 13 (A2, A3): a row created after the bound for a generation this device already held was skipped (it
+// survived while the toast said cleared); planning used the pre-snapshot copies, missing a WaveSpeed id or archive path
+// that arrived during the awaits.
+test("Clear Outputs / Reset plan rows created by the bound OR held here, each purged from its CURRENT version", () => {
+  for (const [name, h, v] of [["Clear Outputs", outputs(), "clearAt"], ["Reset", reset(), "resetAt"]]) {
+    assert.match(h, new RegExp(`Date\\.parse\\(t\\.createdAt\\) > ${v}\\) \\|\\| heldIds\\.has\\(t\\.id\\)`), `${name}: held rows planned`);
+    assert.match(h, /const heldIds = new Set\(/, `${name}: heldIds`);
+    const snap = h.indexOf("await serverTimeRemote()"), cur = h.indexOf("const currentTasks = new Map(tasksRef.current.map(t => [t.id, t]))");
+    assert.ok(cur > snap, `${name}: the current version is read after the awaits`);
+    assert.match(h, /currentTasks\.get\(id\) \|\| remoteTasks\.get\(id\) \|\| /, `${name}: current, else the row, else the queued data, else the copy`);
+  }
+  assert.match(outputs(), /takeQueuedUploads\("task", clearedTaskIds\)/);
+  assert.doesNotMatch(outputs(), /queuedTaskIds/, "the queue is no longer a separate source of named ids");
+  assert.match(outputs(), /const rowIds = realTasks\.map\(t => t\.id\)/);
+  assert.match(reset(), /takeQueuedUploads\("task", /);
+  assert.match(reset(), /takeQueuedUploads\("history", /);
+});
+// Review round 13 (A5): a voided Clear Outputs / Reset had already removed local-only generations, History and queued
+// uploads and never put them back.
+test("a voided clear puts back this device's tasks, History entries and the queue entries it took", () => {
+  for (const [name, h, key] of [["Clear Outputs", outputs(), "if (cr.voided) {"], ["Reset", reset(), "if (rr.voided) {"],
+    ["Clear Logs", between('createBackup("pre-clear-logs"', ">Clear Logs</button>"), "if (cr.voided) {"]]) {
+    const i = h.indexOf(key), v = h.slice(i, h.indexOf("return;", i));
+    assert.ok(i >= 0, `${name}: voided branch`);
+    assert.match(v, /putBackQueuedUploads\(/, `${name}: queue entries put back`);
+    assert.match(v, /setLogs\(/, `${name}: History put back`);
+    assert.match(v, /addHistoryEntry\(/, `${name}: History saved here again`);
+    if (name !== "Clear Logs") {
+      assert.match(v, /setTasks\(/, `${name}: tasks put back`);
+      assert.match(v, /saveTasks\(/, `${name}: tasks saved here again`);
+    }
+  }
 });
 // Review round 10 (F2): a confirmed delete kept in deletingIds stripped a generation a later restore brought back.
 test("History uploads leave out only generations whose delete is still in flight", () => {

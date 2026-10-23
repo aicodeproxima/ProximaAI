@@ -773,6 +773,41 @@ export function dropQueuedUploads(kinds) {
   return dropped;
 }
 
+// Clear Outputs / Clear Logs / Reset act on what existed at their server-time snapshot (review round 13): the queued
+// uploads are read BEFORE it (peek), only the planned ids leave the queue afterwards (take), and a voided clear puts the
+// exact entries back (putBack). An upload queued after the snapshot (a generation started meanwhile) is never touched.
+// The queued upload entries of these kinds, as copies; nothing is removed.
+export function peekQueuedUploads(kinds) {
+  const want = new Set(kinds || []);
+  return getFailedSyncs().filter(e => want.has(e.kind)).map(e => ({ ...e }));
+}
+// Removes only the entries of this kind whose id is in `ids` and returns them (exact entries: ts, attempts, data).
+export function takeQueuedUploads(kind, ids) {
+  const want = new Set((ids || []).filter(Boolean));
+  if (!want.size) return [];
+  try {
+    const taken = [], keep = [];
+    for (const e of getFailedSyncs()) (e.kind === kind && want.has(e.id) ? taken.push(e) : keep.push(e));
+    if (taken.length) localStorage.setItem(FAILED_KEY, JSON.stringify(keep));
+    return taken;
+  } catch { return []; }
+}
+// Re-inserts these exact entries (same ts/attempts/data) unless an entry of the same kind+id is queued already: that one
+// was queued after the take, so it is newer and wins.
+export function putBackQueuedUploads(entries) {
+  if (!entries?.length) return;
+  try {
+    const list = getFailedSyncs();
+    const have = new Set(list.map(e => `${e.kind}\u0000${e.id}`));
+    for (const e of entries) {
+      const key = `${e?.kind}\u0000${e?.id}`;
+      if (!e?.kind || have.has(key)) continue;
+      list.push(e); have.add(key);
+    }
+    localStorage.setItem(FAILED_KEY, JSON.stringify(list));
+  } catch {}
+}
+
 export function clearFailedSyncs() {
   try { localStorage.removeItem(FAILED_KEY); } catch {}
 }

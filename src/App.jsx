@@ -9,7 +9,7 @@ import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds } fro
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, dropQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
+import { getSetting, setSetting, addHistoryEntry, getHistory, clearHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, clearTasks as clearTasksDB, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
 import { SNAPSHOT_SLACK_MS } from "./lib/serverClock.js";
@@ -4668,6 +4668,11 @@ export default function ProximaApp() {
                       // device's estimate, serverNow(), could sit past the server's time). No slack, unlike Clear
                       // Outputs / Reset: Clear Logs deletes no files and no WaveSpeed copies, so an entry created just
                       // before the snapshot that this device has not read yet may go with the rest.
+                      // This device's History and its queued History uploads are copied BEFORE the snapshot (review round
+                      // 13): only they are named, queued as intents and taken from the queue; an entry that arrives after
+                      // the copy (another device's, or a generation started here meanwhile) stays.
+                      const removedLogIds = logsRef.current.map(l => l.id);
+                      const queuedLogsAtSnap = peekQueuedUploads(["history"]);
                       const snap = isSupabaseConfigured() ? await serverTimeRemote() : Date.now();
                       if (snap == null) {
                         setSaveStatus("error");
@@ -4676,19 +4681,32 @@ export default function ProximaApp() {
                         return;
                       }
                       // No cleared entry may be uploaded again: queued uploads and this session's replays (review wf_1945b758-923 #1).
-                      const removedLogIds = logsRef.current.map(l => l.id);
-                      const { history: queuedLogIds } = dropQueuedUploads(["history"]);
-                      for (const id of [...removedLogIds, ...queuedLogIds]) deletingLogIds.current.add(id);
-                      const clearedLogIds = [...removedLogIds, ...queuedLogIds];
+                      const clearedLogIds = [...new Set([...removedLogIds, ...queuedLogsAtSnap.map(e => e.id)])];
+                      const clearedLogSet = new Set(clearedLogIds);
+                      const takenLogUploads = takeQueuedUploads("history", clearedLogIds);
+                      for (const id of clearedLogIds) deletingLogIds.current.add(id);
                       queueDeleteIntents("history-delete", clearedLogIds, snap);   // before the clear fires (review wf_ec400a67-988 #1)
                       setFailedSyncCount(getFailedSyncs().length);
-                      setLogs([]); savedLogIds.current.clear();
+                      // Kept for a voided clear's put-back: the current version of each removed entry and whether it was saved.
+                      const logsBefore = logsRef.current.filter(l => clearedLogSet.has(l.id));
+                      const savedLogsBefore = new Set(clearedLogIds.filter(id => savedLogIds.current.has(id)));
+                      setLogs(prev => prev.filter(l => !clearedLogSet.has(l.id)));
+                      for (const id of clearedLogIds) savedLogIds.current.delete(id);
+                      // IndexedDB is wiped (it may hold entries beyond the loaded ones); the entries that arrived after the
+                      // copy are written back.
                       await clearHistory();
+                      for (const l of logsRef.current) if (!clearedLogSet.has(l.id)) addHistoryEntry(l);
                       // Restore-checked at its queue time (review round 8): a restore that landed meanwhile wins.
                       const cr = await clearQueuedRemote("history", snap, clearedLogIds);   // named: entries created later elsewhere stay (round 9)
                       if (cr.voided) {
                         settleDeleteIntents("history-delete", clearedLogIds);
                         for (const id of clearedLogIds) deletingLogIds.current.delete(id);
+                        // The restore wins; nothing of this device is lost (review round 13): its entries and their queued
+                        // uploads come back (an entry newer than the one put back wins).
+                        setLogs(prev => { const have = new Set(prev.map(l => l.id)); const add = logsBefore.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
+                        for (const l of logsBefore) { addHistoryEntry(l); if (savedLogsBefore.has(l.id)) savedLogIds.current.add(l.id); }
+                        putBackQueuedUploads(takenLogUploads);
+                        setFailedSyncCount(getFailedSyncs().length);
                         setSaveStatus("idle");
                         setAccountToast("A restore on another device replaced your data while this clear waited — nothing was cleared in the cloud");
                         setTimeout(() => setAccountToast(""), 6000);
@@ -4726,6 +4744,9 @@ export default function ProximaApp() {
                       const localTasks = tasksRef.current.slice();
                       const localLogs = logsRef.current.slice();
                       const localLogIds = new Set(localLogs.map(l => l.id));
+                      // The queued task uploads at the snapshot, read before it too (review round 13): an upload queued
+                      // after it (a generation started meanwhile) is neither planned nor named nor taken from the queue.
+                      const queuedAtSnap = peekQueuedUploads(["task"]);
                       // The clear covers the rows that existed before this read (review round 10): its bound is the
                       // SERVER's time now (review round 11: a stale device clock offset could put it after the server's
                       // time), less the slack second for rows whose write began just before and is not visible to the
@@ -4749,9 +4770,21 @@ export default function ProximaApp() {
                         return;
                       }
                       // Rows created after the snapshot belong to generations another device started after it: left
-                      // alone here and in the cloud (review round 12).
-                      const all = new Map(localTasks.map(t => [t.id, t]));
-                      for (const t of remote.tasks) if (!all.has(t.id) && !(Date.parse(t.createdAt) > clearAt)) all.set(t.id, t);
+                      // alone here and in the cloud (review round 12), unless this device already held that generation
+                      // at the snapshot (its task, an item of its History, or a queued upload): such a row is one this
+                      // device's generation wrote late, and it goes too (review round 13).
+                      const copyTasks = new Map(localTasks.map(t => [t.id, t]));
+                      const queuedTasks = new Map(queuedAtSnap.map(e => [e.id, e.data]));
+                      const remoteTasks = new Map(remote.tasks.map(t => [t.id, t]));
+                      const heldIds = new Set([...copyTasks.keys(), ...queuedTasks.keys(),
+                        ...localLogs.flatMap(l => (Array.isArray(l?.tasks) ? l.tasks : []).map(i => i?.id))].filter(Boolean));
+                      const plannedIds = new Set([...copyTasks.keys(), ...queuedTasks.keys()]);
+                      for (const t of remote.tasks) if (!(Date.parse(t.createdAt) > clearAt) || heldIds.has(t.id)) plannedIds.add(t.id);
+                      // Each planned generation is purged from its CURRENT version (review round 13): a WaveSpeed id or an
+                      // archive path that arrived during the awaits above is purged too.
+                      const currentTasks = new Map(tasksRef.current.map(t => [t.id, t]));
+                      const all = new Map();
+                      for (const id of plannedIds) all.set(id, currentTasks.get(id) || remoteTasks.get(id) || queuedTasks.get(id) || copyTasks.get(id) || { id });
                       const realTasks = [...all.values()];
                       // Generations History holds without a tasks row (a restore keeps 500 tasks rows but up to 1000
                       // entries) go too, with their files (review round 7). Cloud-only entries created after the snapshot
@@ -4763,32 +4796,42 @@ export default function ProximaApp() {
                       // A generation with any row in the read (a late one included) is not History-only: a post-snapshot
                       // row must not get a History-only intent that a replay would turn into a delete (review round 12).
                       const historyOnly = historyOnlyGenerations(mergedLogs, new Set([...all.keys(), ...remote.tasks.map(t => t.id)]));
-                      const removed = [...realTasks, ...historyOnly];
+                      // A History-only generation whose task reached this device during the awaits is purged from that
+                      // current version too (its WaveSpeed id, its files).
+                      const removed = [...realTasks, ...historyOnly.map(g => currentTasks.has(g.id) ? { ...g, ...currentTasks.get(g.id) } : g)];
+                      const clearedTaskIds = removed.map(t => t.id);
+                      const plannedTaskIds = new Set(clearedTaskIds);
                       // Nothing removed may be uploaded again: the debounced queue, queued uploads (a failed upload left no
-                      // tombstone to stop it) and this session's later replays (review wf_1945b758-923 #1).
-                      if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
-                      taskSyncQueueRef.current = [];
-                      const { task: queuedTaskIds } = dropQueuedUploads(["task"]);
-                      for (const id of [...removed.map(t => t.id), ...queuedTaskIds]) deletingIds.current.add(id);
+                      // tombstone to stop it) and this session's later replays (review wf_1945b758-923 #1). Only the planned
+                      // ids leave the queues (review round 13): an upload queued after the snapshot stays.
+                      taskSyncQueueRef.current = taskSyncQueueRef.current.filter(t => !plannedTaskIds.has(t.id));
+                      if (!taskSyncQueueRef.current.length && taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
+                      const takenUploads = takeQueuedUploads("task", clearedTaskIds);   // put back if a restore voids the clear
+                      for (const id of clearedTaskIds) deletingIds.current.add(id);
                       const claimsBefore = claimantRecords(realTasks.map(t => t.id));   // put back if a restore voids the clear (round 9)
                       releasePredictions(realTasks.map(t => t.taskId)); recordClaimants(realTasks, { deleted: true });
+                      // Kept for a voided clear's put-back (review round 13): the History entries stagePurge removes here
+                      // (current versions), whether each was saved, and their queued uploads.
+                      const logsBefore = new Map([...localLogs, ...logsRef.current].map(l => [l.id, l]));
+                      const savedLogsBefore = new Set(savedLogIds.current);
+                      const logUploadsBefore = peekQueuedUploads(["history"]);
                       // Queued before the clears; every generation goes, so no item is outstanding (review #4); planned over
                       // the cloud's History too, so entries beyond the loaded ones go with their files (review round 2).
                       const plan = stagePurge(removed, [], { all: true, logs: mergedLogs, serverHistory: true, at: clearAt });   // the clear strips History server-side
-                      const clearedTaskIds = [...removed.map(t => t.id), ...queuedTaskIds];
                       // Rows, plus the History-only generations this device's own entries hold (review round 11): the
                       // server tombstones History-only ids only of entries created by its bound, or named ones, and a
                       // local entry may be newer than the bound. Cloud-only entries' History-only generations are not
                       // named (a row that appeared for one after the read would be deleted unpurged); the server
                       // tombstones the ones still without a row itself (review round 10).
-                      const rowIds = [...realTasks.map(t => t.id), ...queuedTaskIds];
+                      const rowIds = realTasks.map(t => t.id);
                       const namedHistoryOnly = historyOnly.filter(g => localLogIds.has(g.batchId)).map(g => g.id);
                       const namedIds = [...rowIds, ...namedHistoryOnly];
                       const queuedAt = queueDeleteIntents("task-delete", clearedTaskIds, clearAt);   // before the clear fires (review wf_ec400a67-988 #1)
                       setFailedSyncCount(getFailedSyncs().length);
                       // Only the planned ids leave this device (review round 12): a task that arrived after the snapshot
-                      // stays here, as it does in the cloud.
-                      const plannedTaskIds = new Set(clearedTaskIds);
+                      // stays here, as it does in the cloud. What leaves is kept for a voided clear's put-back.
+                      const tasksRemovedHere = tasksRef.current.filter(t => plannedTaskIds.has(t.id));
+                      const savedTasksBefore = new Set(tasksRemovedHere.filter(t => savedTaskIds.current.has(t.id)).map(t => t.id));
                       setTasks(prev => prev.filter(t => !plannedTaskIds.has(t.id)));
                       deleteTasks([...plannedTaskIds]);
                       for (const id of plannedTaskIds) savedTaskIds.current.delete(id);
@@ -4805,6 +4848,18 @@ export default function ProximaApp() {
                         for (const l of plan.rewrite || []) removeFailedSync("history", l.id);
                         settleDeleteIntents("history-delete", plan.remove || []);
                         for (const id of plan.localRemove || []) deletingLogIds.current.delete(id);
+                        // The restore wins; nothing of this device is lost (review round 13): the tasks, History entries
+                        // and queued uploads this clear removed here come back (a newer queued entry wins).
+                        setTasks(prev => { const have = new Set(prev.map(t => t.id)); const add = tasksRemovedHere.filter(t => !have.has(t.id)); return add.length ? [...prev, ...add] : prev; });
+                        saveTasks(tasksRemovedHere);
+                        for (const id of savedTasksBefore) savedTaskIds.current.add(id);
+                        putBackQueuedUploads(takenUploads);
+                        const localRemoved = new Set(plan.localRemove || []);
+                        const logsBack = [...localRemoved].map(id => logsBefore.get(id)).filter(Boolean);
+                        setLogs(prev => { const have = new Set(prev.map(l => l.id)); const add = logsBack.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
+                        for (const l of logsBack) { addHistoryEntry(l); if (savedLogsBefore.has(l.id)) savedLogIds.current.add(l.id); }
+                        putBackQueuedUploads(logUploadsBefore.filter(e => localRemoved.has(e.id)));
+                        setFailedSyncCount(getFailedSyncs().length);
                         setSaveStatus("idle");
                         setAccountToast("A restore on another device replaced your data while this clear waited — nothing was cleared in the cloud");
                         setTimeout(() => setAccountToast(""), 6000);
@@ -4850,6 +4905,9 @@ export default function ProximaApp() {
                       // it; one another device synced in during the awaits below is not deleted in the cloud.
                       const localTasks = tasksRef.current.slice();
                       const localLogs = logsRef.current.slice();
+                      // The queued uploads at the snapshot, read before it too (review round 13): one queued after it (a
+                      // generation started meanwhile) is neither planned nor named nor taken from the queue.
+                      const queuedAtSnap = peekQueuedUploads(["task", "history"]);
                       const snap = isSupabaseConfigured() ? await serverTimeRemote() : Date.now();
                       if (snap == null) {
                         setSaveStatus("error");
@@ -4867,15 +4925,7 @@ export default function ProximaApp() {
                         setTimeout(() => setAccountToast(""), 6000);
                         return;
                       }
-                      // Cloud rows and History created after the snapshot belong to generations started after it: left
-                      // alone (review rounds 10 and 12).
-                      const allTasks = new Map(localTasks.map(t => [t.id, t]));
-                      for (const t of remote.tasks) if (!allTasks.has(t.id) && !(Date.parse(t.createdAt) > resetAt)) allTasks.set(t.id, t);
-                      const allLogs = new Map(localLogs.map(l => [l.id, l]));
-                      for (const l of remote.history) if (!allLogs.has(l.id) && !(Date.parse(l.createdAt) > resetAt)) allLogs.set(l.id, l);
-                      const removedTasks = [...allTasks.values()], removedLogs = [...allLogs.values()];
-                      // Clear local state. Reset is "Clear ALL data": this device is wiped entirely, a post-snapshot
-                      // generation included; that one stays in the cloud and comes back on the next pass (review round 12).
+                      // Local favorites reset (not bounded by the snapshot; a voided reset leaves them reset).
                       const favoriteScope = getDeviceId();
                       const emptyFavorites = emptyModelFavorites();
                       favoriteModelsRef.current = emptyFavorites;
@@ -4884,20 +4934,52 @@ export default function ProximaApp() {
                       setSelectedModels([]);
                       removeFailedSync("model-favorites", favoriteScope);
                       await setSetting(localModelFavoritesKey(favoriteScope), createModelFavoritesSetting(emptyFavorites, favoriteModelsUpdatedAtRef.current));
+                      // Cloud rows and History created after the snapshot belong to generations started after it: left
+                      // alone (review rounds 10 and 12), unless this device already held that generation at the snapshot
+                      // (its task, an item of its History or of a queued History upload, a queued task upload): such a
+                      // row is one this device's generation wrote late, and it goes too (review round 13).
+                      const copyTasks = new Map(localTasks.map(t => [t.id, t]));
+                      const queuedTasks = new Map(queuedAtSnap.filter(e => e.kind === "task").map(e => [e.id, e.data]));
+                      const queuedLogs = new Map(queuedAtSnap.filter(e => e.kind === "history").map(e => [e.id, e.data]));
+                      const remoteTasks = new Map(remote.tasks.map(t => [t.id, t]));
+                      const copyLogs = new Map(localLogs.map(l => [l.id, l]));
+                      const heldIds = new Set([...copyTasks.keys(), ...queuedTasks.keys(),
+                        ...[...localLogs, ...queuedLogs.values()].flatMap(l => (Array.isArray(l?.tasks) ? l.tasks : []).map(i => i?.id))].filter(Boolean));
+                      const plannedTaskIds = new Set([...copyTasks.keys(), ...queuedTasks.keys()]);
+                      for (const t of remote.tasks) if (!(Date.parse(t.createdAt) > resetAt) || heldIds.has(t.id)) plannedTaskIds.add(t.id);
+                      const plannedLogIds = new Set([...copyLogs.keys(), ...queuedLogs.keys()]);
+                      for (const l of remote.history) if (!plannedLogIds.has(l.id) && !(Date.parse(l.createdAt) > resetAt)) plannedLogIds.add(l.id);
+                      // No removed row may be uploaded again (review wf_1945b758-923 #1, as in Clear Outputs). Only the
+                      // planned ids leave the queues (review round 13): an upload queued after the snapshot stays (Reset
+                      // still wipes that generation here; it reaches the cloud and comes back on the next pass).
+                      const takenUploads = [...takeQueuedUploads("task", [...plannedTaskIds]), ...takeQueuedUploads("history", [...plannedLogIds])];
+                      const takenData = new Map(takenUploads.map(e => [`${e.kind}:${e.id}`, e.data]));
+                      // Each planned generation and entry is purged from its CURRENT version (review round 13): a WaveSpeed
+                      // id or an archive path that arrived during the awaits above is purged too.
+                      const currentTasks = new Map(tasksRef.current.map(t => [t.id, t]));
+                      const currentLogs = new Map(logsRef.current.map(l => [l.id, l]));
+                      const remoteLogs = new Map(remote.history.map(l => [l.id, l]));
+                      const allTasks = new Map(), allLogs = new Map();
+                      for (const id of plannedTaskIds) allTasks.set(id, currentTasks.get(id) || remoteTasks.get(id) || takenData.get(`task:${id}`) || queuedTasks.get(id) || copyTasks.get(id) || { id });
+                      for (const id of plannedLogIds) allLogs.set(id, currentLogs.get(id) || remoteLogs.get(id) || takenData.get(`history:${id}`) || queuedLogs.get(id) || copyLogs.get(id) || { id });
+                      const removedTasks = [...allTasks.values()], removedLogs = [...allLogs.values()];
+                      // Clear local state. Reset is "Clear ALL data": this device is wiped entirely, a post-snapshot
+                      // generation included; that one stays in the cloud and comes back on the next pass (review round 12).
+                      // What is wiped here is kept for a voided reset's put-back (review round 13).
+                      const wipedTasks = tasksRef.current.slice(), wipedLogs = logsRef.current.slice();
+                      const savedTasksBefore = new Set(savedTaskIds.current), savedLogsBefore = new Set(savedLogIds.current);
                       const claimsBefore = claimantRecords(removedTasks.map(t => t.id));   // put back if a restore voids the reset (round 9)
                       releasePredictions(removedTasks.map(t => t.taskId)); recordClaimants(removedTasks, { deleted: true });
                       setLogs([]); setTasks([]);
                       savedLogIds.current.clear();
                       savedTaskIds.current.clear();
-                      taskSyncQueueRef.current = [];
-                      if (taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
-                      // No removed row may be uploaded again (review wf_1945b758-923 #1, as in Clear Outputs).
-                      const { task: queuedTaskIds, history: queuedLogIds } = dropQueuedUploads(["task", "history"]);
-                      for (const id of [...removedTasks.map(t => t.id), ...queuedTaskIds]) deletingIds.current.add(id);
-                      for (const id of [...removedLogs.map(l => l.id), ...queuedLogIds]) deletingLogIds.current.add(id);
+                      taskSyncQueueRef.current = taskSyncQueueRef.current.filter(t => !plannedTaskIds.has(t.id));
+                      if (!taskSyncQueueRef.current.length && taskSyncTimerRef.current) { clearTimeout(taskSyncTimerRef.current); taskSyncTimerRef.current = null; }
+                      for (const id of plannedTaskIds) deletingIds.current.add(id);
+                      for (const id of plannedLogIds) deletingLogIds.current.add(id);
                       const plan = stagePurge(removedTasks, [], { history: false, alsoLogs: removedLogs });   // queued before the clears below fire
-                      const clearedTaskIds = [...removedTasks.map(t => t.id), ...queuedTaskIds];
-                      const clearedLogIds = [...removedLogs.map(l => l.id), ...queuedLogIds];
+                      const clearedTaskIds = [...plannedTaskIds];
+                      const clearedLogIds = [...plannedLogIds];
                       queueDeleteIntents("task-delete", clearedTaskIds, resetAt);      // before the clear fires (review wf_ec400a67-988 #1)
                       queueDeleteIntents("history-delete", clearedLogIds, resetAt);
                       setFailedSyncCount(getFailedSyncs().length);
@@ -4916,6 +4998,16 @@ export default function ProximaApp() {
                         for (const id of clearedTaskIds) deletingIds.current.delete(id);
                         for (const id of clearedLogIds) deletingLogIds.current.delete(id);
                         putBackClaimants(removedTasks.map(t => t.id), claimsBefore);
+                        // The restore wins; nothing of this device is lost (review round 13): the tasks, History entries and
+                        // queued uploads this reset wiped here come back (a newer queued entry wins). The local favorites
+                        // reset stays.
+                        setTasks(prev => { const have = new Set(prev.map(t => t.id)); const add = wipedTasks.filter(t => !have.has(t.id)); return add.length ? [...prev, ...add] : prev; });
+                        saveTasks(wipedTasks);
+                        for (const t of wipedTasks) if (savedTasksBefore.has(t.id)) savedTaskIds.current.add(t.id);
+                        setLogs(prev => { const have = new Set(prev.map(l => l.id)); const add = wipedLogs.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
+                        for (const l of wipedLogs) { addHistoryEntry(l); if (savedLogsBefore.has(l.id)) savedLogIds.current.add(l.id); }
+                        putBackQueuedUploads(takenUploads);
+                        setFailedSyncCount(getFailedSyncs().length);
                         setSaveStatus("idle");
                         setAccountToast("A restore on another device replaced your data while this reset waited — nothing was cleared in the cloud");
                         setTimeout(() => setAccountToast(""), 8000);
