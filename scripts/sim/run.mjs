@@ -6,7 +6,8 @@
 //   node scripts/sim/run.mjs --seed 176 --steps 120 --trace         one seed, full trace (no shrinking)
 // Options: --start S (first seed, 1) --net fifo|window|any|all (fifo) --workers K (min(12, cpus-1)) --chunk C (seeds per job, 25)
 // --shrink N (groups to shrink, 8) --budget B (runs per shrink, 300) --json FILE (the summary as JSON)
-// --server v1|v2 (the fake server's rules, v1 = live today; v2 = migration 20261023500000, see server.mjs).
+// --server v1|v2|v3 (the fake server's rules: v1 = before 20261023500000; v2 = 20261023500000, live since 2026-10-23 21:30 UTC, the
+// default; v3 = v2 + 20261024100000 (K2: History uploads lose items a restore removed), see server.mjs).
 // Exit code 0 always (it is a search tool); the summary says what was found.
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { cpus } from "node:os";
@@ -22,7 +23,7 @@ if (!isMainThread) {
   // A persistent worker: it runs jobs until told to stop (one module graph per worker; storage.js instances are pooled,
   // so memory stays bounded however many seeds it runs). A one-off job comes as workerData.
   const handle = async (job) => {
-  setServerRule(job.server || "v1");
+  setServerRule(job.server || "v2");
   if (job.mode === "seeds") {
     const out = [], totals = {};
     for (let s = job.from; s < job.to; s++) {
@@ -53,7 +54,7 @@ if (!isMainThread) {
   const netOpt = String(opt("net", "fifo"));
   const modes = netOpt === "all" ? NET_MODES : [netOpt];
   const shrinkN = Number(opt("shrink", 8)), budget = Number(opt("budget", 300));
-  const server = String(opt("server", "v1"));
+  const server = String(opt("server", "v2"));   // v2 is live (20261023500000)
   if (!SERVER_RULES.includes(server)) { console.error(`unknown --server ${server} (${SERVER_RULES.join("|")})`); process.exit(2); }
   console.log(`server rule ${server}`);
   // Persistent workers for the seed sweep (one per pump); one-off workers for shrink / trace jobs.

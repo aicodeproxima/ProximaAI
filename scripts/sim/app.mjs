@@ -69,6 +69,7 @@ export class Page {
     // picked for each batch; a new page starts with an empty form), and the last cloud publication (cloudFormPubRef).
     this.formInput = null; this.cloudFormPub = null;
     this.unsentPub = null;   // task B15 (round 28 #4/#2): App.jsx's module-level unsentPub (per page)
+    this.unsentChain = Promise.resolve();   // task B16 (round 29 #1): its write chain
     this.macros = [];   // continuations waiting for a render (IndexedDB awaits)
   }
 
@@ -288,7 +289,13 @@ export class Page {
     return send;
   }
   // task B15 (round 28 #4/#2): App.jsx publishUnsent / publishUnsentBefore (module level there; per page here)
-  async publishUnsent() {
+  publishUnsent(opts = {}) {   // task B16 (round 29 #1): one write at a time (the pagehide one at once)
+    if (opts.exiting) return this.publishUnsentOnce();
+    const p = this.unsentChain.then(() => this.publishUnsentOnce());
+    this.unsentChain = p.catch(() => {});
+    return p;
+  }
+  async publishUnsentOnce() {
     const S = this.S, now = Date.now(), un = S.unsentGenerations();
     const items = [...un.paths, ...un.ids.map(i => `id:${i}`), ...un.predictions.map(p => `p:${p}`)];
     if (!F.formPublishDue(this.unsentPub, items, now)) return true;
@@ -335,14 +342,17 @@ export class Page {
       const { tasks, logs } = back;
       const haveTasks = new Set([...ids(this.ref.tasks), ...heldTasks.keys()]), haveLogs = new Set([...ids(this.ref.logs), ...heldLogs]);
       const backTasks = tasks.filter(t => !haveTasks.has(t.id)), backLogs = logs.filter(l => !haveLogs.has(l.id));
+      // task B16 (round 29 #2): the kept ones this tab still shows go to IndexedDB too (this tab's copy)
+      const shownTasks = tasks.filter(t => haveTasks.has(t.id) && !heldTasks.has(t.id)).map(t => this.ref.tasks.find(x => x.id === t.id) || t);
+      const shownLogs = logs.filter(l => haveLogs.has(l.id) && !heldLogs.has(l.id)).map(l => this.ref.logs.find(x => x.id === l.id) || l);
       if (backTasks.length) {
         this.setTasks(prev => { const have = new Set(ids(prev)); const add = backTasks.filter(t => !have.has(t.id)); return add.length ? [...prev, ...add] : prev; });
-        this.b.saveTasks(backTasks);
       }
+      if (backTasks.length || shownTasks.length) this.b.saveTasks([...backTasks, ...shownTasks]);
       if (backLogs.length) {
         this.setLogs(prev => { const have = new Set(ids(prev)); const add = backLogs.filter(l => !have.has(l.id)); return add.length ? [...prev, ...add] : prev; });
-        for (const l of backLogs) this.b.addHistoryEntry(l);
       }
+      for (const l of [...backLogs, ...shownLogs]) this.b.addHistoryEntry(l);
       if (backTasks.length || backLogs.length) this.sim.trace(`  ${this.label} stash ${s.at} gives back tasks [${ids(backTasks)}] logs [${ids(backLogs)}] uploads [${back.uploads.map(e => e.kind[0] + ":" + e.id)}]`);
       this.queueArchivedFileDeletes(back.goneArchivePaths);   // 1542 (reapplyArchives 1539: no archive records here)
       this.applyRelinks([...heldTasks.values(), ...backTasks]);   // task B13a (round 26 #6)
@@ -625,6 +635,14 @@ export class Page {
       }
       const goneItems = R.tombstonedItems(this.ref.logs, cids?.taskTombstones ?? null, cids?.taskRestoreRemoved ?? null, new Set(ids(this.ref.tasks)));
       if (goneItems.length) this.dropLogItemsFor(goneItems.map(id => ({ id })));
+      // task B16 (K2 client side): restore-removed items the cloud's copy of their entry lacks leave this copy too
+      const stripped = remote.historyOk ? B.restoreStrippedLogs(this.ref.logs, remote.history || [], cids?.taskRestoreRemoved ?? null) : [];
+      if (stripped.length) {
+        const byId = new Map(stripped.map(l => [l.id, l]));
+        this.ref.logs = this.ref.logs.map(l => byId.get(l.id) || l);
+        this.setLogs(prev => prev.map(l => byId.get(l.id) || l));
+        for (const l of stripped) { this.savedLogIds.add(l.id); this.b.addHistoryEntry(l); }
+      }
       // 2348-2371 (task B13b, simulator classes A and C): what a user deleted elsewhere and this pass removed is re-planned
       // against this tab's kept view; its WaveSpeed result is deleted by the device holding the prediction id.
       {

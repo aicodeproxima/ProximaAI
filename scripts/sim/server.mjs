@@ -22,7 +22,9 @@
 // 20261023500000_tombstone_rowless_scoped: delete_queued_rows and _clear_kind tombstone EVERY named id without a row
 // (task and History kind; "do nothing" when a tombstone exists), and _clear_kind turns a by_restore tombstone of a named
 // task id into a user one, as delete_queued_rows does. Its scope rules (tombstones per account) need no model here: the
-// sim has one account.
+// sim has one account. "v3" = v2 + migration 20261024100000_history_strip_restore_removed (K2): a History write (not a
+// restore) also strips an item whose generation a restore removed (a by_restore task tombstone) when the stored entry
+// does not hold it; a new entry left empty only by such items gets a restore's History tombstone.
 // Not modelled: RLS/scopes/rename, favorites/settings rows (only the marker), tasks_keep_finished (every task here is
 // completed), form holds (pull_form_holds answers none), id-less legacy History items, ws_deleted_predictions.
 // FILES AND WAVESPEED (task B12c): the bucket `generations` (path -> { owners, deleted }) and WaveSpeed's predictions
@@ -38,8 +40,8 @@
 // to perform for an id (the rowless gap included: a delete call answered "deleted" for a named id), every id a restore
 // brought back, and every id a restore removed.
 
-let RULE = process.env.SIM_SERVER || "v1";
-export const SERVER_RULES = ["v1", "v2"];
+let RULE = process.env.SIM_SERVER || "v2";   // v2 is live since 2026-10-23 21:30:50 UTC (20261023500000)
+export const SERVER_RULES = ["v1", "v2", "v3"];
 export function setServerRule(r) {
   if (!SERVER_RULES.includes(r)) throw new Error(`unknown server rule ${r} (${SERVER_RULES.join("|")})`);
   RULE = r;
@@ -169,6 +171,7 @@ export class FakeServer {
   }
   liveItem(id) { for (const e of this.history.values()) if (itemIdsOf(e).includes(id)) return true; return false; }
   userTomb(id, kind = "task") { const t = this.tomb.get(id); return !!t && t.kind === kind && !t.byRestore; }
+  restoreTomb(id, kind = "task") { const t = this.tomb.get(id); return !!t && t.kind === kind && !!t.byRestore; }
 
   // ─── triggers ───
   _deleteTaskRow(id) {
@@ -208,11 +211,16 @@ export class FakeServer {
     if (!this.restoring && t && t.kind === "history") return "tombstoned";
     let items = Array.isArray(entry.tasks) ? clone(entry.tasks) : [];
     const have = this.history.get(id);
-    if (!this.restoring && items.some(i => i?.id && this.userTomb(i.id))) {
-      items = items.filter(i => !(i?.id && this.userTomb(i.id)));
+    const held = new Set(itemIdsOf(have));
+    // v3 (20261024100000, K2): + an item a restore removed that the stored entry does not hold
+    const strip = (i) => !!i?.id && (this.userTomb(i.id) || (RULE === "v3" && this.restoreTomb(i.id) && !held.has(i.id)));
+    if (!this.restoring && items.some(strip)) {
+      const anyUser = items.some(i => i?.id && this.userTomb(i.id));
+      items = items.filter(i => !strip(i));
       if (!have && items.length === 0) {
-        this.tomb.set(id, { kind: "history", byRestore: false, at: this.now() });
-        this.recordDelete("history", id, "strip-new-empty");
+        this.tomb.set(id, { kind: "history", byRestore: !anyUser, at: this.now() });
+        if (anyUser) this.recordDelete("history", id, "strip-new-empty");
+        else this.restoreRemoved.set(`history:${id}`, this.marker);   // the restore's removal, not a user delete
         return "stripped-empty";
       }
     }
@@ -300,12 +308,12 @@ export class FakeServer {
       }
       for (const id of list) {
         if (this.tomb.has(id) || this.tasks.has(id)) continue;
-        if (RULE === "v2" || this.liveItem(id)) this.tomb.set(id, { kind: "task", byRestore: false, at: this.now() });   // v2: every named rowless id
+        if (RULE !== "v1" || this.liveItem(id)) this.tomb.set(id, { kind: "task", byRestore: false, at: this.now() });   // v2: every named rowless id
       }
       for (const [hid, e] of [...this.history]) if (itemIdsOf(e).some(x => list.includes(x))) this._touchHistory(hid);
     } else {
       for (const id of list) if (this._deleteHistoryRow(id)) n++;
-      if (RULE === "v2") for (const id of list) if (!this.tomb.has(id) && !this.history.has(id)) this.tomb.set(id, { kind: "history", byRestore: false, at: this.now() });
+      if (RULE !== "v1") for (const id of list) if (!this.tomb.has(id) && !this.history.has(id)) this.tomb.set(id, { kind: "history", byRestore: false, at: this.now() });
     }
     for (const id of list) this.recordDelete(kind, id, "delete_queued_rows", before.has(id));
     this.log(`delete_queued_rows ${kind} [${list}] @${queuedAt}: deleted ${n}`);
@@ -325,7 +333,7 @@ export class FakeServer {
         for (const x of itemIdsOf(e)) if ((e.createdAt <= upto || named.has(x)) && !this.tasks.has(x)) orphans.add(x);
       }
       const itemOrphans = new Set(orphans);   // items of live History entries: present
-      if (RULE === "v2") for (const x of named) if (!this.tasks.has(x)) orphans.add(x);   // v2: named rowless ids too (flip + tombstone)
+      if (RULE !== "v1") for (const x of named) if (!this.tasks.has(x)) orphans.add(x);   // v2: named rowless ids too (flip + tombstone)
       for (const o of orphans) {
         const t = this.tomb.get(o);
         if (t && t.kind === "task" && t.byRestore) this.tomb.set(o, { kind: "task", byRestore: false, at: this.now() });
@@ -342,7 +350,7 @@ export class FakeServer {
       for (const id of new Set([...gone, ...orphans, ...named])) this.recordDelete("task", id, "clear_kind", hit.has(id) || before.has(id));
     } else if (kind === "history") {
       for (const [id, e] of [...this.history]) if (e.createdAt <= upto || named.has(id)) { if (this._deleteHistoryRow(id)) n++; this.recordDelete("history", id, "clear_kind"); }
-      if (RULE === "v2") for (const id of named) if (!this.tomb.has(id) && !this.history.has(id)) this.tomb.set(id, { kind: "history", byRestore: false, at: this.now() });
+      if (RULE !== "v1") for (const id of named) if (!this.tomb.has(id) && !this.history.has(id)) this.tomb.set(id, { kind: "history", byRestore: false, at: this.now() });
       for (const id of named) this.recordDelete("history", id, "clear_kind", before.has(id));
     }
     return n;
