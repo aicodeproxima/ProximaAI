@@ -671,12 +671,15 @@ export function dropDeleteIntentsBefore(ts) {
   const dropped = { task: [], history: [] };
   if (!(ts > 0)) return dropped;
   try {
-    const keep = [];
+    const keep = [], times = new Set();
     for (const e of getFailedSyncs()) {
       const kind = e.kind === "task-delete" ? "task" : e.kind === "history-delete" ? "history" : null;
-      if (kind && (e.ts || 0) < ts) dropped[kind].push(e.id); else keep.push(e);
+      if (kind && (e.ts || 0) < ts) { dropped[kind].push(e.id); times.add(e.ts || 0); } else keep.push(e);
     }
-    if (dropped.task.length || dropped.history.length) localStorage.setItem(FAILED_KEY, JSON.stringify(keep));
+    if (dropped.task.length || dropped.history.length) {
+      localStorage.setItem(FAILED_KEY, JSON.stringify(keep));
+      recordVoidedAt(times);   // voided by that restore (review round 18 #3)
+    }
   } catch {}
   return dropped;
 }
@@ -1051,6 +1054,62 @@ export function stashFollowers(ts) {
 export function voidedClearStashes(ts) {
   const at = Number(ts), followers = stashFollowers(at);
   return (s) => s === at || followers.has(s);
+}
+// Review round 18 #3: that a delete or clear was VOIDED is a recorded fact, not a duty of each call site. An inline void
+// of a plain delete (no stash of its own) once settled its intents without giving back the stashes whose ids had moved to
+// it, and the next settleClearStashes dropped them as confirmed (their archive files queued for deletion). So every void
+// goes through voidDeleteIntents, which settles AND records the queue time here; settleClearStashes then gives back
+// (App.jsx applyClearStashes), never drops, a settled stash tied to a recorded time (stashTiedToVoided). That also covers
+// a follower whose own last group settles only after its target's void was handled (two tabs). Confirmed ids already
+// left every stash (forgetStashedIds), so a give-back never returns a confirmed delete. Shared by the browser's tabs;
+// a time is kept while a stash refers to it (its `at` or `movedTo`), and 30 days at most.
+const VOIDED_AT_KEY = "proximaai-voided-at";
+const VOIDED_FOR_MS = 30 * 24 * 60 * 60 * 1000;
+const readVoidedAt = () => {
+  try { const v = JSON.parse(localStorage.getItem(VOIDED_AT_KEY) || "{}"); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch { return {}; }
+};
+// The recorded voided queue times (server ms), recorded within 30 days.
+export function voidedTimes() {
+  const cut = Date.now() - VOIDED_FOR_MS, out = new Set();
+  for (const [t, rec] of Object.entries(readVoidedAt())) { const at = Number(t); if (Number.isFinite(at) && rec > cut) out.add(at); }
+  return out;
+}
+// Drops the times no stash refers to any more, and those recorded over 30 days ago.
+export function pruneVoidedAt() {
+  try {
+    const all = readVoidedAt(), keys = Object.keys(all);
+    if (!keys.length) { if (localStorage.getItem(VOIDED_AT_KEY) != null) localStorage.removeItem(VOIDED_AT_KEY); return; }
+    const refs = new Set();
+    for (const s of readClearStashes()) { refs.add(s.at); for (const t of s.movedTo || []) refs.add(t); }
+    const cut = Date.now() - VOIDED_FOR_MS;
+    let changed = false;
+    for (const k of keys) if (!(all[k] > cut) || !refs.has(Number(k))) { delete all[k]; changed = true; }
+    if (!changed) return;
+    if (Object.keys(all).length) localStorage.setItem(VOIDED_AT_KEY, JSON.stringify(all)); else localStorage.removeItem(VOIDED_AT_KEY);
+  } catch {}
+}
+// Records these queue times (one or a list/Set) as voided.
+export function recordVoidedAt(times) {
+  const list = (times instanceof Set || Array.isArray(times) ? [...times] : [times]).map(Number).filter(Number.isFinite);
+  if (!list.length) return;
+  try {
+    const all = readVoidedAt(), now = Date.now();
+    for (const t of list) all[t] = now;
+    localStorage.setItem(VOIDED_AT_KEY, JSON.stringify(all));
+  } catch {}
+  pruneVoidedAt();
+}
+// The one way a void answer leaves the queue: settles the voided intents of the group queued at `at` and records `at`.
+// The caller then gives back applyClearStashes(voidedClearStashes(at)) at once; the record covers what it cannot see yet.
+export function voidDeleteIntents(kind, ids, at) {
+  settleDeleteIntents(kind, ids);
+  if ((ids || []).some(Boolean)) recordVoidedAt(at);
+}
+// Whether this stash is settled (no intent of its own pending) and tied to a voided time with nothing left pending: its
+// own queue time or one its ids moved to. Such a stash is given back, never dropped as confirmed.
+export function stashTiedToVoided(stash, voided = voidedTimes()) {
+  if (!stash || intentsPendingAt(stash.at) || !voided.size) return false;
+  return [stash.at, ...(stash.movedTo || [])].some(t => voided.has(t) && !intentsPendingAt(t));
 }
 // Clear Logs' stash (round 16 #6): every planned History entry the cloud lacks, loaded or stored only, plus the uploads
 // it takes (an entry with a stashed upload is carried by it). `cloudLogIds`: the cloud's History ids read before the

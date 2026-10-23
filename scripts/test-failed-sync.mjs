@@ -8,7 +8,7 @@ const { addFailedSync, removeFailedSync, getFailedSyncs, sentVersion, dropQueued
   restoreGuard, markRestoreSeen, publishFormPaths, readFormPublications, pickTabId, tabPresence, confirmDeleteIntents, confirmedDeletes, intentGroups, deletesGoingSince, forgetConfirmed, replaceQueuedUpload, pendingDeleteIds, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads,
   buildClearStash, writeClearStash, readClearStashes, dropClearStash, stashedItems, allStoredHistory, allStoredTasks,
   intentsPendingAt, readClearStash, stashGiveBack, forgetStashedIds, recordStashArchive, stashArchivePaths,
-  chainStashFavorites, chainedFavoritesBefore, moveClearStash, clearLogsStash } = await import("../src/lib/storage.js");
+  chainStashFavorites, chainedFavoritesBefore, moveClearStash, clearLogsStash, voidedTimes, stashTiedToVoided, pruneVoidedAt } = await import("../src/lib/storage.js");
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -506,12 +506,17 @@ const favoritesRig = () => {
       dropClearStash(s.at);
     }
   };
-  const settleClearStashes = () => {
+  const settleClearStashes = () => {   // round 18 #3: a stash tied to a recorded voided time is given back first
+    const voided = voidedTimes();
+    const back = new Set(readClearStashes().filter(s => stashTiedToVoided(s, voided)).map(s => s.at));
+    if (back.size) applyClearStashes(at => back.has(at));
     const queued = new Set([...intentGroups("task-delete"), ...intentGroups("history-delete")].map(([ts]) => ts));
     for (const s of readClearStashes()) if (!queued.has(s.at)) {
+      if (stashTiedToVoided(s, voided)) continue;
       if (moveClearStash(s.at)) continue;
       dropClearStash(s.at);
     }
+    pruneVoidedAt();
   };
   // App.jsx Reset: favoritesBefore (chained), the local reset, the stash, the take, the intents.
   const reset = (at, cloudIds, { uploads = [] } = {}) => {

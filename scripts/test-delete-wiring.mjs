@@ -381,9 +381,9 @@ test("round 15 S5: an archive a clear held is recorded, re-applied on a void, it
 test("round 17: a voided clear gives back its stash and its followers, after its in-memory put-back", () => {
   assert.match(src, /import \{[^}]*\bvoidedClearStashes\b[^}]*\} from "\.\/lib\/storage\.js";/);
   for (const [name, h, at, key, settle, put] of [
-    ["Clear Logs", logsH(), "snap", "if (cr.voided) {", 'settleDeleteIntents("history-delete", clearedLogIds)', "putBackQueuedUploads(takenLogUploads)"],
-    ["Clear Outputs", outputs(), "clearAt", "if (cr.voided) {", 'settleDeleteIntents("history-delete", plan.remove || [])', "putBackQueuedUploads(logUploadsBefore.filter("],
-    ["Reset", reset(), "resetAt", "if (rr.voided) {", 'settleDeleteIntents("history-delete", clearedLogIds)', "putBackQueuedUploads(favoritesBefore.queued)"]]) {
+    ["Clear Logs", logsH(), "snap", "if (cr.voided) {", 'voidDeleteIntents("history-delete", clearedLogIds, snap)', "putBackQueuedUploads(takenLogUploads)"],
+    ["Clear Outputs", outputs(), "clearAt", "if (cr.voided) {", 'voidDeleteIntents("history-delete", plan.remove || [], clearAt)', "putBackQueuedUploads(logUploadsBefore.filter("],
+    ["Reset", reset(), "resetAt", "if (rr.voided) {", 'voidDeleteIntents("history-delete", clearedLogIds, resetAt)', "putBackQueuedUploads(favoritesBefore.queued)"]]) {
     const v = voidedOf(h, key);
     const s = v.indexOf(settle), p = v.indexOf(put), a = v.indexOf(`applyClearStashes(voidedClearStashes(${at}), {`);
     assert.ok(s >= 0 && p > s && a > p, `${name}: intents settled, in-memory put back, then the stashes given back`);
@@ -403,6 +403,61 @@ test("round 17: a voided clear gives back its stash and its followers, after its
   const f = st.slice(st.indexOf("export function stashFollowers(ts)"), st.indexOf("export function voidedClearStashes(ts)"));
   assert.match(f, /if \(!Number\.isFinite\(at\) \|\| intentsPendingAt\(at\)\) return out;/);
   assert.match(f, /\(s\.movedTo \|\| \[\]\)\.includes\(at\) && !intentsPendingAt\(s\.at\)/);
+});
+// Review round 18 #3: inline voids of PLAIN deletes (bulk delete, dropLogItemsFor, purgeEverywhere, History delete) only
+// settled their intents, and the next settleClearStashes dropped the stashes whose ids had moved to them as confirmed.
+// Every void now goes through voidDeleteIntents (settle + record the queue time), and the settle pass gives back a stash
+// tied to a recorded voided time instead of dropping it.
+test("round 18 #3: every void answer settles through voidDeleteIntents with its queue time; plain deletes give back", () => {
+  assert.match(src, /import \{[^}]*\bvoidDeleteIntents\b[^}]*\bvoidedTimes\b[^}]*\bstashTiedToVoided\b[^}]*\bpruneVoidedAt\b[^}]*\} from "\.\/lib\/storage\.js";/);
+  // The only settleDeleteIntents left is a confirmed clear's (History-only intents the server tombstoned).
+  const settles = src.match(/settleDeleteIntents\([^\n]*/g) || [];
+  assert.equal(settles.length, 1, `plain settles left: ${settles.join(" | ")}`);
+  assert.match(src, /if \(cr\.ok\) settleDeleteIntents\("task-delete", historyOnly\.filter/);
+  // Every branch on a voided answer settles through the recording helper.
+  // (`else if` ones are the toasts after a settled void; the replay's second branch is its give-back.)
+  const branches = [...src.matchAll(/(else )?if \((?:(?:r|hr|cr|rr)\.voided(?:\.length)?|voided\.length)\) (\{|applyClearStashes\(voidedClearStashes\(ts\)\))/g)]
+    .filter(b => !b[1] && b[2] === "{");
+  assert.equal(branches.length, 8, "replay, dropLogItemsFor, purgeEverywhere, bulk delete, History delete, Clear Logs, Clear Outputs, Reset");
+  for (const b of branches) {
+    const head = src.slice(b.index, b.index + 400);
+    assert.match(head, /^[^\n]*\n(\s*\/\/[^\n]*\n)*\s*voidDeleteIntents\(/, `void branch at line ${src.slice(0, b.index).split("\n").length} settles through voidDeleteIntents first`);
+  }
+  const plainSites = [
+    ["dropLogItemsFor", between("const dropLogItemsFor = useCallback(", "}, [persistLog]);"), 'voidDeleteIntents("history-delete", r.voided, emptiedAt)', "giveBackVoided(emptiedAt)"],
+    ["purgeEverywhere", purge(), 'voidDeleteIntents("history-delete", hr.voided, plan.historyQueuedAt)', "giveBackVoided(plan.historyQueuedAt)"],
+    ["bulk delete", between("const queuedAt = queueDeleteIntents(\"task-delete\", ids);", "const { note } = r.ok ? await purgeEverywhere(plan)"),
+      'voidDeleteIntents("history-delete", plan.remove || [], plan.historyQueuedAt)', "giveBackVoided(queuedAt, plan.historyQueuedAt)"],
+    ["History delete", between('const queuedAt = queueDeleteIntents("history-delete", ids);', "// 7. Refresh counters"), 'voidDeleteIntents("history-delete", r.voided, queuedAt)', "giveBackVoided(queuedAt)"]];
+  for (const [name, h, settle, give] of plainSites) {
+    const s = h.indexOf(settle), g = h.indexOf(give);
+    assert.ok(s >= 0 && g > s, `${name}: settled and recorded, then the stashes that moved to it given back`);
+    assert.doesNotMatch(h.slice(s, g), /await /, `${name}: nothing awaited between the void and its give-back`);
+  }
+  assert.ok(between("const queuedAt = queueDeleteIntents(\"task-delete\", ids);", "const { note } = r.ok").includes('voidDeleteIntents("task-delete", voided, queuedAt)'), "bulk delete: task group");
+  assert.match(between("const replayDeleteIntents = async", "const replayHistoryUploads = async"), /voidDeleteIntents\(kind, r\.voided, ts\)/);
+  for (const [h, re] of [[outputs(), /voidDeleteIntents\("task-delete", clearedTaskIds, clearAt\)/], [reset(), /voidDeleteIntents\("task-delete", clearedTaskIds, resetAt\); voidDeleteIntents\("history-delete", clearedLogIds, resetAt\)/]])
+    assert.match(h, re);
+  const give = between("const giveBackVoided = (...times) =>", "\n  };");
+  assert.match(give, /voidedClearStashes\(t\)/); assert.match(give, /applyClearStashes\(at => which\.some\(w => w\(at\)\)\)/);
+});
+test("round 18 #3: settleClearStashes gives back a stash tied to a recorded voided time; no path drops one", () => {
+  const settle = between("const settleClearStashes = () =>", "const giveBackVoided = ");
+  const back = settle.indexOf("if (back.size) applyClearStashes(at => back.has(at));");
+  const guard = settle.indexOf("if (stashTiedToVoided(s, voided)) continue;");
+  const mv = settle.indexOf("if (moveClearStash(s.at)) continue;"), drop = settle.indexOf("dropClearStash(s.at)");
+  assert.ok(settle.indexOf("const voided = voidedTimes();") >= 0 && back > 0, "given back first");
+  assert.ok(guard > back && mv > guard && drop > mv, "a tied stash is never moved or dropped");
+  assert.equal(settle.match(/dropClearStash\(/g)?.length, 1, "one drop, behind the guard");
+  assert.match(settle, /pruneVoidedAt\(\);\s*\n\s*\};/, "the record is pruned after the pass");
+  // storage.js: the helper settles and records; the tie needs nothing pending; restoreGuard's drop records too.
+  const st = readFileSync(new URL("../src/lib/storage.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const v = st.slice(st.indexOf("export function voidDeleteIntents("), st.indexOf("export function stashTiedToVoided("));
+  assert.match(v, /settleDeleteIntents\(kind, ids\);\s*\n\s*if \(\(ids \|\| \[\]\)\.some\(Boolean\)\) recordVoidedAt\(at\);/);
+  const tie = st.slice(st.indexOf("export function stashTiedToVoided("), st.indexOf("// Clear Logs' stash (round 16 #6)"));
+  assert.match(tie, /intentsPendingAt\(stash\.at\)/); assert.match(tie, /voided\.has\(t\) && !intentsPendingAt\(t\)/);
+  assert.match(st.slice(st.indexOf("export function dropDeleteIntentsBefore("), st.indexOf("// The restore check every replay")), /recordVoidedAt\(times\)/);
+  assert.equal((st.match(/settleDeleteIntents\(/g) || []).length, 3, "definition, confirmDeleteIntents, voidDeleteIntents");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

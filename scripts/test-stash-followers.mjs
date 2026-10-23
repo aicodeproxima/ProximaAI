@@ -13,7 +13,8 @@ globalThis.localStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setI
 const S = await import("../src/lib/storage.js");
 const { addFailedSync, getFailedSyncs, queueDeleteIntents, settleDeleteIntents, confirmDeleteIntents, intentGroups, peekQueuedUploads,
   takeQueuedUploads, putBackQueuedUploads, buildClearStash, writeClearStash, readClearStash, readClearStashes, dropClearStash,
-  stashGiveBack, stashArchivePaths, moveClearStash, recordStashArchive, stashFollowers, voidedClearStashes } = S;
+  stashGiveBack, stashArchivePaths, moveClearStash, recordStashArchive, stashFollowers, voidedClearStashes,
+  voidDeleteIntents, voidedTimes, recordVoidedAt, pruneVoidedAt, stashTiedToVoided, dropDeleteIntentsBefore } = S;
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -24,7 +25,7 @@ const test = (name, fn) => {
 // The App.jsx side, mirrored. `tasks` / `logs`: this device's in-memory items; `fileDeletes`: paths sent to the
 // file-delete queue (queueArchivedFileDeletes); `reapplied`: archive records re-applied, with the base task used.
 const rig = () => {
-  const st = { tasks: [], logs: [], fileDeletes: [], reapplied: [] };
+  const st = { tasks: [], logs: [], fileDeletes: [], reapplied: [], favorites: [] };
   const applyClearStashes = (which, held = {}) => {
     const heldTasks = held.tasks || new Map(), heldLogs = held.logs || new Set();
     for (const s of readClearStashes()) {
@@ -38,15 +39,29 @@ const rig = () => {
       const base = new Map([...heldTasks, ...backTasks.map(t => [t.id, t])]);
       for (const [id, rec] of Object.entries(back.archives || {})) st.reapplied.push({ id, base: base.get(id) || rec.task, paths: rec.paths });
       st.fileDeletes.push(...back.orphanPaths);
+      if (back.favorites) st.favorites.push(back.favorites);
       dropClearStash(s.at);
     }
   };
+  // Round 18 #3: a stash tied to a recorded voided time is given back first, never dropped.
   const settleClearStashes = () => {
+    const voided = voidedTimes();
+    const back = new Set(readClearStashes().filter(s => stashTiedToVoided(s, voided)).map(s => s.at));
+    if (back.size) applyClearStashes(at => back.has(at));
     const queued = new Set([...intentGroups("task-delete"), ...intentGroups("history-delete")].map(([ts]) => ts));
     for (const s of readClearStashes()) if (!queued.has(s.at)) {
+      if (stashTiedToVoided(s, voided)) continue;
       if (moveClearStash(s.at)) continue;
       st.fileDeletes.push(...stashArchivePaths(s)); dropClearStash(s.at);
     }
+    pruneVoidedAt();
+  };
+  // A plain delete (bulk delete, History delete, dropLogItemsFor, purgeEverywhere's History removal): no stash of its own.
+  const plainDelete = (kind, ids, at) => queueDeleteIntents(kind, ids, at);
+  // Its inline answer. `giveBack` false: a call site that forgot the give-back (the record still covers it).
+  const plainAnswer = (kind, ids, at, outcome, { giveBack = true } = {}) => {
+    if (outcome === "deleted") confirmIntents(kind, ids);
+    if (outcome === "voided") { voidDeleteIntents(kind, ids, at); if (giveBack) applyClearStashes(voidedClearStashes(at)); }
   };
   const confirmIntents = (kind, ids) => st.fileDeletes.push(...confirmDeleteIntents(kind, ids));
   // A Reset-shaped clear at `at`: stash before the take, the take, the intents, the items leave this device.
@@ -66,7 +81,7 @@ const rig = () => {
     const heldArchives = outcome === "ok" ? (readClearStash(c.at)?.archives || {}) : {};
     if (outcome === "ok") dropClearStash(c.at);
     if (outcome === "voided") {
-      settleDeleteIntents("task-delete", c.taskIds); settleDeleteIntents("history-delete", c.logIds);
+      voidDeleteIntents("task-delete", c.taskIds, c.at); voidDeleteIntents("history-delete", c.logIds, c.at);
       st.tasks.push(...c.removedHere.filter(t => !st.tasks.some(x => x.id === t.id)));
       putBackQueuedUploads(c.taken);
       applyClearStashes(voidedClearStashes(c.at), { tasks: new Map(c.removedHere.map(t => [t.id, t])), logs: new Set() });
@@ -85,11 +100,11 @@ const rig = () => {
       const a = answers[ts];
       if (!a) continue;
       if (a === "deleted") confirmIntents(kind, ids);
-      if (a === "voided") { settleDeleteIntents(kind, ids); applyClearStashes(voidedClearStashes(ts)); }
+      if (a === "voided") { voidDeleteIntents(kind, ids, ts); applyClearStashes(voidedClearStashes(ts)); }
     }
     settleClearStashes();
   };
-  return { st, applyClearStashes, settleClearStashes, clear, answer, replay };
+  return { st, applyClearStashes, settleClearStashes, clear, answer, replay, plainDelete, plainAnswer, confirmIntents };
 };
 const queuedTaskUploads = () => getFailedSyncs().filter(e => e.kind === "task").map(e => e.id);
 const T1 = 1000, T2 = 2000;
@@ -235,6 +250,114 @@ test("an id pending deletion by a later clear is not given back by a follower; i
   r.answer(c2, "voided");
   assert.deepEqual(r.st.tasks.map(t => t.id), ["A"], "B stays deleted");
   assert.deepEqual(readClearStash(3000).archives.B.paths, ["p/b.png"], "B's archive record moved to the pending delete");
+});
+
+// Review round 18 #3 (r18-correctness/plain-void.mjs): a clear's stash whose ids all moved to a PLAIN delete (no stash of
+// its own: bulk delete, History delete, dropLogItemsFor, purgeEverywhere) that is voided inline was dropped as confirmed
+// by the next settle pass, and its archive paths queued for deletion. Every void now records its queue time
+// (voidDeleteIntents), and settleClearStashes gives back, never drops, a stash tied to a recorded voided time.
+const T4 = 5000, FAV = { scope: "d", byType: { image: ["m1"] }, updatedAt: 1, resetAt: T1 };
+const resetMovedToPlain = (r) => {
+  addFailedSync({ kind: "task", id: "X", data: { id: "X", status: "completed" } });
+  r.clear(T1, { taskIds: ["X"], favorites: FAV });                 // Reset R1: no answer, takes X's newer upload
+  writeClearStash(T1, { ...readClearStash(T1), archives: { X: { task: { id: "X" }, paths: ["p/x.png"] } } });
+  r.plainDelete("task-delete", ["X"], T4);                          // tab B (stale view) bulk-deletes X
+  assert.deepEqual(readClearStash(T1).movedTo, [T4]);
+  assert.equal(S.intentsPendingAt(T1), false);
+};
+test("round 18 #3: a Reset stash moved wholly to a plain delete voided inline is given back at the void", () => {
+  const r = rig();
+  resetMovedToPlain(r);
+  r.plainAnswer("task-delete", ["X"], T4, "voided");
+  assert.deepEqual(queuedTaskUploads(), ["X"], "X's taken upload is queued again");
+  assert.equal(getFailedSyncs().find(e => e.kind === "task").data.status, "completed");
+  assert.deepEqual(r.st.favorites, [FAV], "the Reset's favorites come back");
+  assert.deepEqual(r.st.reapplied.map(a => a.id), ["X"]);
+  r.settleClearStashes();
+  assert.deepEqual(r.st.fileDeletes, [], "no archive file is queued for deletion");
+  assert.deepEqual(readClearStashes(), []);
+});
+test("round 18 #3: the same with a void site that forgot the give-back: the settle pass gives it back, never drops it", () => {
+  const r = rig();
+  resetMovedToPlain(r);
+  r.plainAnswer("task-delete", ["X"], T4, "voided", { giveBack: false });
+  assert.deepEqual([...voidedTimes()], [T4], "the void is recorded");
+  assert.equal(stashTiedToVoided(readClearStash(T1)), true);
+  r.settleClearStashes();                                            // forceSaveAll / settleCloudClear
+  assert.deepEqual(queuedTaskUploads(), ["X"], "given back, not dropped as confirmed");
+  assert.deepEqual(r.st.favorites, [FAV]);
+  assert.deepEqual(r.st.fileDeletes, [], "p/x.png is not deleted");
+  assert.deepEqual(readClearStashes(), []);
+  assert.deepEqual([...voidedTimes()], [], "the record is pruned once no stash refers to it");
+});
+test("round 18 #3: two-tab race: the follower's own last group confirms AFTER its target's void: moved part back, confirmed not", () => {
+  const r = rig();
+  addFailedSync({ kind: "task", id: "A", data: { id: "A", v: 2 } });
+  addFailedSync({ kind: "task", id: "B", data: { id: "B", v: 2 } });
+  r.clear(T1, { taskIds: ["A", "B"] });
+  writeClearStash(T1, { ...readClearStash(T1), archives: { A: { task: { id: "A" }, paths: ["p/a.png"] }, B: { task: { id: "B" }, paths: ["p/b.png"] } } });
+  r.plainDelete("task-delete", ["A"], T4);                          // tab B deletes A only: B stays pending at T1
+  r.plainAnswer("task-delete", ["A"], T4, "voided");                // handled while T1 still has B pending
+  assert.deepEqual(queuedTaskUploads(), [], "not yet: T1 is not settled");
+  assert.deepEqual(readClearStashes().map(s => s.at), [T1]);
+  r.confirmIntents("task-delete", ["B"]);                            // T1's last group confirms afterwards
+  assert.deepEqual(r.st.fileDeletes, ["p/b.png"], "the confirmed task's archive files go");
+  r.settleClearStashes();
+  assert.deepEqual(queuedTaskUploads(), ["A"], "A's taken upload comes back, B's does not");
+  assert.deepEqual(r.st.reapplied.map(a => a.id), ["A"]);
+  assert.deepEqual(r.st.fileDeletes, ["p/b.png"], "A's files are kept");
+  assert.deepEqual(readClearStashes(), []);
+});
+test("round 18 #3: a stash whose plain-delete target was confirmed is dropped with its archive paths queued", () => {
+  const r = rig();
+  resetMovedToPlain(r);
+  r.plainAnswer("task-delete", ["X"], T4, "deleted");
+  r.settleClearStashes();
+  assert.deepEqual(queuedTaskUploads(), [], "the taken upload stays taken");
+  assert.deepEqual(r.st.favorites, [], "nothing comes back");
+  assert.deepEqual(r.st.fileDeletes, ["p/x.png"]);
+  assert.deepEqual(readClearStashes(), []);
+  assert.deepEqual([...voidedTimes()], []);
+});
+test("round 18 #3: a voided time whose other group is still pending waits; its later confirm still gives back the voided part", () => {
+  const r = rig();
+  addFailedSync({ kind: "task", id: "A", data: { id: "A" } });
+  r.clear(T1, { taskIds: ["A"] });
+  r.plainDelete("task-delete", ["A"], T4); r.plainDelete("history-delete", ["h"], T4);   // bulk delete: tasks and History at T4
+  r.plainAnswer("task-delete", ["A"], T4, "voided");
+  r.settleClearStashes();
+  assert.deepEqual(queuedTaskUploads(), [], "T4's History group is pending: not yet");
+  r.plainAnswer("history-delete", ["h"], T4, "deleted");
+  r.settleClearStashes();
+  assert.deepEqual(queuedTaskUploads(), ["A"]);
+  assert.deepEqual(readClearStashes(), []);
+});
+test("round 18 #3: the voided-at record: void sites record only real voids, unreferenced and 30-day-old times are pruned", () => {
+  voidDeleteIntents("task-delete", [], 700);
+  assert.deepEqual([...voidedTimes()], [], "nothing voided: nothing recorded");
+  writeClearStash(100, { tasks: [{ id: "a" }], movedTo: [300] });
+  recordVoidedAt(300); recordVoidedAt(999);
+  assert.deepEqual([...voidedTimes()], [300], "999 is referenced by no stash");
+  recordVoidedAt(100);
+  assert.deepEqual([...voidedTimes()].sort(), [100, 300]);
+  localStorage.setItem("proximaai-voided-at", JSON.stringify({ 100: Date.now() - 31 * 24 * 60 * 60 * 1000, 300: Date.now() }));
+  assert.deepEqual([...voidedTimes()], [300], "older than 30 days: not counted");
+  pruneVoidedAt();
+  assert.deepEqual(Object.keys(JSON.parse(localStorage.getItem("proximaai-voided-at"))), ["300"]);
+  dropClearStash(100); pruneVoidedAt();
+  assert.equal(localStorage.getItem("proximaai-voided-at"), null, "empty record removed");
+  localStorage.setItem("proximaai-voided-at", "garbage");
+  assert.deepEqual([...voidedTimes()], [], "an unreadable record counts as none");
+});
+test("round 18 #3: a restore's drop of older intents (restoreGuard) records their times as voided", () => {
+  writeClearStash(T1, { tasks: [{ id: "a" }] });
+  queueDeleteIntents("task-delete", ["a"], T1);
+  queueDeleteIntents("history-delete", ["h"], T2);
+  queueDeleteIntents("task-delete", ["later"], 9000);
+  writeClearStash(T2, {}); writeClearStash(9000, {});
+  dropDeleteIntentsBefore(T4);
+  assert.deepEqual([...voidedTimes()].sort((a, b) => a - b), [T1, T2]);
+  assert.equal(stashTiedToVoided(readClearStash(9000)), false, "still pending");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);
