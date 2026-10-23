@@ -1,16 +1,17 @@
--- The restore-checked delete RPCs (lockdown session: 20261022300000, 20261022310000), called as anon the way the app
--- calls them: every bad token is refused before anything changes, a valid token reaches only its own scope (with a
--- positive control: its own probes really go), and the invoker helper _clear_kind is closed to browser roles.
--- Everything rolls back, the valid-token clears included. Run alone (live), like the other test-rls-*.sql files.
+-- The restore-checked delete RPCs (lockdown session: 20261022300000, 20261022310000, 20261022320000) and the clock they
+-- queue by (server_time_ms), called as anon the way the app calls them: every bad token is refused before anything
+-- changes, a valid token reaches only its own scope (with a positive control: its own probes really go), and the
+-- invoker helper _clear_kind is closed to browser roles. Everything rolls back, the valid-token clears included.
+-- Run alone (live), like the other test-rls-*.sql files.
 do $pt$
 declare
   u text := (select value->>'username' from public.app_secrets where key = 'admin_username');
   p text := '__rls_qrpc_' || txid_current();
-  s text; o text; r text[] := '{}'; res json; j int; k int; ok boolean;
+  s text; o text; r text[] := '{}'; res json; j int; k int; ok boolean; ms bigint;
   t_good text; t_forged text; t_exp text; t_other text; t_nonadmin text; bad text[];
   lbl text[] := array['null','forged','expired','other-subject','non-admin','garbage'];
   msg text[] := array[null,'invalid signature','session token expired','session token revoked','forbidden','malformed session token'];
-  rpcs text[] := array['delete_queued_rows','clear_queued_rows','reset_queued_rows','upsert_queued_history'];
+  rpcs text[] := array['delete_queued_rows','clear_queued_rows','reset_queued_rows','upsert_queued_history','server_time_ms'];
   qat bigint := (extract(epoch from clock_timestamp()) * 1000)::bigint + 60000;   -- a queue time after any restore
 begin
   s := 'user:' || u;
@@ -29,9 +30,14 @@ begin
   -- A. MUST REFUSE: every bad token, every RPC (the verifier's message, 'forbidden' for a non-admin subject, or ok:false).
   execute 'set local role anon';
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
-  for k in 1..4 loop
+  for k in 1..5 loop
     for j in 1..6 loop
       begin
+        if k = 5 then   -- returns a bigint, not json: any answer at all is a refusal that did not happen
+          ms := public.server_time_ms(bad[j]);
+          r := r || format('FAIL %s %s: returned a time', rpcs[k], lbl[j]);
+          continue;
+        end if;
         res := case k
           when 1 then public.delete_queued_rows(bad[j], 'task', array[p || '_t'], qat)
           when 2 then public.clear_queued_rows(bad[j], 'task', qat, array[p || '_t'])
@@ -45,7 +51,11 @@ begin
       end;
     end loop;
   end loop;
+  ms := public.server_time_ms(t_good);   -- positive control: a valid session gets the database clock
   execute 'reset role';
+  r := r || format('%s server_time_ms with a valid session is the database clock (off by %s ms)',
+    case when abs(ms - (extract(epoch from clock_timestamp()) * 1000)::bigint) < 60000 then 'PASS' else 'FAIL' end,
+    abs(ms - (extract(epoch from clock_timestamp()) * 1000)::bigint));
   r := r || format('%s refusals changed nothing (own seeds still there)',
     case when exists (select 1 from public.tasks where id = p || '_t')
           and exists (select 1 from public.history where id = p || '_h') then 'PASS' else 'FAIL' end);
@@ -91,7 +101,7 @@ begin
    where p.pronamespace = 'public'::regnamespace and p.proname = any (rpcs)
      and (coalesce((select bool_or(a.grantee = 0) from aclexplode(p.proacl) a where a.privilege_type = 'EXECUTE'), true)
           or not coalesce(p.proconfig::text like '%search_path=%', false));
-  r := r || format('%s the 4 RPCs: no PUBLIC EXECUTE, search_path pinned', case when ok then 'PASS' else 'FAIL' end);
+  r := r || format('%s the %s RPCs: no PUBLIC EXECUTE, search_path pinned', case when ok then 'PASS' else 'FAIL' end, cardinality(rpcs));
   foreach o in array array['anon', 'authenticated'] loop
     execute format('set local role %I', o);
     begin
