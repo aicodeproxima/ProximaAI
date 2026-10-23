@@ -292,7 +292,8 @@ a device list with "sign out other devices".
   - `scripts/test-mu-catalog.sql` holds the catalog gates (built 2026-10-23). Today it reads 11 PASS / 2 FAIL by
     design: G1 (16 row policies admit any valid session) and G2 (4 storage policies lack a folder check) are the walls P4
     builds. Failing-first with one planted defect per other gate: all 10 predicted FAILs;
-  - `scripts/test-mu-auth.sql` covers the lockout, epoch, backup code and topic per account;
+  - `scripts/test-mu-auth.sql` (P1, lockdown session) covers the per-account lockout, epoch and backup code. The live
+    topic stays owner-only until P4 (members get `sync_topic` null); P4's matrix covers the topic per account;
   - the existing test-rls-* and feature suites keep passing unchanged.
 - R2, live: `scripts/tools/mu-probe.mjs` drives two test accounts over REST, Storage and Realtime and reports counts
   only.

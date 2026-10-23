@@ -7,7 +7,8 @@ declare
   r text[] := '{}'; n int; v text;
   data_tables text[] := array['tasks','history','settings','favorites','presets','sync_tombstones'];
   own text := 'device_id = \( SELECT proxima_auth\.session_scope\(';     -- the own-scope predicate, as pg_policies prints it
-  pre_session text[] := array['verify_admin','unlock_admin_with_backup_code'];   -- run before a session exists, by design
+  -- Run before a session exists, by design (P1 adds unlock_with_backup_code; M4 drops the legacy unlock).
+  pre_session text[] := array['verify_admin','unlock_with_backup_code','unlock_admin_with_backup_code'];
 begin
   -- G1. Rows: every read / update / delete policy admits only the session's own rows.
   select count(*), string_agg(tablename || '.' || cmd, ', ' order by tablename, cmd) into n, v
@@ -57,7 +58,7 @@ begin
   select count(*), string_agg(p.proname, ', ') into n, v from pg_proc p
    where p.pronamespace = 'public'::regnamespace and p.prosecdef and p.prokind = 'f'
      and (has_function_privilege('anon', p.oid, 'EXECUTE') or has_function_privilege('authenticated', p.oid, 'EXECUTE'))
-     and p.proname <> 'verify_admin'
+     and p.proname <> all (array['verify_admin','unlock_with_backup_code'])   -- sign-in by name
      and pg_get_function_identity_arguments(p.oid) ~* 'p_username|p_device_id|p_scope|p_owner|p_user\M';
   r := r || format('%s G7 no browser-callable function takes an account argument (%s%s)', case when n = 0 then 'PASS' else 'FAIL' end, n, case when n > 0 then ': ' || v else '' end);
 
