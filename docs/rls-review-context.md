@@ -44,6 +44,16 @@ not Supabase Auth.
   lock, so the RLS check decides. While sync_tombstones' key is (id), a rowless tombstone is inserted on conflict (id) do
   nothing, so one account can never move another's tombstone. Live probe after the apply: no header 28000, forged token
   28000, another account 42501, own tombstoned id 0 rows, fresh id 1 row. Test: scripts/test-tombstone-rowless-db.sql.
+- History strip (lockdown session; RLS-reviewed) — supabase/migrations/20261024100000_history_strip_restore_removed.sql
+  (applied 2026-10-23 22:31:54 UTC): a History upload loses the items a restore removed (by_restore task tombstones in
+  the entry's scope) unless the stored entry already holds them. Its review closed the History twin of the tombstone
+  oracle: the emptied-new-entry branch of _history_strip_deleted_items wrote a History tombstone and returned NULL before
+  the row policies' WITH CHECK, so a sessionless or other-account insert naming another scope wrote tombstones there and
+  revealed which ids were tombstoned. Now a browser role (read from the role GUC, as the function is SECURITY DEFINER)
+  naming a scope other than its session's gets an error (session_scope(true) → 28000, else 42501). This holds on the
+  direct REST path and through the definer RPC upsert_queued_history, where no policy runs. The "no stored entry" check
+  is scoped too. Live probe 2026-10-25: no header 28000, forged token 28000, another account 42501, own session
+  tombstone, nothing written into a foreign scope. Tests: scripts/test-history-strip-restore-db.sql (R10a-d, R11).
 - Related: 08e2bb2 (deleteArchivedPath true only when Storage confirms), 1bd2e68 (clear*Remote → {ok, error}).
 
 ## Accepted — do not re-report
@@ -72,7 +82,7 @@ rollback + test-rls-grants-unchanged.sql. scripts/test-rls-queued-rpcs.sql: the 
 tokens each, a valid token reaches only its own scope, _clear_kind is closed to browser roles (32 checks; failing-first
 with 3 planted defects → 11 FAIL). The other features' SQL tests (scripts/test-*-db.sql: ws-webhook,
 ws-webhook-deleted, backup-scrub, backup-switch-off, history-strip, history-emptied, queued-deletes, paths-in-use,
-public-execute, restore-scrub, scrub-live, tombstone-rowless) must stay green too.
+public-execute, restore-scrub, scrub-live, tombstone-rowless, history-strip-restore) must stay green too.
 
 ## Rules for reviewers
 Query the live database with `node scripts/tools/sb-query.mjs "<select>"` or `--write -f <file.sql>` (Management API,
