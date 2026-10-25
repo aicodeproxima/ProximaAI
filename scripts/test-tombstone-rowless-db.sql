@@ -150,9 +150,14 @@ begin
     r := delete_queued_rows(ta, 'history', array[p || '_xl2'], 9e12::bigint);
     r := clear_queued_rows(ta, 'task', 1, array[p || '_x1']);
     execute 'reset role';
+    -- From 20261025300000 (tombstones keyed (device_id, id)) A's naming records A's own rowless tombstone; B's scope
+    -- still gets none.
     out := out || case when exists (select 1 from tasks where id = p || '_x1' and device_id = sb)
-                        and not exists (select 1 from sync_tombstones where id = p || '_x1')
-                       then 'ok T5a A naming B''s live row: row kept, no tombstone; ' else 'FAIL T5a A naming B''s live row; ' end;
+                        and not exists (select 1 from sync_tombstones where id = p || '_x1' and device_id = sb)
+                        and case when (select pg_get_constraintdef(c.oid) from pg_constraint c where c.conrelid = 'public.sync_tombstones'::regclass and c.contype = 'p') = 'PRIMARY KEY (device_id, id)'
+                                 then exists (select 1 from sync_tombstones where id = p || '_x1' and device_id = sa)
+                                 else not exists (select 1 from sync_tombstones where id = p || '_x1') end
+                       then 'ok T5a A naming B''s live row: row kept, no tombstone in B; ' else 'FAIL T5a A naming B''s live row; ' end;
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_x2', sb, 'completed', 1000, '[]');
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_x2', sb, 'completed', 2000, '[]')
       on conflict (id) do update set start_time = excluded.start_time;
@@ -208,7 +213,12 @@ begin
     execute 'reset role';
     select count(*), min(device_id) into n, d from sync_tombstones where id = p || '_x5';
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_x5', sb, 'completed', 1000, '[]');
-    out := out || case when (r->>'deleted')::int = 1 and n = 1 and d = sb and not exists (select 1 from tasks where id = p || '_x5')
+    -- From 20261025300000 A's delete also records A's own tombstone (one per account); B's stays B's.
+    out := out || case when (r->>'deleted')::int = 1 and not exists (select 1 from tasks where id = p || '_x5')
+                        and exists (select 1 from sync_tombstones where id = p || '_x5' and device_id = sb)
+                        and case when (select pg_get_constraintdef(c.oid) from pg_constraint c where c.conrelid = 'public.sync_tombstones'::regclass and c.contype = 'p') = 'PRIMARY KEY (device_id, id)'
+                                 then n = 2 and exists (select 1 from sync_tombstones where id = p || '_x5' and device_id = sa)
+                                 else n = 1 and d = sb end
                        then 'ok T7 A''s delete keeps B''s tombstone in B, B''s re-insert dropped; '
                        else format('FAIL T7 after A''s delete: deleted=%s n=%s b_scope=%s; ', r->>'deleted', n, d = sb) end;
   exception when others then execute 'reset role'; out := out || format('FAIL T7 %s %s; ', sqlstate, sqlerrm); end;

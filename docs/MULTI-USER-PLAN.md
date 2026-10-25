@@ -34,7 +34,8 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
 3. **Policies admit any valid session.** USING admits "any valid session"; only WITH CHECK pins the scope (migration
    20261022120000). The `generations` storage policies have no folder check. A signed-in member could read, change or
    delete every row and file. **Rows FIXED 2026-10-23** (20261023050000, 3961a3d: USING device_id = session_scope, P4's
-   G1 moved forward with the lockdown session's OK); the storage folders (G2) still wait for P3/P4.
+   G1 moved forward with the lockdown session's OK). **Files FIXED 2026-10-25** (20261025100000: per-account folders,
+   G2 passes).
 4. **The scope is the username.** It is `'user:<username>'`, which can change:
    - a rename rewrites device_id in every table and races with other devices;
    - archive folders are `user_<name>/…` and uploads are `uploads/user_<name>/…`;
@@ -51,7 +52,7 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
    Deliveries from members' own WaveSpeed accounts would presumably fail verification, so their results would land only
    while a device polls. Even a verified delivery is not tied to an account.
 7. **One live-update topic.** It is derived from the single admin, so every account would wake every other account's
-   devices.
+   devices. **FIXED 2026-10-25** (20261025200000: one topic per account; the owner's value did not change).
 8. **auto_backups is global** (app_secrets). One account turning backups off turns them off for everyone.
 9. **The proxy rate limit is OFF in production.** The Vercel runtime log at 22:12:22 UTC says "rate limiting DISABLED
    — UPSTASH not configured", and the limit counts request rate only. One account could flood the shared proxy. Owner
@@ -209,6 +210,12 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   - writes queued before the switch land.
 
 **P4 — Per-account walls (server). Size L. THE GATE before any second account.**
+- **Progress (2026-10-25, RLS session; 3 review rounds of 3 critics, every finding fixed):** live: 20261025100000 storage
+  folders (20:18:55 UTC), 20261025200000 topic per account (20:19:49 UTC), 20261025300000 tombstones keyed
+  (device_id, id) with scoped existence checks (20:20:13 UTC). Gate scripts/test-mu-matrix.sql 48/0 live; every suite 0
+  FAIL. Next: 20261025400000 squat-proof backups (review round 4), then the (device_id, id) keys of tasks / history /
+  favorites in three steps with the lockdown session (unique index, client onConflict, key swap after 24 h), webhook per
+  account, cron fairness and per-account auto_backups (members get "unknown" until then).
 - Policies:
   - `USING (device_id = scope)` for every command on all six tables;
   - the storage policies check the account's folders;
@@ -258,7 +265,9 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   - with every limit off, the proxy behaves exactly as today.
 - Owner console (counts only) and an audit log.
 - Account deletion purges everything everywhere: rows, files, WaveSpeed predictions (through that account's key) and
-  backups.
+  backups. It keeps the account's `proxima_auth.account_folders` rows (from P4's 20261025100000; a soft delete through
+  `users.deleted_at` keeps the account row they point to): a freed folder could otherwise be claimed by a new account and
+  inherit any file the purge missed. The table's foreign key refuses a hard delete of the account row while they exist.
 - Retire the app_secrets `admin_*` rows.
 
 **P6 — Prove simultaneity. Size M.**

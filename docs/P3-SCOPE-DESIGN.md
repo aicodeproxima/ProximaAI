@@ -24,10 +24,12 @@ and the rollback is tested before the apply. Status: DESIGN, nothing built.
    session account's own old scopes moves to its current scope (ordering proven: scripts/test-mu-alias-probe.sql).
    - Keyed by the session's account, so one account's alias can never map another account's rows.
    - Kept with no expiry: a device closed for weeks still replays its queue safely. Removed only on the owner's word.
-5. **Files stay where they are.** `proxima_auth.account_folders(account_id, folder)` lists the account's old folders
-   (`user_<name>`, `uploads/user_<name>`) next to its new one (`<uuid>`). P4's storage policies allow
-   `folder = any (my folders)`, and new archives and uploads go under `<uuid>/…` (client path change, supabase.js,
-   lockdown session's file).
+5. **Files stay where they are.** `proxima_auth.account_folders(folder, account_id)` (live from P4's
+   20261025100000) records every folder an account has had; P4's storage policies allow `folder = any (my folders)`,
+   for archives `<folder>/…` and uploads `uploads/<folder>/…`. The browser spells a folder from its scope
+   (`'user:<uuid>'` → `user_<uuid>`), so after the cut-over new files go under `user_<uuid>/…` with no client path
+   change, and the trigger on `users.scope` claims that folder. (Revised 2026-10-25, review c3 #2: an earlier draft said
+   bare `<uuid>/…`, which the table's `^user_` check refuses and the browser would not write.)
 6. rename_my_account becomes "update users.username": instant, with no row rewrites. Its restore-marker interlocks for
    rewriting rows retire, and test-rls-rename.sql changes to match.
 

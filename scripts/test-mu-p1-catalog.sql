@@ -46,6 +46,9 @@ declare
     'public.set_my_account(text,text,boolean,bigint)', 'public.set_my_wavespeed_key(text,text)',
     'public.snapshot_my_data_phase2(text,text,text)', 'public.unlock_admin_with_backup_code(text,text)',
     'public.upsert_queued_history(text,jsonb,bigint)', 'public.verify_admin(text,text)'];
+  -- Browser-callable on purpose after P1, so not 'new since M1': the storage policies' folder check (P4, RLS session,
+  -- 20261025100000_mu_p4_storage_folders).
+  later constant text[] := array['proxima_auth.my_folders(boolean)', 'proxima_auth.object_folder(text)'];
   m3_post constant text := 'b9ba44a18b04d17bdf0034b944a57035';   -- M3's issue_session (pg_get_functiondef md5)
   out text := ''; v text; n int; n2 int; v_m3 boolean; v_m4 boolean; v_tabs text[];
 begin
@@ -109,7 +112,7 @@ begin
     from pg_proc p, unnest(array['anon','authenticated']) g
    where p.pronamespace in ('public'::regnamespace, 'proxima_auth'::regnamespace)
      and has_function_privilege(g, p.oid, 'EXECUTE')
-     and not (p.oid = any (array(select to_regprocedure(x) from unnest(pre_m1) x where to_regprocedure(x) is not null)));
+     and not (p.oid = any (array(select to_regprocedure(x) from unnest(pre_m1 || later) x where to_regprocedure(x) is not null)));
   out := out || case when v in ('unlock_with_backup_code(text,text,text)', 'public.unlock_with_backup_code(text,text,text)')
     then 'ok only-unlock-newly-browser-callable; '
     else format('FAIL only-unlock-newly-browser-callable %s; ', left(coalesce(v, 'none'), 160)) end;

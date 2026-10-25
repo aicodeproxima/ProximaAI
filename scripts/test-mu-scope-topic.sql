@@ -32,6 +32,9 @@ declare
   -- From M4 the owner's 'admin:' token is refused ('session token revoked'). M4 drops set_admin_credentials_rehash, the
   -- marker test-mu-auth uses too; S4, R5 and T7 follow it.
   m4 boolean := to_regprocedure('public.set_admin_credentials_rehash(text,text)') is null;
+  -- From P4's per-account topic (20261025200000) a member gets its own topic; T7 follows it.
+  p4_topic boolean := to_regprocedure('proxima_auth.account_topic(uuid)') is not null;
+  a_topic text;   -- member A's own topic (P4), read before T7 switches to anon
 begin
   if to_regclass('proxima_auth.users') is null then
     raise exception 'RESULT: 0 PASS, 1 FAIL :: FAIL M1 not applied (no proxima_auth.users)';
@@ -227,6 +230,7 @@ begin
   update proxima_auth.users set sessions_valid_after = sessions_valid_after + 100 where id = a_id;
   r := r || format('%s T6 member epoch leaves it', case when proxima_auth.sync_topic() = t0 then 'PASS' else 'FAIL' end);
   update proxima_auth.users set sessions_valid_after = 0 where id = a_id;
+  if p4_topic then execute 'select proxima_auth.account_topic($1)' into a_topic using a_id; end if;
   execute 'set local role anon';
   begin
     begin
@@ -234,10 +238,13 @@ begin
     exception when others then
       v := case when sqlerrm = 'session token revoked' then 'revoked' else 'error ' || sqlstate end;
     end;
-    r := r || format('%s T7 get_my_account: owner topic (u:%s), member null',
-      case when public.get_my_account(t_ou)->>'sync_topic' = t0 and public.get_my_account(t_a)->>'sync_topic' is null
+    r := r || format('%s T7 get_my_account: owner topic (u:%s), member %s',
+      case when public.get_my_account(t_ou)->>'sync_topic' = t0
+                and case when p4_topic then public.get_my_account(t_a)->>'sync_topic' = a_topic and a_topic <> t0
+                         else public.get_my_account(t_a)->>'sync_topic' is null end
                 and case when m4 then v = 'revoked' else v = t0 end then 'PASS' else 'FAIL' end,
-      case when m4 then '; admin: revoked from M4' else ' and admin:' end);
+      case when m4 then '; admin: revoked from M4' else ' and admin:' end,
+      case when p4_topic then 'its own (P4)' else 'null' end);
   exception when others then
     r := r || format('FAIL T7 get_my_account: %s %s', sqlstate, sqlerrm);
   end;

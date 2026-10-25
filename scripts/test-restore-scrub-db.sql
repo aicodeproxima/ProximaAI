@@ -105,8 +105,9 @@ begin
       values (u, 'manual', 0, 1, '[]',   -- no tasks row for rs-X: it comes back History-only
               '[{"id":"rs-HX","device_id":"user:__rs_test","timestamp":1,"tasks":[{"id":"rs-X","status":"completed","cost":1,"outputs":[]}],"total_cost":1}]')
       returning id into v_b5;
-    insert into sync_tombstones (id, kind, device_id, deleted_at, by_restore) values ('rs-X', 'task', u, now() - interval '1 day', false)
-      on conflict (id) do update set by_restore = false, deleted_at = excluded.deleted_at;   -- the owner deleted it before
+    -- The owner deleted it before. No ON CONFLICT: the key is (id) before 20261025300000 and (device_id, id) after it.
+    delete from sync_tombstones where id = 'rs-X';   -- any earlier copy, so the insert fits either key
+    insert into sync_tombstones (id, kind, device_id, deleted_at, by_restore) values ('rs-X', 'task', u, now() - interval '1 day', false);
     r := restore_my_backup_phase2(v_tok, v_b5);
     select by_restore into v_flag from sync_tombstones where id = 'rs-X';
     insert into backup_scrub_queue (username, all_tombstones) values (u, true);

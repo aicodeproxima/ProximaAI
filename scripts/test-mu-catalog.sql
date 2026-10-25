@@ -18,11 +18,12 @@ begin
   r := r || format('%s G1 row policies scoped to the own account (%s admit any valid session%s)',
                    case when n = 0 then 'PASS' else 'FAIL' end, n, case when n > 0 then ': ' || v else '' end);
 
-  -- G2. Files: every generations policy checks the account's own folder.
+  -- G2. Files: every generations policy checks the account's own folder (storage.foldername, or from 20261025100000
+  -- the inlinable proxima_auth.object_folder).
   select count(*), string_agg(cmd, ', ' order by cmd) into n, v
     from pg_policies
    where schemaname = 'storage' and tablename = 'objects' and policyname ilike 'generations%'
-     and coalesce(qual, '') || coalesce(with_check, '') !~ 'storage\.foldername';
+     and coalesce(qual, '') || coalesce(with_check, '') !~ 'storage\.foldername|proxima_auth\.object_folder\(name\)';
   r := r || format('%s G2 storage policies check the account folder (%s without%s)',
                    case when n = 0 then 'PASS' else 'FAIL' end, n, case when n > 0 then ': ' || v else '' end);
 

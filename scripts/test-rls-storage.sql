@@ -1,10 +1,13 @@
 -- Tests for supabase/migrations/20261022120000_rls_session_header.sql on storage.objects (bucket 'generations'), as the
 -- roles the Storage API uses for browser requests. Everything rolls back. Setting storage.allow_delete_query lets SQL past
 -- storage.protect_delete; the API path itself is checked live with an isolated probe bucket. Run like test-rls-tables.sql.
+-- Stage-aware: from 20261025100000 (per-account folders) a session lists and writes only its own account's folders, so
+-- the probes live inside the owner's archive folder; two accounts against each other: scripts/test-mu-matrix.sql.
 do $pt$
 declare
   u text; tk text; sub text;   -- the owner's name, a fresh session token and its subject, set first thing below
-  p text := '__rls_probe_' || txid_current();
+  p text;                    -- a probe folder inside the owner's own archive folder (set below)
+  walls boolean := to_regclass('proxima_auth.account_folders') is not null;
   t_good text; t_forged text; t_exp text; t_other text; t_nonadmin text;
   bad text[]; bad_lbl text[] := array['forged','expired','other-subject','non-admin','garbage'];
   bad_msg text[] := array['invalid signature','session token expired','session token revoked','not admin-scoped','malformed session token'];
@@ -22,6 +25,7 @@ begin
     tk := public._sign_session_token(sub, now() + interval '12 hours');
   end if;
   t_good     := tk;
+  p := regexp_replace('user:' || u, '[^A-Za-z0-9_-]', '_', 'g') || '/__rls_probe_' || txid_current();
   t_forged   := left(t_good, -1) || case right(t_good, 1) when '0' then '1' else '0' end;
   t_exp      := public._sign_session_token(sub, now() - interval '1 minute');
   t_other    := public._sign_session_token('admin:__rls_not_admin', now() + interval '12 hours');
@@ -29,7 +33,16 @@ begin
   bad := array[t_forged, t_exp, t_other, t_nonadmin, 'garbage'];
   perform set_config('storage.allow_delete_query', 'true', true);
   insert into storage.objects (bucket_id, name) values ('generations', p || '/seed');
-  select count(*) into total from storage.objects where bucket_id = 'generations';
+  -- What a valid session lists: every file before the per-account folders, its own account's folders after them.
+  if walls then
+    execute 'select count(*) from storage.objects o where o.bucket_id = ''generations''
+               and (case when (storage.foldername(o.name))[1] = ''uploads'' then (storage.foldername(o.name))[2]
+                         else (storage.foldername(o.name))[1] end)
+                   = any (array(select f.folder from proxima_auth.account_folders f
+                                  join proxima_auth.users w on w.id = f.account_id where w.role = ''owner''))' into total;
+  else
+    select count(*) into total from storage.objects where bucket_id = 'generations';
+  end if;
   execute 'set local role anon';
   -- MUST DENY without a header: the list is empty (lenient read); upload, overwrite and delete raise 28000
   perform set_config('request.headers', '{}', true);
@@ -75,6 +88,19 @@ begin
     r := r || format('%s storage valid delete rows=%s', case when n = 2 then 'PASS' else 'FAIL' end, n);
   exception when others then r := r || format('FAIL storage valid raised %s %s', sqlstate, sqlerrm);
   end;
+  -- With the per-account folders, a valid session cannot write outside its own (other folders, the root, bare uploads/).
+  if walls then
+    foreach stmt in array array[
+        format('insert into storage.objects (bucket_id, name) values (%L, %L)', 'generations', '__rls_elsewhere_' || txid_current() || '/x'),
+        format('insert into storage.objects (bucket_id, name) values (%L, %L)', 'generations', 'uploads/__rls_elsewhere_' || txid_current() || '/x'),
+        format('insert into storage.objects (bucket_id, name) values (%L, %L)', 'generations', 'uploads/__rls_root_' || txid_current())] loop
+      begin
+        execute stmt;
+        r := r || format('FAIL storage valid write outside the account folders allowed: %s', split_part(stmt, '''', 4));
+      exception when sqlstate '42501' then r := r || format('PASS storage valid write outside the account folders refused: %s', split_part(stmt, '''', 4));
+                when others then r := r || format('FAIL storage outside write: %s %s', sqlstate, sqlerrm); end;
+    end loop;
+  end if;
   -- Other buckets are untouched by these policies (none exist today; a valid session gets nothing outside 'generations')
   begin
     insert into storage.objects (bucket_id, name) values ('__rls_other_bucket', p || '/o');

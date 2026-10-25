@@ -125,8 +125,12 @@ begin
     out := out || case when (r->>'ok')::boolean and (r->>'id')::uuid = a and r->>'role' = 'member' and r->>'scope' = sa
                          and r->>'username' = '__mu_a' and r::jsonb ?& array['has_backup_code', 'password_is_bcrypt', 'sync_topic']
       then 'ok account-shape; ' else format('FAIL account-shape %s; ', left(r::text, 60)) end;
-    out := out || case when (r::jsonb -> 'sync_topic') = 'null'::jsonb and r2->>'sync_topic' is not null and r2->>'role' = 'owner'
-      then 'ok topic-owner-only; ' else 'FAIL topic-owner-only; ' end;
+    -- From P4's per-account topic (RLS session, 20261025200000) a member gets its own topic, never the owner's.
+    out := out || case when to_regprocedure('proxima_auth.account_topic(uuid)') is null
+      then case when (r::jsonb -> 'sync_topic') = 'null'::jsonb and r2->>'sync_topic' is not null and r2->>'role' = 'owner'
+             then 'ok topic-owner-only; ' else 'FAIL topic-owner-only; ' end
+      else case when r->>'sync_topic' is not null and r2->>'sync_topic' is not null and r->>'sync_topic' <> r2->>'sync_topic' and r2->>'role' = 'owner'
+             then 'ok topic-per-account (P4); ' else 'FAIL topic-per-account (P4); ' end end;
   exception when others then reset role; out := out || format('FAIL account-shape %s; ', left(sqlerrm, 60)); end;
 
   -- 2. The global auto-backups switch is the owner's until P4: a member's get and set are refused with 42501.

@@ -54,16 +54,38 @@ not Supabase Auth.
   direct REST path and through the definer RPC upsert_queued_history, where no policy runs. The "no stored entry" check
   is scoped too. Live probe 2026-10-25: no header 28000, forged token 28000, another account 42501, own session
   tombstone, nothing written into a foreign scope. Tests: scripts/test-history-strip-restore-db.sql (R10a-d, R11).
+- Storage folders (P4, RLS session) — supabase/migrations/20261025100000_mu_p4_storage_folders.sql (applied 2026-10-25 20:18:55 UTC):
+  every "generations session *" policy asks for the object's account folder, `proxima_auth.object_folder(name)`
+  ('<folder>/…' archives, 'uploads/<folder>/…' inputs; plain SQL the planner inlines) = any (`my_folders`), so a session
+  lists, writes, moves and deletes only its own account's files. `proxima_auth.account_folders` records every folder an
+  account has had (trigger on users.scope; a folder never changes hands: 23505, or a counted `username_taken` in
+  rename_my_account); seeded with every folder that already held a file; the migration refuses on a file outside every
+  folder, or (several accounts) a member's folder holding files from before that member.
+- Live topic per account (P4, RLS session) — 20261025200000_mu_p4_topic_per_account.sql (applied 2026-10-25 20:19:49 UTC):
+  `proxima_auth.account_topic` (the owner keeps M2's input, so its value did not change; a member's input carries its
+  account id); ping_sync sends one ping per account whose rows the statement changed (none to disabled or deleted
+  accounts); get_my_account returns each account's own topic.
+- Tombstones per account (P4, RLS session) — 20261025300000_mu_p4_tombstone_key.sql (applied 2026-10-25 20:20:13 UTC): sync_tombstones
+  is keyed (device_id, id); the delete paths (delete_queued_rows, _clear_kind) look for an existing tombstone, task row
+  or History row of a named id in the caller's own scope only, and every ON CONFLICT on tombstones targets
+  (device_id, id). Each account keeps its own tombstone of an id, so one account's tombstone never stops another's.
+- Gate: scripts/test-mu-matrix.sql (owner A vs a seeded member B, as anon with minted tokens: rows, files, folders,
+  topics, tombstones; 48/0 live after the applies) and scripts/test-mu-catalog.sql (13/0).
 - Related: 08e2bb2 (deleteArchivedPath true only when Storage confirms), 1bd2e68 (clear*Remote → {ok, error}).
 
+## Open (P4, in progress)
+- Id squatting (review round 3 of the P4 walls): tasks, history and favorites keep a key of (id) across accounts, so a
+  member who learns a deleted id (an archived output's public path carries its task id) can create a row with it. Until
+  20261025400000 (squat-proof backups, built, review pending) that keeps the deleted item in the other account's backups
+  and fails that account's restores on the duplicate key. Root fix, agreed with the lockdown session 2026-10-25: (a) unique
+  indexes on (device_id, id); (b) the client's upserts switch to onConflict "device_id,id"; (c) after 24 h with no
+  on_conflict=id in the edge logs, the primary keys become (device_id, id) and every definer write path names that key.
+
 ## Accepted — do not re-report
-- Until P4 changes sync_tombstones' key to (device_id, id): if account A writes a row with an id that account B already
-  tombstoned, A's later delete records no tombstone of its own (its insert yields to B's on conflict (id)), so another
-  of A's devices could upload it again. Ids are crypto.randomUUID(); this needs deliberate id reuse.
 - An expired-token holder keeps receiving content-free pings until the topic rotates (rename, password change, unlock,
   key rotation). Pings carry nothing.
-- Bucket-wide storage access for a valid session (rename leaves files in the old folder; the delete flow must reach
-  them); P3/P4 add per-account folders. Rows are deleted only by the scoped RPCs, never by a browser role directly.
+- A rename's own pings go to a topic of the new name with the old epoch (the epoch moves after the rows), which no
+  device holds; the account's other devices learn the new topic at their next reconcile. As before P4.
 - Rolling back phase 0 while the phase-1 client is live stops instant updates; the 20 s / focus reconcile remains.
 - The policies trust session_signing_key: a holder of that key can mint valid sessions (rotation is the remedy).
 - Owner-run maintenance with the service role (scripts/tools/supabase-admin.mjs) bypasses the policies by design.
@@ -71,7 +93,9 @@ not Supabase Auth.
 ## Tests
 JS: scripts/test-session-header.mjs, test-sync-ping.mjs, test-storage-remove.mjs, test-remote-clears.mjs (npm test).
 SQL, each rolls back (run alone against live; to test an unapplied migration, prepend its text in the same call):
-scripts/test-rls-{phase0,tables,storage,triggers,plan,rpcs,rename}.sql; P1 M2: scripts/test-mu-scope-topic.sql (38
+scripts/test-rls-{phase0,tables,storage,triggers,plan,rpcs,rename}.sql; P4 gate: scripts/test-mu-matrix.sql (two accounts:
+rows, files, folders, topics, tombstones; failing-first before the walls 26/19) with scripts/test-mu-catalog.sql, and the
+P4 rollback proof scripts/test-mu-p4-rollback.sql + scripts/fixtures/p4s-final.sql (both orders in its header); P1 M2: scripts/test-mu-scope-topic.sql (38
 checks: both token formats, two accounts' rows, the topic; failing-first with M1 alone 22/14) and
 test-mu-scope-topic-rollback.sql (13), with scripts/fixtures/mu-owner-{unlock,rename}.sql moving the owner between M1
 and M2 (M2 must still apply); rollback proof =
