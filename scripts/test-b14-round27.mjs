@@ -111,7 +111,7 @@ await test("#7: liveUnsent reads ids and predictions of live publications only",
 });
 await test("#5 wiring: form-inputs carries the forms only; the unsent row is its own key, published when it changes", () => {
   const eff = between("// This tab's Generate form inputs, published for every tab's file flush", "const mediaDuration = url =>");
-  assert.equal((eff.match(/mine = \[\.\.\.liveFormPaths\(readFormPublications\(\), now\)\];/g) || []).length, 2, "publish() and bye(): forms only");
+  assert.equal((eff.match(/mine = \[\.\.\.liveFormPaths\(readFormPublications\(\), local\)\];/g) || []).length, 2, "publish() and bye(): forms only");   // S3 verification #9: local holds, this browser's clock
   // Task B15 (review round 28 #4/#2) rewrote these anchors: the :unsent write moved into the module-level publishUnsent.
   assert.match(eff, /publishUnsent\(\);/);
   const fn = between("async function publishUnsentOnce({ exiting = false } = {}) {", "\n}\n")   /* task B16: the chained body */;
@@ -121,7 +121,7 @@ await test("#5 wiring: form-inputs carries the forms only; the unsent row is its
 await test("#7 wiring: the WaveSpeed flush holds a prediction any browser's unsent rows name; unreadable: nothing is sent", () => {
   const fl = between("const flushWsDeletes = useCallback(async () => {", "const checked = new Set(due);");
   assert.match(fl, /const pubs = isSupabaseConfigured\(\) \? await pullFormHolds\(\) : \[\];\s*if \(pubs === null\) return;/);
-  assert.match(fl, /const unsent = liveUnsent\(\[\.\.\.pubs, \{ at: Date\.now\(\), \.\.\.unsentGenerations\(\) \}\], Date\.now\(\)\);/);
+  assert.match(fl, /const unsent = liveUnsent\(\[\.\.\.pubs, \{ at: serverNow\(\), \.\.\.unsentGenerations\(\) \}\], serverNow\(\)\);/);   // S3 verification #9
   assert.match(fl, /for \(const p of due\) if \(unsent\.predictions\.has\(p\) \|\| \(queue\[p\]\?\.tid && unsent\.ids\.has\(String\(queue\[p\]\.tid\)\)\)\) held\.push\(p\);/);
   assert.ok(fl.indexOf("const unsent = liveUnsent(") < fl.indexOf("if (held.length) writeWsDeletes(holdHeldIds("), "before the hold is written");
 });

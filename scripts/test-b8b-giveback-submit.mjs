@@ -238,7 +238,7 @@ test("#4 wiring: both submit paths hold their task id before the submit and rele
     const i = src.indexOf(`holdDeleting("task-delete", [${id}], submitHold);`);
     assert.ok(i >= 0, `${name}: hold`);
     const body = src.slice(i, src.indexOf("})();", i));
-    const sub = body.indexOf("await submitTask("), late = body.indexOf(`keepLateSubmitId(${id}, taskId)`), fin = body.indexOf("} finally {");
+    const sub = body.indexOf("await submitTask("), late = body.indexOf(`keepLateSubmitId(${id}, taskId, ${id.replace(".id", ".modelId")})`), fin = body.indexOf("} finally {");
     assert.ok(sub > 0 && late > sub && fin > late, `${name}: submit, then the late decision, then finally`);
     assert.match(body.slice(fin), new RegExp(`^\\} finally \\{\\s*unholdDeleting\\("task-delete", \\[${id.replace(".", "\\.")}\\], submitHold\\);`));
   }

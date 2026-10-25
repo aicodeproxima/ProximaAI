@@ -4,6 +4,8 @@
 
 import { sessionToken, reportSessionExpired, isSuperseded } from "./session.js";
 import { uploadInputFile } from "./supabase.js";
+import { isKieModelId, isKiePollUrl, kieInput, kieInputProblem, kieSubmitResult, kiePollResult, KIE_PROXY_ROOT } from "./kie.js";
+import { kieModelById } from "../config/kieModels.js";
 
 const PROXY_ROOT = "/api/wavespeed-v2";
 const API_BASE = `${PROXY_ROOT}/api/v3`;
@@ -23,7 +25,7 @@ export function toProxyUrl(url) {
 
 // The proxy marks its own refusals with X-Proxima-Auth so they can't be confused with WaveSpeed's
 // answers: "session" = token missing/expired/forged (sign in again), "no-key" = no key saved yet.
-async function wsFetch(url, options = {}) {
+async function wsFetch(url, options = {}, provider = "wavespeed") {
   const token = sessionToken();
   if (!token) {
     reportSessionExpired();
@@ -32,11 +34,12 @@ async function wsFetch(url, options = {}) {
   const res = await fetch(url, { ...options, headers: { ...(options.headers || {}), "X-Proxima-Session": token } });
   const refusal = res.headers.get("x-proxima-auth");
   if (res.status === 401 && refusal === "session") {
-    if (isSuperseded(token)) return wsFetch(url, options); // refused a token replaced mid-flight: resend with the new one
+    if (isSuperseded(token)) return wsFetch(url, options, provider); // refused a token replaced mid-flight: resend with the new one
     reportSessionExpired(token);
     throw { code: 401, message: "Session expired — sign in again", session: true };
   }
   if (res.status === 400 && refusal === "no-key") {
+    if (provider === "kie") throw { code: 400, message: "No kie.ai key saved — add it in Settings", noKey: true, kie: true };
     throw { code: 400, message: "No WaveSpeed key saved — add it in Settings", noKey: true };
   }
   return res;
@@ -48,6 +51,7 @@ const timeoutSignal = (ms) => (typeof AbortSignal !== "undefined" && AbortSignal
 // proxy finishes the submit anyway, so the task then waits for the history lookup instead of failing.
 const SUBMIT_TIMEOUT_MS = 60_000;
 export async function submitTask(modelSlug, payload) {
+  if (isKieModelId(modelSlug)) return submitKieTask(modelSlug, payload);
   const res = await wsFetch(`${API_BASE}/${modelSlug}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -67,9 +71,53 @@ export async function submitTask(modelSlug, payload) {
 const POLL_TIMEOUT_MS = 15_000;
 export async function pollResult(pollUrl) {
   const signal = timeoutSignal(POLL_TIMEOUT_MS);
+  if (isKiePollUrl(pollUrl)) {
+    const res = await wsFetch(pollUrl, signal ? { signal } : {}, "kie");
+    // Not 200: our proxy answered, not kie.ai (kie.ai answers 200 with its own code). proxy: a 4xx of its rules stops the
+    // poll instead of failing a task kie.ai may have charged for (taskResume.js pollErrorAction; S3 review #1).
+    if (!res.ok) throw { code: res.status, message: res.statusText || "The kie.ai proxy refused the poll", kie: true, proxy: true };
+    return kiePollResult(await res.json());
+  }
   const res = await wsFetch(toProxyUrl(pollUrl), signal ? { signal } : {});
   if (!res.ok) throw { code: res.status, message: res.statusText };
   return res.json();
+}
+
+// kie.ai (src/lib/kie.js, docs/SECOND-ACCOUNT-PLAN.md S3): createTask through the kie.ai proxy (api/kie-proxy.ts), answered
+// in WaveSpeed's submit shape so the caller stays the same. Same 60 s cut-off: a submit kie.ai accepted but whose answer
+// was lost cannot be found again (kie.ai has no task history), so the task fails after the lost-submit grace.
+async function submitKieTask(modelSlug, payload) {
+  const model = kieModelById(modelSlug);
+  if (!model) throw { code: 0, message: "This kie.ai model is not available in this version", kie: true, answered: true };
+  const input = kieInput(model, payload);
+  const problem = kieInputProblem(model, input);   // kie.ai would refuse it: say why, send nothing (S3 review #6)
+  if (problem) throw { code: 0, message: problem, kie: true, answered: true };
+  const res = await wsFetch(`${KIE_PROXY_ROOT}/api/v1/jobs/createTask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: model.kieModel, input }),
+    signal: timeoutSignal(SUBMIT_TIMEOUT_MS),
+  }, "kie");
+  if (!res.ok) {
+    // Our proxy answered without reaching kie.ai (its rules, the key lookup), except a 502/504: kie.ai may have it.
+    const err = await res.json().catch(() => ({}));
+    throw { code: res.status, message: err.error || res.statusText, kie: true, answered: res.status !== 502 && res.status !== 504 };
+  }
+  return kieSubmitResult(await res.json());
+}
+
+// The kie.ai balance in credits (GET /api/v1/chat/credit). keyStatus as checkBalance's.
+export async function checkKieBalance() {
+  try {
+    const res = await wsFetch(`${KIE_PROXY_ROOT}/api/v1/chat/credit`, { signal: timeoutSignal(POLL_TIMEOUT_MS) }, "kie");
+    if (!res.ok) return { error: `HTTP ${res.status}`, credits: null, keyStatus: "unknown" };
+    const json = await res.json();
+    if (json?.code === 401) return { error: json.msg || "kie.ai rejected the key", credits: null, keyStatus: "invalid" };
+    if (json?.code !== 200 || typeof json?.data !== "number") return { error: json?.msg || "Unexpected answer", credits: null, keyStatus: "unknown" };
+    return { error: null, credits: json.data, keyStatus: "ok" };
+  } catch (e) {
+    return { error: e.message || "Network error", credits: null, keyStatus: e.noKey ? "missing" : "unknown" };
+  }
 }
 
 // WaveSpeed's prediction history (POST /api/v3/predictions): the documented way to find a submit whose response never

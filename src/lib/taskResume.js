@@ -7,6 +7,7 @@
 // "processing" forever where nothing renders, prunes or syncs it. WaveSpeed purges predictions and then
 // answers status "deleted": all 62 tasks stuck on the phone did, the youngest 54 h old (checked 2026-10-20),
 // although its docs say outputs expire "within 7 days".
+import { kieCost, isKieModelId, kiePollUrl } from "./kie.js";
 
 export const RESUME_WINDOW_MS = 48 * 60 * 60 * 1000; // inside the youngest purge measured (54 h)
 // A lost submit (no prediction id) is looked up in WaveSpeed's history for a prediction created between LOOKUP_SKEW_MS
@@ -31,7 +32,8 @@ export const failTask = (task, now, error) => ({ ...task, status: "failed", erro
 // image "Timeout" declared before one last poll. WaveSpeed had already accepted these tasks, so while it keeps the
 // result they can be fetched; errors WaveSpeed itself returned (flagged content, failed generation) stay final.
 const NETWORK_FAILURE = /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?|Network request failed|Poll error( \(resumed\))?|Timeout( \(resumed\))?)$/;
-export const pollUrlFor = (t) => t.pollUrl || (t.taskId ? `/api/v3/predictions/${t.taskId}/result` : null);
+// A kie.ai task's poll goes through the kie.ai proxy (a row pulled from another device carries no pollUrl).
+export const pollUrlFor = (t) => t.pollUrl || (t.taskId ? (isKieModelId(t.modelId) ? kiePollUrl(t.taskId) : `/api/v3/predictions/${t.taskId}/result`) : null);
 export function isRecoverableFailure(t, now) {
   return t?.status === "failed" && !!t.taskId && NETWORK_FAILURE.test(t.error || "") && now - (t.startTime || 0) <= RESUME_WINDOW_MS;
 }
@@ -61,7 +63,16 @@ export function planResume(rows, now) {
 // for the same model created when the task was submitted and adopt its id. A task whose submit is still in flight in
 // this tab (`submitting`) is not an orphan yet.
 export function isOrphan(t, submitting, now) {
-  return t?.status === "pending" && !t.taskId && !submitting.has(t.id) && now - (t.startTime || 0) <= RESUME_WINDOW_MS;
+  return t?.status === "pending" && !t.taskId && !submitting.has(t.id) && now - (t.startTime || 0) <= RESUME_WINDOW_MS
+    && !isKieModelId(t.modelId);   // kie.ai has no task history to look a lost submit up in: lostKieSubmits instead
+}
+
+// A kie.ai submit whose answer never came (cut off, or the tab died while it was on the wire): kie.ai may have run it,
+// but nothing can find it again, so after the lost-submit grace the task fails with a message that says so.
+export const KIE_LOST_ERROR = "The answer from kie.ai was lost, so this result can't be fetched. It may still have run on your kie.ai account.";
+export function lostKieSubmits(tasks, submitting, now) {
+  return (tasks || []).filter(t => t?.status === "pending" && !t.taskId && isKieModelId(t.modelId) && !submitting.has(t.id)
+    && now - (t.startTime || 0) > ORPHAN_GRACE_MS);
 }
 
 // Prediction ids of tasks that were deleted (here or on another device) or whose submit answered after a cancel. No
@@ -80,7 +91,7 @@ export const liveReleased = (map, now) => new Set(Object.entries(map || {}).filt
 // failing: anything fetch itself threw (network drop, timeout, a body cut off mid-read) or a 5xx without an id.
 // A refusal (4xx: balance, validation, rate limit) or a missing session or key never did.
 export function submitMayHaveLanded(e) {
-  if (e?.session || e?.noKey) return false;
+  if (e?.session || e?.noKey || e?.answered) return false;   // answered: kie.ai (or our proxy before it) replied, nothing was created
   if (e instanceof Error || typeof e?.code !== "number") return true;
   return e.code >= 500;
 }
@@ -200,7 +211,7 @@ export function noteClaimants(map, tasks, now, { deleted = false } = {}) {
   const live = rememberClaimants(map, [], now);
   const waiting = [];
   for (const t of tasks || []) {
-    if (!t?.id || t.taskId) continue;
+    if (!t?.id || t.taskId || isKieModelId(t.modelId)) continue;   // claimants pair with WaveSpeed's history only
     if (t.status === "pending") waiting.push(t);
     else if (deleted && live[t.id]) live[t.id] = { ...live[t.id], deleted: true, at: now };
     // A cancel whose claimant expired (the app was closed past the hour): deleting it still deletes its prediction
@@ -259,8 +270,10 @@ export function applyPoll(task, data, now) {
   switch (pollOutcome(data)) {
     case "completed": {
       const wallClock = now - task.startTime;
+      // kie.ai reports what it charged (credits); that replaces the estimate. WaveSpeed's results keep theirs.
+      const charged = Number.isFinite(data?.kieCredits) ? { price: kieCost(data.kieCredits) } : {};
       return { ...task, status: "completed", outputs: data.outputs, endTime: now, wallClockMs: wallClock,
-        inferenceMs: data?.timings?.inference || wallClock, nsfw: data?.has_nsfw_contents };
+        inferenceMs: data?.timings?.inference || wallClock, nsfw: data?.has_nsfw_contents, ...charged };
     }
     case "failed": return { ...task, status: "failed", error: data.error || FAILED_REASON[data.status] || "Generation failed", endTime: now };
     case "gone": return failTask(task, now, GONE_ERROR);
@@ -293,6 +306,11 @@ export const isInFlight = (task) => IN_FLIGHT.has(task?.status);
 const isHttp = (e) => !(e instanceof Error) && typeof e?.code === "number";
 export function pollErrorAction(e) {
   if (e?.session || e?.noKey) return "stop";
+  // Our kie.ai proxy refused the poll itself (a rule of api/kie-proxy.ts, not kie.ai's answer): never fail a task kie.ai
+  // may have charged for on that; it waits for the next resume (S3 review #1).
+  if (e?.kie && e?.proxy && e.code >= 400 && e.code < 500) return "stop";
+  // kie.ai's own "try later" answers (455 maintenance, 433 sub-key limit): the task is still running there (S3 verification #2).
+  if (e?.kie && (e.code === 455 || e.code === 433)) return "retry";
   // HTTP refusals from api.js are plain objects {code: status}. Anything fetch itself throws is transient: a TypeError
   // on a network drop, or a DOMException TimeoutError/AbortError, whose legacy numeric .code is not an HTTP status.
   if (!isHttp(e)) return "retry";
@@ -302,6 +320,7 @@ export function pollErrorAction(e) {
 }
 // The key status a failed WaveSpeed call implies: "missing" (none saved), "invalid" (WaveSpeed rejected it), or null.
 export function keyStatusAfter(e) {
+  if (e?.kie) return null;   // a kie.ai refusal says nothing about the WaveSpeed key (src/lib/kie.js)
   if (e?.noKey) return "missing";
   if (e?.session || !isHttp(e)) return null;
   return e.code === 401 || e.code === 403 ? "invalid" : null;

@@ -3,10 +3,20 @@
 // generated table carries those defaults; the result is formula total x discount_rate, in dollars.
 import { MODEL_PRICING, PRICING_FORMULAS } from "../config/modelPricing.js";
 import { compileFormula } from "./priceFormula.js";
+import { kieInput, kieCost } from "./kie.js";
 
 // Exact price in dollars, or null when it cannot be computed (no published formula, an input whose
 // duration has not been measured yet, or a formula the evaluator rejects).
 export function priceRequest(model, payload, { mediaDuration } = {}) {
+  // kie.ai (src/config/kieModels.js): its own price list in credits, read from the input kie.ai will get.
+  if (model?.api === "kie") {
+    try {
+      const credits = model.kie.credits(kieInput(model, payload));
+      return typeof credits === "number" && Number.isFinite(credits) && credits >= 0 ? kieCost(credits) : null;
+    } catch {
+      return null;
+    }
+  }
   const entry = model && Object.hasOwn(MODEL_PRICING, model.id) ? MODEL_PRICING[model.id] : null;
   if (!entry || entry.formula === undefined) return null;
   try {

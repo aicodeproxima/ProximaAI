@@ -140,6 +140,26 @@ export function planImageBatchRequests(models, requested, genType) {
   });
 }
 
+// The resolution value a model is sent (buildPayload) and shown on its task card (taskDraft), so the two always agree: its
+// own pick, else the form's, matched to its options. A model whose options are `exact` (kie.ai's 1K/2K/4K, Kling's modes)
+// takes only a case-insensitive match and otherwise its default, never a nearest number (S3 review #2: a WaveSpeed size
+// 1024*1024 became 4K, and 720p became Kling's 4K mode).
+export function chosenResolution(model, userSettings = {}) {
+  const p = model?.params?.resolution;
+  if (!p) return null;
+  const raw = userSettings.perModelResolution?.[model.id] || userSettings.resolution || p.default;
+  const val = p.aliases?.[String(raw).toLowerCase()] ?? raw;   // an exact model's own name for another scheme's size
+  const values = p.options.map(o => o.value);
+  if (p.exact) return values.find(v => String(v).toLowerCase() === String(val).toLowerCase()) ?? p.default;
+  return nearestValid(val, values, p.default);
+}
+// The duration a model is sent and shown (same reason): the form's, the nearest the model offers.
+export function chosenDuration(model, userSettings = {}) {
+  const p = model?.params?.duration;
+  if (!p) return null;
+  return nearestValid(parseInt(userSettings.duration) || p.default, p.options, p.default);
+}
+
 export function buildPayload(model, userSettings, genType) {
   const payload = {};
   const p = model.params;
@@ -163,10 +183,7 @@ export function buildPayload(model, userSettings, genType) {
 
   // Resolution/size — use model's own param name and value format
   if (p.resolution) {
-    const perModel = userSettings.perModelResolution?.[model.id];
-    const val = perModel || userSettings.resolution || p.resolution.default;
-    const validValues = p.resolution.options.map(o => o.value);
-    payload[p.resolution.paramName] = nearestValid(val, validValues, p.resolution.default);
+    payload[p.resolution.paramName] = chosenResolution(model, userSettings);
   }
 
   // Aspect ratio — only if model supports it
@@ -186,9 +203,7 @@ export function buildPayload(model, userSettings, genType) {
   // Use the closest valid duration for this model, not just the default,
   // so that when multiple models are selected the user's intent is preserved.
   if (p.duration) {
-    const dur = parseInt(userSettings.duration) || p.duration.default;
-    const validDurs = p.duration.options;
-    payload.duration = nearestValid(dur, validDurs, p.duration.default);
+    payload.duration = chosenDuration(model, userSettings);
   }
 
   // Negative prompt — only if model supports it AND user provided one

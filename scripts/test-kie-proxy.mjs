@@ -51,6 +51,14 @@ await test("recordInfo forwards only a well-formed taskId", () => {
   assert.equal(up("GET", "api/v1/jobs/recordInfo", q(), "").ok, false);
 });
 
+await test("S3 review #1: kie.ai's own task ids (with a dot, e.g. Kling's task_kling-3.0_<ms>) pass the poll", () => {
+  for (const id of ["task_kling-3.0_1765187774173", "task_nano-banana-pro_1765178625768", "task_wan_1765172284434"]) {
+    const r = up("GET", "api/v1/jobs/recordInfo", q({ taskId: id }), "");
+    assert.equal(r.ok, true, id);
+    assert.equal(r.url, `${K.KIE_BASE}/api/v1/jobs/recordInfo?taskId=${id}`);
+  }
+});
+
 await test("credit is a bare GET", () => {
   const r = up("GET", "api/v1/chat/credit", q({ a: "1" }), "");
   assert.equal(r.ok, true);

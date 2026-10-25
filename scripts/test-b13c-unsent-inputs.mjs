@@ -76,7 +76,7 @@ await test("wiring: the cloud publication carries the queued uploads' paths (in 
   const eff = between("// This tab's Generate form inputs, published for every tab's file flush", "const mediaDuration = url =>");
   assert.match(eff, /publishUnsent\(\);/);
   const fn = between("async function publishUnsentOnce({ exiting = false } = {}) {", "\n}\n")   /* task B16: the chained body */;
-  assert.match(fn, /const now = Date\.now\(\), un = unsentGenerations\(\);/);
+  assert.match(fn, /const now = formStamp\(serverNow\(\)\), un = unsentGenerations\(\);/);   // S3 verification #9: the cloud row on the server's clock
   assert.match(fn, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths,/);
   assert.equal(S.unsentGenerations().paths.length, 0, "an empty queue publishes no paths");
   S.addFailedSync({ kind: "task", id: "t2", data: { id: "t2", sourceImageUrl: url("uploads/s/in.png") } });
@@ -85,7 +85,7 @@ await test("wiring: the cloud publication carries the queued uploads' paths (in 
 
 await test("wiring: this browser's own flush holds them too", () => {
   const fl = between("const cloudHolds = isSupabaseConfigured() ? await pullFormHolds() : [];", "const candidates = due.filter(");
-  assert.match(fl, /const forms = new Set\(\[\.\.\.pathsInUse\(\[draftFormRef\.current\]\), \.\.\.liveFormPaths\(readFormPublications\(\), Date\.now\(\)\),\s*\.\.\.liveFormPaths\(cloudHolds \|\| \[\], Date\.now\(\)\), \.\.\.unsentUploadPaths\(\)\]\);/);
+  assert.match(fl, /const forms = new Set\(\[\.\.\.pathsInUse\(\[draftFormRef\.current\]\), \.\.\.liveFormPaths\(readFormPublications\(\), Date\.now\(\)\),\s*\.\.\.liveFormPaths\(cloudHolds \|\| \[\], serverNow\(\)\), \.\.\.unsentUploadPaths\(\)\]\);/);
 });
 
 // Reset Everything (simulator I6-end): the History-only generations of the entries it deletes go with it, named. The server

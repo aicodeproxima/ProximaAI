@@ -1,4 +1,5 @@
-import { MODELS } from "../config/models.js";
+// CATALOG: WaveSpeed's models and the kie.ai ones (src/config/catalog.js), so a kie.ai favorite is kept like any other.
+import { CATALOG as MODELS } from "../config/catalog.js";
 
 export const MODEL_FAVORITES_SETTING = "favoriteModelsByType";
 

@@ -640,6 +640,32 @@ export function unsentGenerations() {
   } catch {}
   return { paths: [...unsentUploadPaths()], ids: [...ids], predictions: [...predictions] };
 }
+// The providers an account last had a key for (provider names only, never a key or its fingerprint), per account (the
+// token's subject), so a failed read on a flaky connection does not switch a kie.ai account's model list to WaveSpeed's
+// and block Generate (S3 review #9). Read only until the server answers.
+const PROVIDER_KEYS_CACHE = "proximaai-provider-keys:";
+export function cachedProviderKeys(account) {
+  try {
+    const v = JSON.parse(localStorage.getItem(PROVIDER_KEYS_CACHE + account) || "null");
+    return Array.isArray(v) ? v.filter(p => typeof p === "string") : null;
+  } catch { return null; }
+}
+export function cacheProviderKeys(account, providers) {
+  try { localStorage.setItem(PROVIDER_KEYS_CACHE + account, JSON.stringify([...providers])); } catch {}
+}
+// The `at` of this browser's cloud form publications (form-inputs:<browser> and its :unsent row; S3 second verification
+// A): the server-aligned clock, made monotonic across this browser's tabs through a mark they share. Each tab estimates
+// the server's clock on its own, up to about a second apart, and the server keeps the newest `at` of a row
+// (20261025600000), so a newer set stamped lower would be skipped. A mark more than 5 minutes ahead of the clock is
+// ignored (a clock once set far forward must not keep every later stamp in the future, where holds never lapse).
+const FORM_STAMP_KEY = "proximaai-form-stamp";
+export function formStamp(now) {
+  let last = 0;
+  try { last = Number(localStorage.getItem(FORM_STAMP_KEY)) || 0; } catch {}
+  const at = last > now + 300000 ? Math.floor(now) : Math.max(Math.floor(now), last + 1);
+  try { localStorage.setItem(FORM_STAMP_KEY, String(at)); } catch {}
+  return at;
+}
 // One id per browser, shared by its tabs: the key of this browser's cloud form publication (review wf_ec400a67-988 #6).
 export function browserId() {
   try {

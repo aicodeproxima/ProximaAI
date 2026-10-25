@@ -11,7 +11,7 @@ export const KIE_BASE = "https://api.kie.ai";
 export const MAX_KIE_BODY = 1024 * 1024;
 
 const MODEL = /^[A-Za-z0-9._/-]{1,128}$/;
-const TASK_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const TASK_ID = /^[A-Za-z0-9._-]{1,128}$/;   // kie.ai's own ids carry the model name, dots included (task_kling-3.0_<ms>)
 const isPlainObject = v => v !== null && typeof v === "object" && !Array.isArray(v);
 const bad = (status, error) => ({ ok: false, status, error });
 

@@ -880,6 +880,24 @@ export async function saveWavespeedKey(key) {
   return !!r?.ok;
 }
 
+// Provider keys (docs/SECOND-ACCOUNT-PLAN.md S1): encrypted in the server's Vault, never kept in the browser. The list
+// names each provider with a saved key and a masked fingerprint; null when the read failed or the server has no
+// provider keys yet (before 20261025500000), which the model picker reads as "unknown".
+export async function myProviderKeys() {
+  try {
+    const r = await sessionRpc("my_provider_keys");
+    return Array.isArray(r?.keys) ? r.keys : null;
+  } catch { return null; }
+}
+export async function saveProviderKey(provider, key) {
+  const r = await sessionRpc("set_my_provider_key", { p_provider: provider, p_key: key });
+  return r?.ok ? r : null;
+}
+export async function clearProviderKey(provider) {
+  const r = await sessionRpc("clear_my_provider_key", { p_provider: provider });
+  return !!r?.ok;
+}
+
 // ─── Email OTP via Supabase Auth ───
 // Uses supabase.auth.signInWithOtp + verifyOtp to send/verify 6-digit email codes.
 // We discard the resulting auth session — we just use it for email verification.

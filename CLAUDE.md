@@ -15,6 +15,13 @@ Auto-loaded when any Claude session works in this repo.
   Account) unlocks it. Password/username/backup-code changes need the current password. Email OTP remains a UI step.
 - WaveSpeed key: only in `user_secrets` (server). All WaveSpeed calls go through `/api/wavespeed-v2` (`api/ws-proxy.ts`)
   with header `X-Proxima-Session`; the proxy adds the key. The browser never stores or syncs it.
+  Once `20261025500000_mu_p5_provider_keys` is applied, every provider key (WaveSpeed and kie.ai) lives in Supabase Vault
+  per account (`proxima_auth.provider_keys`; `get_provider_key` is service_role only).
+- kie.ai (second provider, docs/SECOND-ACCOUNT-PLAN.md): models `kie/…` in `src/config/kieModels.js`, merged for lookups
+  by `src/config/catalog.js` (`MODELS` stays WaveSpeed-only, since WaveSpeed's scripts read it). Calls go through `/api/kie/*`
+  (`api/kie-proxy.ts`, 4 allowed calls, `src/lib/kieProxy.js`). Answers are mapped to WaveSpeed's shapes by
+  `src/lib/kie.js`. kie.ai has no delete API and no task history, so kie.ai tasks never enter the WaveSpeed delete
+  queue or the lost-submit lookup. Its result files expire after 14 days.
 - Theme system: `src/lib/{themes,useTheme,BackgroundLayer}.{js,jsx}` (ported from
   `C:\Users\aicod\Projects\templates\mission-control-themes`)
 

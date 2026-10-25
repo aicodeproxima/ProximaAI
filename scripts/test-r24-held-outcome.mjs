@@ -386,7 +386,7 @@ await test("#6: the deleted-claimant lookup's delete is held for the claimant's 
 await test("#6/#7 wiring: keepLateSubmitId, the claimant lookup and deleteOnWaveSpeed hold; flushWsDeletes holds a pending delete's own entries", () => {
   const late = between("function keepLateSubmitId(", "const submittingIds = useRef(");
   // Task B12b (review round 25 #6/#7/#12/#15): both hold with a relink (a kept generation gets its result back).
-  assert.match(late, /recordStashPrediction\(id, predictionId\);\s*deleteOnWaveSpeed\(\[\{ id, taskId: predictionId, status: "processing" \}\], \{ holdAt: serverNow\(\), relink: true \}\);/);
+  assert.match(late, /recordStashPrediction\(id, predictionId\);\s*(?:\/\/[^\n]*\n\s*)?if \(!isKieModelId\(modelId\)\) deleteOnWaveSpeed\(\[\{ id, taskId: predictionId, status: "processing" \}\], \{ holdAt: serverNow\(\), relink: true \}\);/);
   assert.match(between("const recoverOrphans = useCallback(", "const decided = new Map("),
     /deleteOnWaveSpeed\(delNow\.map\(id => \(\{ id: claimantOf\.get\(id\), taskId: id, status: "processing" \}\)\), \{ relink: true \}\)/);
   const dow = between("const deleteOnWaveSpeed = useCallback(", "}, [flushWsDeletes]);");

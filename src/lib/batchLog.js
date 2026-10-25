@@ -147,7 +147,9 @@ export function historyOnlyGenerations(logs, taskIds) {
   const out = new Map();
   for (const l of logs || []) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) {
     // Task B13b: with the item's prediction id (itemOf), so a purge of it deletes its WaveSpeed result too.
-    if (i?.id && !have.has(i.id) && !out.has(i.id)) out.set(i.id, { id: i.id, batchId: l.id, outputs: i.outputs || [], status: i.status, ...(typeof i.taskId === "string" && i.taskId ? { taskId: i.taskId } : {}) });
+    // With its model name: a kie.ai generation is known by it (kie.js isKieGeneration), so nothing is queued for WaveSpeed.
+    if (i?.id && !have.has(i.id) && !out.has(i.id)) out.set(i.id, { id: i.id, batchId: l.id, outputs: i.outputs || [], status: i.status,
+      ...(typeof i.model === "string" && i.model ? { model: i.model } : {}), ...(typeof i.taskId === "string" && i.taskId ? { taskId: i.taskId } : {}) });
   }
   return [...out.values()];
 }

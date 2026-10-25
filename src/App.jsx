@@ -1,21 +1,23 @@
 import { useState, useEffect, useRef, useCallback, useReducer, useMemo, memo } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
-import { buildPayload, getEffectiveImageBatchCount, getImageBatchLimit, planImageBatchRequests } from "./lib/payloadBuilder.js";
+import { CATALOG, visibleModels, editModelFor } from "./config/catalog.js";
+import { isKieModelId, isKieGeneration, isKiePollUrl, KIE_CREDIT_USD } from "./lib/kie.js";
+import { buildPayload, chosenResolution, getEffectiveImageBatchCount, getImageBatchLimit, planImageBatchRequests } from "./lib/payloadBuilder.js";
 import { requestCost } from "./lib/pricing.js";
-import { draftTask, unitQuote, taskUserSettings } from "./lib/taskDraft.js";
+import { draftTask, unitQuote, taskUserSettings, effectivePerModelRes, labelPerModelRes, resolutionNotes, runLabels } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
-import { submitTask, pollResult, listPredictions, deletePredictions, checkBalance, uploadMedia, API_BASE } from "./lib/api.js";
-import { queueDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds, waitHeldIds } from "./lib/wsDelete.js";
+import { submitTask, pollResult, listPredictions, deletePredictions, checkBalance, checkKieBalance, uploadMedia, API_BASE } from "./lib/api.js";
+import { queueDeletes, dropDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds, waitHeldIds } from "./lib/wsDelete.js";
 import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import VersionInfo from "./lib/VersionInfo.jsx";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
+import { getSetting, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
 import { SNAPSHOT_SLACK_MS, serverNow } from "./lib/serverClock.js";
-import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry as rawSyncHistoryEntry, syncTask as rawSyncTask, syncTasksBatch as rawSyncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch as rawSyncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, serverTimeRemote, deleteHistoryRemote, upsertQueuedHistory as rawUpsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds, taskRowsPresentRemote } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry as rawSyncHistoryEntry, syncTask as rawSyncTask, syncTasksBatch as rawSyncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch as rawSyncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, serverTimeRemote, deleteHistoryRemote, upsertQueuedHistory as rawUpsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, myProviderKeys, saveProviderKey, clearProviderKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds, taskRowsPresentRemote } from "./lib/supabase.js";
 import { planDeleteStage, ownedPaths, publicUrlOf, pathsInUse, relinkHold, elsewherePurge, entriesWithout } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue, sameFormSet, liveUnsent } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -23,7 +25,7 @@ import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, historyRemovals, tombstonedItems } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations, restoreStrippedLogs } from "./lib/batchLog.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, lostKieSubmits, KIE_LOST_ERROR, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 
 // Archived files nothing will own any more (a held archive whose clear was confirmed, review round 15 S5) go through
@@ -92,7 +94,7 @@ function publishUnsent(opts = {}) {
 }
 async function publishUnsentOnce({ exiting = false } = {}) {
   if (!isSupabaseConfigured()) return true;
-  const now = Date.now(), un = unsentGenerations();
+  const now = formStamp(serverNow()), un = unsentGenerations();   // cloud row, ordered by the server (20261025600000)
   const items = [...un.paths, ...un.ids.map(i => `id:${i}`), ...un.predictions.map(p => `p:${p}`)];
   if (!formPublishDue(unsentPub, items, now)) return true;
   if (exiting) setPageExiting(true);
@@ -1412,7 +1414,42 @@ export default function ProximaApp() {
   // "ok" | "missing" (none saved) | "invalid" (WaveSpeed rejected it) | "unknown" (not checked / network).
   const [keyStatus, setKeyStatus] = useState("unknown");
   const [keyInput, setKeyInput] = useState("");
-  const keyBlocked = keyStatus === "missing" || keyStatus === "invalid";
+  // Provider keys (docs/SECOND-ACCOUNT-PLAN.md K1): the providers this account saved a key for (null = not known yet),
+  // with masked fingerprints for Settings. An account with a kie.ai key is never blocked by a missing WaveSpeed key:
+  // its models, polls and resumes run through kie.ai.
+  // The account is the session token's subject (u:<uuid>): stable across renames. Until the server answers, the model list
+  // uses what this account last had (storage.js cachedProviderKeys); a failed read keeps what is known (S3 review #9).
+  const accountOf = () => (getSession()?.token || "").split(".")[0] || null;
+  const [providerKeys, setProviderKeys] = useState(() => {
+    const a = accountOf(), c = a ? cachedProviderKeys(a) : null;
+    return c ? new Set(c) : null;
+  });
+  const [providerKeyList, setProviderKeyList] = useState([]);
+  const providerKeysRef = useRef(providerKeys);
+  providerKeysRef.current = providerKeys;
+  const refreshProviderKeys = useCallback(async () => {
+    const acct = accountOf();
+    const list = await myProviderKeys();
+    if (list) {
+      const providers = new Set(list.map(k => k.provider));
+      if (acct) cacheProviderKeys(acct, providers);
+      setProviderKeyList(list);
+      setProviderKeys(providers);
+      return;
+    }
+    setProviderKeys(prev => {
+      if (prev) return prev;
+      const c = acct ? cachedProviderKeys(acct) : null;
+      return c ? new Set(c) : null;
+    });
+  }, []);
+  const [kieKeyInput, setKieKeyInput] = useState("");
+  const [kieTestStatus, setKieTestStatus] = useState(null); // null | "testing" | {ok, msg}
+  // "invalid" once kie.ai rejects the saved key on a poll or submit (its polls then stop); "ok" after a working Save & Test.
+  const [kieKeyStatus, setKieKeyStatus] = useState("unknown");
+  const hasKieKey = !!providerKeys?.has("kie");
+  const keyBlocked = (keyStatus === "missing" || keyStatus === "invalid") && !hasKieKey;
+  const kieFingerprint = providerKeyList.find(k => k.provider === "kie")?.fingerprint || null;
   const refreshBalance = useCallback(async () => {
     const r = await checkBalance();
     if (r.balance !== null) setBalance(r.balance);
@@ -1979,6 +2016,7 @@ export default function ProximaApp() {
       if (await getSetting("apiKey")) setSetting("apiKey", "");
       removeFailedSync("setting", "apiKey");
       refreshBalance().catch(() => {});
+      refreshProviderKeys();
       const logData = await getHistory(500);
       if (logData?.length && !cancelled) {
         // Already stored: the save effect walks every entry and would otherwise upload all of them again on each load
@@ -2771,6 +2809,7 @@ export default function ProximaApp() {
       if (Date.now() - (task.startTime || 0) > RESUME_WINDOW_MS) { finish(t => failTask(t, Date.now(), EXPIRED_ERROR)); return; }
       try {
         const result = await pollResult(pollUrl);
+        if (isKiePollUrl(pollUrl)) setKieKeyStatus(s => (s === "invalid" ? "ok" : s));   // kie.ai took the key again
         if (!live()) return;
         const data = result?.data || result;
         const now = Date.now();
@@ -2784,6 +2823,8 @@ export default function ProximaApp() {
           // No key, or WaveSpeed rejected it: saving a working key flips keyBlocked back, and the resume effect restarts this poll.
           const ks = keyStatusAfter(e);
           if (ks) setKeyStatus(ks);
+          // kie.ai rejected its key: shown in Settings; a working key saved there restarts this poll (S3 verification #3).
+          if (e?.kie && (e.code === 401 || e.code === 403)) setKieKeyStatus("invalid");
         }
         else if (action === "retry") schedule(wait() * 2 + Math.random() * 2000);
         else finish(t => ({ ...t, status: "failed", error: e.message || (resumed ? "Poll error (resumed)" : "Poll error"), endTime: Date.now() }));
@@ -2817,7 +2858,7 @@ export default function ProximaApp() {
 
   // A submit that answers after its task was cancelled or deleted: the prediction id stays on the task (if it still
   // exists) and is released, so a lost submit of the same model can never adopt it (review wf_d4a468a3-746 #1).
-  function keepLateSubmitId(id, predictionId) {
+  function keepLateSubmitId(id, predictionId, modelId) {
     resolveClaimants([id]); // its outcome is known now: as a claimant it would take a sibling's prediction instead
     if (!predictionId) return;
     releasePredictions([predictionId]);
@@ -2864,7 +2905,8 @@ export default function ProximaApp() {
     if (!cur) {
       if (deleting) {
         recordStashPrediction(id, predictionId);
-        deleteOnWaveSpeed([{ id, taskId: predictionId, status: "processing" }], { holdAt: serverNow(), relink: true });
+        // A kie.ai generation: kie.ai has no delete (its copy expires there in 14 days); WaveSpeed is never asked.
+        if (!isKieModelId(modelId)) deleteOnWaveSpeed([{ id, taskId: predictionId, status: "processing" }], { holdAt: serverNow(), relink: true });
       }
       return;
     }
@@ -2926,6 +2968,8 @@ export default function ProximaApp() {
   const recoverOrphans = useCallback(async () => {
     // A submit still in flight could own the very prediction an orphan would match: wait until none is.
     if (orphanLookupRunning.current || submittingIds.current.size) return;
+    const lostKie = new Set(lostKieSubmits(tasksRef.current, submittingIds.current, Date.now()).map(t => t.id));
+    if (lostKie.size) setTasks(prev => prev.map(t => lostKie.has(t.id) ? settlePoll(t, t => failTask(t, Date.now(), KIE_LOST_ERROR)) : t));
     const orphans = tasksRef.current.filter(t => isOrphan(t, submittingIds.current, Date.now()));
     // Tasks cancelled or deleted before their submit gave an id pair with their own prediction too (never adopted). A
     // claimant alone needs the lookup as well (review #10), once this device's tasks are loaded (its task must be found).
@@ -3023,6 +3067,11 @@ export default function ProximaApp() {
     try {
       releaseHeldPurges();   // review round 23 #3: the held WaveSpeed ids whose deletes are decided
       applyRelinks();   // task B12b: a kept generation gets back a late result whose hold that release cancelled
+      // Belt (S3 review #4/#8/#13): no id of a kie.ai generation this device knows of (a task or a History item) is sent to
+      // WaveSpeed, whatever path queued it; kie.ai has no delete, its copy expires in 14 days.
+      const kieIds = [...tasksRef.current, ...logsRef.current.flatMap(l => (Array.isArray(l?.tasks) ? l.tasks : []))]
+        .filter(isKieGeneration).map(t => t.taskId).filter(Boolean);
+      if (kieIds.length) writeWsDeletes(dropDeletes(readWsDeletes(), kieIds));
       // Never send an id a live task holds; it waits and is checked again (wsDelete.js holdHeldIds).
       writeWsDeletes(holdHeldIds(readWsDeletes(), tasksRef.current.filter(t => !deletingIds.current.has(t.id)).map(t => t.taskId).filter(Boolean), Date.now()));
       // Guard (review round 23 #3): nor one a hold still covers or a stored clear stash holds (a void gives it back).
@@ -3060,7 +3109,7 @@ export default function ProximaApp() {
         // History-only one a voided Reset or Clear Outputs planned from its item. Unreadable: nothing is sent this pass.
         const pubs = isSupabaseConfigured() ? await pullFormHolds() : [];
         if (pubs === null) return;
-        const unsent = liveUnsent([...pubs, { at: Date.now(), ...unsentGenerations() }], Date.now());
+        const unsent = liveUnsent([...pubs, { at: serverNow(), ...unsentGenerations() }], serverNow());   // cloud clock (S3 verification #9)
         for (const p of due) if (unsent.predictions.has(p) || (queue[p]?.tid && unsent.ids.has(String(queue[p].tid)))) held.push(p);
         if (held.length) writeWsDeletes(holdHeldIds(readWsDeletes(), held, Date.now()));
       }
@@ -3169,8 +3218,9 @@ export default function ProximaApp() {
       // Forms holding uploads: this tab, this browser's other tabs, and the other device (cloud; null = unreadable); and
       // the paths this browser's queued, not yet uploaded rows use (task B13c).
       const cloudHolds = isSupabaseConfigured() ? await pullFormHolds() : [];
+      // Cloud holds were stamped on the server-aligned clock (S3 verification #9); this browser's own on its clock.
       const forms = new Set([...pathsInUse([draftFormRef.current]), ...liveFormPaths(readFormPublications(), Date.now()),
-        ...liveFormPaths(cloudHolds || [], Date.now()), ...unsentUploadPaths()]);
+        ...liveFormPaths(cloudHolds || [], serverNow()), ...unsentUploadPaths()]);
       // Rows beyond this device's view (older than the 500 loaded, or on the other device) count too: one server question
       // per flush (review wf_ec400a67-988 #7). No answer: those paths wait.
       const candidates = due.filter(p => !owned.has(p) && !forms.has(p));
@@ -3336,7 +3386,7 @@ export default function ProximaApp() {
       if (pending.some(t => !t.pollUrl)) setTimeout(recoverOrphans, 1000);
     })();
     return () => { cancelled = true; };
-  }, [isAuthed, keyBlocked]);
+  }, [isAuthed, keyBlocked, keyStatus, hasKieKey]);   // a key saved or fixed restarts the polls it stopped (S3 review #11)
 
   // Coming back to the app re-polls every running task at once (rules in planRepoll): a phone that left it froze
   // the poll timers and cut the request in flight, so the result used to show only after a full interval or backoff.
@@ -3362,7 +3412,7 @@ export default function ProximaApp() {
       window.removeEventListener("pageshow", onPageShow);
       window.removeEventListener("online", kick);
     };
-  }, [isAuthed, keyBlocked, recoverOrphans]);
+  }, [isAuthed, keyBlocked, hasKieKey, recoverOrphans]);
 
   // Back in the app: re-check the key, at most once a minute. It may have been saved or rotated on another device;
   // a phone whose key was rejected would otherwise stay blocked (and its stopped polls stopped) until a reload.
@@ -3373,10 +3423,17 @@ export default function ProximaApp() {
       if (document.visibilityState !== "visible" || Date.now() - last < 60000) return;
       last = Date.now();
       refreshBalance().catch(() => {});
+      refreshProviderKeys();   // a key saved or removed on another device changes the model list here too
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [isAuthed, refreshBalance]);
+  }, [isAuthed, refreshBalance, refreshProviderKeys]);
+  // Signed out: forget the last account's providers. Signed in (maybe as another account): that account's own cache.
+  useEffect(() => {
+    if (!isAuthed) { setProviderKeys(null); setProviderKeyList([]); setKieKeyStatus("unknown"); return; }
+    const a = accountOf(), c = a ? cachedProviderKeys(a) : null;
+    setProviderKeys(c ? new Set(c) : null);
+  }, [isAuthed]);
 
   // Clean up pollUrl from IndexedDB once a task reaches terminal state.
   // Reuses the saveTask call that already runs in the persistence effect —
@@ -3417,7 +3474,7 @@ export default function ProximaApp() {
     };
   }, [isAuthed]);
 
-  const models = MODELS[genType] || [];
+  const models = useMemo(() => visibleModels(genType, providerKeys), [genType, providerKeys]);   // stable for unitQuotes' memo
   const categoryFavoriteIds = getCategoryFavoriteIds(favoriteModelsByType, genType);
   const favoriteModelCount = Object.keys(MODELS).reduce(
     (total, type) => total + getCategoryFavoriteIds(favoriteModelsByType, type).length,
@@ -3433,8 +3490,12 @@ export default function ProximaApp() {
 
   // The cockpit's current settings. Estimate, picker labels and handleGenerate all price tasks drafted from it
   // (src/lib/taskDraft.js), so a label, the estimate and the task price are the price of the same payload.
+  // perModelRes: with per-model resolution dropdowns on screen, each model's shown value (taskDraft.js effectivePerModelRes).
+  // Memoized so the quotes' memo below holds while the schemes differ (S3 verification #6/#8).
+  const effectivePerModel = useMemo(() => effectivePerModelRes(selectedModelConfigs, perModelRes), [selectedModels, models, perModelRes]); // eslint-disable-line react-hooks/exhaustive-deps
   const draftForm = { genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl, sourceImageUrls,
-    perModelRes, optionalParams, briaPresets, endFrameUrl, refVideoUrl, sourceAudioUrl, sourceVideoUrl };
+    perModelRes: effectivePerModel, optionalParams, briaPresets, endFrameUrl, refVideoUrl,
+    sourceAudioUrl, sourceVideoUrl };
   draftFormRef.current = draftForm;
   // This tab's Generate form inputs, published for every tab's file flush (fileDelete.js liveFormPaths, review #3):
   // refreshed every minute, withdrawn when the tab closes. This browser's live holds (all its tabs) also go to the cloud
@@ -3444,7 +3505,7 @@ export default function ProximaApp() {
   useEffect(() => {
     const publish = () => {
       publishFormPaths([...pathsInUse([draftFormRef.current])]);
-      const now = Date.now(), mine = [...liveFormPaths(readFormPublications(), now)];
+      const local = Date.now(), now = formStamp(serverNow()), mine = [...liveFormPaths(readFormPublications(), local)];
       if (isSupabaseConfigured() && formPublishDue(cloudFormPubRef.current, mine, now)) {
         syncSetting("form-inputs:" + browserId(), { at: now, paths: mine })
           .then(() => { cloudFormPubRef.current = { at: now, paths: mine }; }).catch(() => {});
@@ -3460,7 +3521,7 @@ export default function ProximaApp() {
     const bye = (e) => {
       if (e.persisted) return;
       forgetFormPaths();
-      const now = Date.now(), mine = [...liveFormPaths(readFormPublications(), now)];
+      const local = Date.now(), now = formStamp(serverNow()), mine = [...liveFormPaths(readFormPublications(), local)];
       if (isSupabaseConfigured() && cloudFormPubRef.current && !sameFormSet(cloudFormPubRef.current.paths, mine)) {
         setPageExiting(true);
         syncSetting("form-inputs:" + browserId(), { at: now, paths: mine }).catch(() => {});
@@ -3479,8 +3540,9 @@ export default function ProximaApp() {
   const estExact = estQuotes.every(q => q.exact);
   // Picker labels: one generation of each model at the current settings. Recomputed only when a setting changes.
   const unitQuotes = useMemo(
-    () => new Map(models.map(m => [m.id, unitQuote(m, draftForm, { mediaDuration })])),
-    [models, mediaDurations, ...Object.values(draftForm)], // eslint-disable-line react-hooks/exhaustive-deps
+    // Each label is the price of what selecting that model sends: adding it may split the schemes (S3 verification #7).
+    () => new Map(models.map(m => [m.id, unitQuote(m, { ...draftForm, perModelRes: labelPerModelRes(selectedModelConfigs, m, perModelRes) }, { mediaDuration })])),
+    [models, mediaDurations, selectedModels, ...Object.values(draftForm)], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   function toggleModel(id) {
@@ -3626,7 +3688,8 @@ export default function ProximaApp() {
   async function handleGenerate() {
     const selectedConfigs = selectedModels.map(id => models.find(m => m.id === id)).filter(Boolean);
     const promptRequired = selectedConfigs.some(m => !m.params?.noPrompt) && genType !== "avatar";
-    if (keyBlocked || (promptRequired && !prompt.trim()) || selectedModels.length === 0) return;
+    // Only models the picker offers run (a removed key, a favorite or Edit may have selected a hidden one): none, no batch.
+    if (keyBlocked || (promptRequired && !prompt.trim()) || selectedConfigs.length === 0) return;
     const sourceTypes = ["i2i", "i2v", "i23d", "v2v", "avatar"];
     const sourceRequired = sourceTypes.includes(genType) && selectedConfigs.some(m => !m.params?.sourceOptional);
     if (sourceRequired && !sourceImageUrl.trim()) {
@@ -3688,7 +3751,7 @@ export default function ProximaApp() {
           const taskId = submitRes?.data?.id;
           const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
           // Cancelled (or deleted) while the submit was on the wire: it stays that way.
-          if (!isInFlight(tasksRef.current.find(t => t.id === task.id))) { keepLateSubmitId(task.id, taskId); return; }
+          if (!isInFlight(tasksRef.current.find(t => t.id === task.id))) { keepLateSubmitId(task.id, taskId, task.modelId); return; }
 
           // Check if sync mode returned outputs directly
           if (submitRes?.data?.outputs?.length > 0) {
@@ -3710,12 +3773,17 @@ export default function ProximaApp() {
 
         } catch (e) {
           // The response was lost, not refused: WaveSpeed may have the task. It stays pending for the history lookup.
+          // kie.ai has no task history to look a lost submit up in: it fails now, saying it may have run (taskResume.js).
+          if (sent && submitMayHaveLanded(e) && isKieModelId(task.modelId)) {
+            setTasks(prev => prev.map(t => t.id === task.id ? settlePoll(t, t => failTask(t, Date.now(), KIE_LOST_ERROR)) : t));
+            return;
+          }
           if (sent && submitMayHaveLanded(e)) { setTimeout(recoverOrphans, 2000); return; }
           resolveClaimants([task.id]); // refused: it never reached WaveSpeed, so a cancel left nothing to claim
           const ks = keyStatusAfter(e);
           if (ks) setKeyStatus(ks);
           let errMsg = e.message || "Submit failed";
-          if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
+          if (e.code === 401 && !e.session) errMsg = e.kie ? "kie.ai rejected the saved key — update it in Settings" : "WaveSpeed rejected the saved API key — update it in Settings";
           if (e.code === 402) errMsg = "Insufficient balance";
           if (e.code === 429) errMsg = "Rate limited — try fewer models";
           setTasks(prev => prev.map(t => t.id === task.id ? {
@@ -3770,8 +3838,11 @@ export default function ProximaApp() {
     const newTask = retryTask(originalTask, { id: genId(), now: Date.now(), seed: Math.floor(Math.random() * 999999).toString() });
     // Re-price from the payload this run sends (a task made before formula pricing carries a default-settings price).
     const regenType = newTask.genType || genType;
-    const regenModel = (MODELS[regenType] || []).find(m => m.id === newTask.modelId);
+    const regenModel = (CATALOG[regenType] || []).find(m => m.id === newTask.modelId);
     if (regenModel?.params) {
+      const labels = runLabels(regenModel, taskUserSettings(newTask, regenType));
+      newTask.actualRes = labels.actualRes;
+      newTask.actualDur = labels.actualDur;
       newTask.price = requestCost(regenModel, buildPayload(regenModel, taskUserSettings(newTask, regenType), regenType), { imagesPerRequest: newTask.numImages || 1, mediaDuration: url => mediaDurationsRef.current[url] });
     }
     setTasks(prev => [newTask, ...prev]);
@@ -3794,7 +3865,7 @@ export default function ProximaApp() {
       holdDeleting("task-delete", [newTask.id], submitHold);
       try {
         const taskGenType = newTask.genType || genType;
-        const taskModels = MODELS[taskGenType] || [];
+        const taskModels = CATALOG[taskGenType] || [];
         const modelConfig = taskModels.find(m => m.id === newTask.modelId);
         if (!modelConfig) throw new Error(`${newTask.modelName || newTask.modelId} is no longer available — pick another model`);
         const payload = modelConfig?.params
@@ -3806,7 +3877,7 @@ export default function ProximaApp() {
         const submitRes = await submitTask(newTask.modelId, payload).finally(() => submittingIds.current.delete(newTask.id));
         const taskId = submitRes?.data?.id;
         const pollUrl = submitRes?.data?.urls?.get || `${API_BASE}/predictions/${taskId}/result`;
-        if (!isInFlight(tasksRef.current.find(t => t.id === newTask.id))) { keepLateSubmitId(newTask.id, taskId); return; } // cancelled meanwhile
+        if (!isInFlight(tasksRef.current.find(t => t.id === newTask.id))) { keepLateSubmitId(newTask.id, taskId, newTask.modelId); return; } // cancelled meanwhile
 
         if (submitRes?.data?.outputs?.length > 0) {
           const wallClock = Date.now() - newTask.startTime;
@@ -3824,12 +3895,16 @@ export default function ProximaApp() {
         syncInFlight({ ...newTask, status: "processing", taskId, pollUrl });
         startPolling(newTask, pollUrl, { genType: taskGenType });
       } catch (e) {
+        if (sent && submitMayHaveLanded(e) && isKieModelId(newTask.modelId)) {
+          setTasks(prev => prev.map(t => t.id === newTask.id ? settlePoll(t, t => failTask(t, Date.now(), KIE_LOST_ERROR)) : t));
+          return;
+        }
         if (sent && submitMayHaveLanded(e)) { setTimeout(recoverOrphans, 2000); return; }
         resolveClaimants([newTask.id]); // refused: it never reached WaveSpeed
         const ks = keyStatusAfter(e);
         if (ks) setKeyStatus(ks);
         let errMsg = e.message || "Regenerate failed";
-        if (e.code === 401 && !e.session) errMsg = "WaveSpeed rejected the saved API key — update it in Settings";
+        if (e.code === 401 && !e.session) errMsg = e.kie ? "kie.ai rejected the saved key — update it in Settings" : "WaveSpeed rejected the saved API key — update it in Settings";
         if (e.code === 402) errMsg = "Insufficient balance";
         setTasks(prev => prev.map(t => t.id === newTask.id ? {
           ...t, status: "failed", error: errMsg, endTime: Date.now()
@@ -3860,7 +3935,7 @@ export default function ProximaApp() {
     setRefVideoUrl(log.refVideoUrl || "");
     if (log.numImages) setNumImages(log.numImages);
     // Try to reselect models
-    const modelIds = (MODELS[log.genType] || []).filter(m => log.models.includes(m.name)).map(m => m.id);
+    const modelIds = (CATALOG[log.genType] || []).filter(m => log.models.includes(m.name)).map(m => m.id);
     setSelectedModels(modelIds);
     setPerModelRes({});
     setPage("cockpit");
@@ -3968,9 +4043,8 @@ export default function ProximaApp() {
     setUploadStatus("done");
     setGenType("i2i");
     setPrompt(task.prompt || "");
-    const editModels = MODELS["i2i"] || [];
-    const sameProviderEdit = editModels.find(m => m.provider === task.provider);
-    setSelectedModels(sameProviderEdit ? [sameProviderEdit.id] : []);
+    const edit = editModelFor(task, visibleModels("i2i", providerKeysRef.current));
+    setSelectedModels(edit ? [edit.id] : []);
     setPage("cockpit");
   }, []);
 
@@ -4355,6 +4429,7 @@ export default function ProximaApp() {
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
               {balance !== null && !keyBlocked && <div className="balance-pill">${Number(balance).toFixed(2)}</div>}
               {keyBlocked && <span style={{ fontSize: 11, color: "var(--error)" }}>⚠ {keyStatus === "invalid" ? "API key rejected" : "No API Key"}</span>}
+              {kieKeyStatus === "invalid" && <span style={{ fontSize: 11, color: "var(--error)" }}>⚠ kie.ai key rejected</span>}
             </div>
           </div>
 
@@ -4784,7 +4859,7 @@ export default function ProximaApp() {
                                     return (
                                       <div style={{ fontSize: 9, color: "var(--text-muted)", lineHeight: 1.3 }}>
                                         {current.models.length === totalModels ? "All models" : current.models.join(", ")}
-                                        {unsupported.length > 0 && <span style={{ color: "var(--amber)" }}> — {unsupported.map(m => m.name).join(", ")} will use nearest valid</span>}
+                                        {unsupported.length > 0 && <span style={{ color: "var(--amber)" }}> — {resolutionNotes(unsupported, resolution).map(x => `${x.name} uses ${x.label}`).join(", ")}</span>}
                                       </div>
                                     );
                                   }
@@ -4797,7 +4872,7 @@ export default function ProximaApp() {
                           return selectedWithRes.map(m => (
                             <div className="settings-row" key={m.id}>
                               <label htmlFor={`res-${m.id}`} style={{ fontSize: 10, minWidth: 80 }}>{m.name}</label>
-                              <select id={`res-${m.id}`} className="settings-select" value={perModelRes[m.id] || m.params.resolution.default}
+                              <select id={`res-${m.id}`} className="settings-select" value={chosenResolution(m, { perModelResolution: effectivePerModel, resolution })}
                                 onChange={e => setPerModelRes(prev => ({ ...prev, [m.id]: e.target.value }))}>
                                 {m.params.resolution.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                               </select>
@@ -4995,19 +5070,19 @@ export default function ProximaApp() {
                   <div className="action-panel">
                     {selectedModels.length > 0 && (
                       <div className="cost-bar">
-                        <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>Est. cost ({selectedModels.length} model{selectedModels.length > 1 ? "s" : ""})</span>
+                        <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>Est. cost ({selectedConfigs.length} model{selectedConfigs.length > 1 ? "s" : ""})</span>
                         <span className="cost-amount" title={estExact ? "WaveSpeed price for these settings" : "Includes a default-settings price: an input's length is not measured yet"}>{estExact ? "" : "~"}{formatCost(estCost)}</span>
                       </div>
                     )}
 
                     <button className={`gen-btn ${isGenerating ? "running" : "ready"}`}
-                      disabled={keyBlocked || (promptRequired && !prompt.trim()) || selectedModels.length === 0 || (sourceRequired && !sourceImageUrl.trim()) || (needsAudio && !sourceAudioUrl.trim())}
+                      disabled={keyBlocked || (promptRequired && !prompt.trim()) || selectedConfigs.length === 0 || (sourceRequired && !sourceImageUrl.trim()) || (needsAudio && !sourceAudioUrl.trim())}
                       onClick={handleGenerate}>
                       {isGenerating ? `⏳ GENERATING (${activeCount} active)...` :
                        keyBlocked ? (keyStatus === "invalid" ? "⚠ UPDATE API KEY IN SETTINGS" : "⚠ SET API KEY IN SETTINGS") :
                        sourceRequired && !sourceImageUrl.trim() ? `⚠ ADD SOURCE ${sourceIsVideo ? "VIDEO" : "IMAGE"} ABOVE` :
                        needsAudio && !sourceAudioUrl.trim() ? "⚠ ADD SOURCE AUDIO ABOVE" :
-                       `⚡ ${genType === "i2i" || genType === "v2v" ? "EDIT" : "GENERATE"}${selectedModels.length > 0 ? ` ACROSS ${selectedModels.length} MODELS` : ""}`}
+                       `⚡ ${genType === "i2i" || genType === "v2v" ? "EDIT" : "GENERATE"}${selectedConfigs.length > 0 ? ` ACROSS ${selectedConfigs.length} MODELS` : ""}`}
                     </button>
                     <div className="gen-hint" style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center" }}>Ctrl+Enter to generate</div>
                   </div>
@@ -5382,7 +5457,7 @@ export default function ProximaApp() {
                       setTestStatus("testing");
                       try {
                         const typed = keyInput.trim();
-                        if (typed) { await saveWavespeedKey(typed); setKeyInput(""); }
+                        if (typed) { await saveWavespeedKey(typed); setKeyInput(""); refreshProviderKeys(); pollUntracked(); }
                         const r = await refreshBalance();
                         const saved = typed ? "Saved. " : "";
                         if (r.keyStatus === "ok") setTestStatus({ ok: true, msg: `${saved}Connected! Balance: $${Number(r.balance).toFixed(4)}` });
@@ -5412,6 +5487,79 @@ export default function ProximaApp() {
                     </div>
                   )}
                   {balance !== null && testStatus !== "testing" && !testStatus && <div style={{ marginTop: 8, fontFamily: font, fontSize: 13, color: "var(--success)" }}>Balance: ${Number(balance).toFixed(4)}</div>}
+                </div>
+
+                {/* kie.ai key (docs/SECOND-ACCOUNT-PLAN.md K1): encrypted in the server's Vault; with one saved, kie.ai's models
+                    appear in the model list. The box never shows the key, only the masked fingerprint the server returns. */}
+                <div className="setting-group">
+                  <div className="setting-label">kie.ai API Key</div>
+                  <input id="settings-kie-key" type="text" className="setting-input" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                    style={maskedCodeStyle(false)} aria-label="kie.ai API key"
+                    placeholder={kieFingerprint ? `Saved (${kieFingerprint}) — paste a new key to replace it` : hasKieKey ? "Saved on the server — paste a new key to replace it" : "Paste your kie.ai API key..."}
+                    value={kieKeyInput} onChange={e => { setKieKeyInput(e.target.value); setKieTestStatus(null); }} />
+                  <div className="setting-hint">Get your key from your <span style={{ color: "var(--accent)" }}>kie.ai</span> account (API Key page). It is saved encrypted on ProximaAI's server, never kept in this browser, and only this account can use it. With a key saved, the kie.ai models appear in the model list.</div>
+                  <div style={{ display: "grid", gridTemplateColumns: hasKieKey ? "1fr 1fr" : "1fr", gap: 8 }}>
+                    <button className="api-test-btn" disabled={kieTestStatus === "testing"}
+                      onClick={async () => {
+                        setKieTestStatus("testing");
+                        try {
+                          const typed = kieKeyInput.trim();
+                          if (typed) { await saveProviderKey("kie", typed); setKieKeyInput(""); await refreshProviderKeys(); }
+                          const r = await checkKieBalance();
+                          const saved = typed ? "Saved. " : "";
+                          if (r.keyStatus === "ok") { setKieKeyStatus("ok"); pollUntracked(); }
+                          if (r.keyStatus === "invalid") setKieKeyStatus("invalid");
+                          if (r.keyStatus === "ok") setKieTestStatus({ ok: true, msg: `${saved}Connected! ${r.credits} credits (about $${(r.credits * KIE_CREDIT_USD).toFixed(2)})` });
+                          else if (r.keyStatus === "missing") setKieTestStatus({ ok: false, msg: "No kie.ai key saved yet — paste it above." });
+                          else if (r.keyStatus === "invalid") setKieTestStatus({ ok: false, msg: `${saved}kie.ai rejected this key. Check it and save again.` });
+                          else setKieTestStatus({ ok: false, msg: `${saved}${r.error || "Could not reach kie.ai."}` });
+                        } catch (err) {
+                          setKieTestStatus({ ok: false, msg: err.message || "Could not save the key" });
+                        }
+                      }}>
+                      {kieTestStatus === "testing" ? "Checking..." : kieKeyInput.trim() ? "Save & Test Key" : "Test Connection"}
+                    </button>
+                    {hasKieKey && (
+                      <button className="api-test-btn" disabled={kieTestStatus === "testing"}
+                        onClick={async () => {
+                          if (!window.confirm("Remove the saved kie.ai key? kie.ai models disappear from the list until a key is saved again.")) return;
+                          setKieTestStatus("testing");
+                          try {
+                            await clearProviderKey("kie");
+                            await refreshProviderKeys();
+                            setKieTestStatus({ ok: true, msg: "Removed." });
+                          } catch (err) {
+                            setKieTestStatus({ ok: false, msg: err.message || "Could not remove the key" });
+                          }
+                        }}>
+                        Remove Key
+                      </button>
+                    )}
+                  </div>
+                  {kieTestStatus && kieTestStatus !== "testing" && (
+                    <div style={{
+                      marginTop: 10, padding: "10px 12px", borderRadius: 8, fontSize: 12,
+                      fontFamily: font, fontWeight: 500,
+                      background: kieTestStatus.ok ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                      border: `1px solid ${kieTestStatus.ok ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
+                      color: kieTestStatus.ok ? "var(--success)" : "var(--error)"
+                    }}>
+                      {kieTestStatus.ok ? "✓ " : "✗ "}{kieTestStatus.msg}
+                    </div>
+                  )}
+                  {kieTestStatus === "testing" && (
+                    <div className="pulse" style={{ marginTop: 10, fontSize: 12, color: "var(--accent)", fontFamily: font }}>
+                      ⏳ Contacting kie.ai...
+                    </div>
+                  )}
+                  {hasKieKey && kieKeyStatus === "invalid" && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: "var(--error)", fontFamily: font }}>kie.ai rejected the saved key. Paste a working one and press Save &amp; Test; running kie.ai generations then resume.</div>
+                  )}
+                  {/* S3 review #11: kie.ai generations still running stop polling without a key; saving one resumes them. */}
+                  {!hasKieKey && (() => {
+                    const waiting = tasks.filter(t => isInFlight(t) && isKieGeneration(t)).length;
+                    return waiting > 0 && <div style={{ marginTop: 8, fontSize: 12, color: "var(--amber)", fontFamily: font }}>{waiting} kie.ai generation{waiting > 1 ? "s are" : " is"} waiting for a kie.ai key.</div>;
+                  })()}
                 </div>
 
                 <div className="setting-group">

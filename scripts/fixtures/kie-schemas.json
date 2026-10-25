@@ -1,0 +1,558 @@
+{
+ "_source": "docs.kie.ai/market/* createTask request schemas, extracted 2026-10-25 (artifacts/kie/kie-extract.mjs); keyed by kie.ai model id",
+ "nano-banana-2": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000
+   },
+   "image_input": {
+    "type": "array",
+    "maxItems": 10,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "auto",
+    "enum": [
+     "1:1",
+     "2:3",
+     "3:2",
+     "1:4",
+     "4:1",
+     "3:4",
+     "4:3",
+     "4:5",
+     "5:4",
+     "1:8",
+     "8:1",
+     "9:16",
+     "16:9",
+     "21:9",
+     "auto"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "default": "jpg",
+    "enum": [
+     "png",
+     "jpg"
+    ]
+   }
+  }
+ },
+ "nano-banana-pro": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000
+   },
+   "image_input": {
+    "type": "array",
+    "maxItems": 8,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "1:1",
+    "enum": [
+     "1:1",
+     "2:3",
+     "3:2",
+     "3:4",
+     "4:3",
+     "4:5",
+     "5:4",
+     "9:16",
+     "16:9",
+     "21:9",
+     "auto"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "enum": [
+     "png",
+     "jpg"
+    ]
+   }
+  }
+ },
+ "seedream/5-lite-text-to-image": {
+  "required": [
+   "prompt",
+   "aspect_ratio",
+   "quality"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 2995
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "2:3",
+     "3:2",
+     "21:9"
+    ]
+   },
+   "quality": {
+    "type": "string",
+    "enum": [
+     "basic",
+     "high",
+     "ultra"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "enum": [
+     "png",
+     "jpeg"
+    ]
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  }
+ },
+ "seedream/5-lite-image-to-image": {
+  "required": [
+   "prompt",
+   "image_urls",
+   "aspect_ratio",
+   "quality"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 2995
+   },
+   "image_urls": {
+    "type": "array",
+    "maxItems": 14,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "2:3",
+     "3:2",
+     "21:9"
+    ]
+   },
+   "quality": {
+    "type": "string",
+    "enum": [
+     "basic",
+     "high",
+     "ultra"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "enum": [
+     "png",
+     "jpeg"
+    ]
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  }
+ },
+ "gpt-image-2-text-to-image": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "1:1",
+     "3:2",
+     "2:3",
+     "4:3",
+     "3:4",
+     "5:4",
+     "4:5",
+     "16:9",
+     "9:16",
+     "2:1",
+     "1:2",
+     "3:1",
+     "1:3",
+     "21:9",
+     "9:21"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "background": {
+    "type": "string",
+    "enum": [
+     "transparent",
+     "opaque",
+     "auto"
+    ]
+   }
+  }
+ },
+ "gpt-image-2-image-to-image": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string"
+   },
+   "input_urls": {
+    "type": "array",
+    "maxItems": 16,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "1:1",
+     "3:2",
+     "2:3",
+     "4:3",
+     "3:4",
+     "5:4",
+     "4:5",
+     "16:9",
+     "9:16",
+     "2:1",
+     "1:2",
+     "3:1",
+     "1:3",
+     "21:9",
+     "9:21"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "background": {
+    "type": "string",
+    "enum": [
+     "transparent",
+     "opaque",
+     "auto"
+    ]
+   }
+  }
+ },
+ "kling-3.0/video": {
+  "required": [
+   "sound",
+   "duration",
+   "mode",
+   "multi_shots"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string"
+   },
+   "image_urls": {
+    "type": "array",
+    "items": "string"
+   },
+   "sound": {
+    "type": "boolean"
+   },
+   "duration": {
+    "type": "string",
+    "enum": [
+     "3",
+     "4",
+     "5",
+     "6",
+     "7",
+     "8",
+     "9",
+     "10",
+     "11",
+     "12",
+     "13",
+     "14",
+     "15"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "16:9",
+     "9:16",
+     "1:1"
+    ]
+   },
+   "mode": {
+    "type": "string",
+    "enum": [
+     "std",
+     "pro",
+     "4K"
+    ]
+   },
+   "multi_shots": {
+    "type": "boolean"
+   },
+   "multi_prompt": {
+    "type": "array",
+    "items": "object"
+   },
+   "kling_elements": {
+    "type": "array",
+    "maxItems": 3,
+    "items": "object"
+   }
+  }
+ },
+ "bytedance/seedance-2": {
+  "required": [],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000
+   },
+   "first_frame_url": {
+    "type": "string"
+   },
+   "last_frame_url": {
+    "type": "string"
+   },
+   "reference_image_urls": {
+    "type": "array",
+    "maxItems": 9,
+    "items": "string"
+   },
+   "reference_video_urls": {
+    "type": "array",
+    "maxItems": 3,
+    "items": "string"
+   },
+   "reference_audio_urls": {
+    "type": "array",
+    "maxItems": 3,
+    "items": "string"
+   },
+   "return_last_frame": {
+    "type": "boolean",
+    "default": false
+   },
+   "generate_audio": {
+    "type": "boolean",
+    "default": true
+   },
+   "resolution": {
+    "type": "string",
+    "default": "720p",
+    "enum": [
+     "480p",
+     "720p",
+     "1080p",
+     "4k"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "16:9",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "21:9",
+     "adaptive"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "default": 5
+   },
+   "web_search": {
+    "type": "boolean"
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  }
+ },
+ "wan/2-7-text-to-video": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000
+   },
+   "negative_prompt": {
+    "type": "string",
+    "maxLength": 500
+   },
+   "audio_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1080p",
+    "enum": [
+     "720p",
+     "1080p"
+    ]
+   },
+   "ratio": {
+    "type": "string",
+    "default": "16:9",
+    "enum": [
+     "16:9",
+     "9:16",
+     "1:1",
+     "4:3",
+     "3:4"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "default": 5,
+    "minimum": 2,
+    "maximum": 15
+   },
+   "prompt_extend": {
+    "type": "boolean",
+    "default": true
+   },
+   "watermark": {
+    "type": "boolean",
+    "default": false
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  }
+ },
+ "wan/2-7-image-to-video": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000
+   },
+   "negative_prompt": {
+    "type": "string",
+    "maxLength": 500
+   },
+   "first_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "last_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "first_clip_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "driving_audio_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1080p",
+    "enum": [
+     "720p",
+     "1080p"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "default": 5,
+    "minimum": 2,
+    "maximum": 15
+   },
+   "prompt_extend": {
+    "type": "boolean",
+    "default": true
+   },
+   "watermark": {
+    "type": "boolean",
+    "default": false
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  }
+ }
+}
