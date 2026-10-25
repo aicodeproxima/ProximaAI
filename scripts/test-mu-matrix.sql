@@ -24,6 +24,8 @@ declare
   sw text; bw uuid := gen_random_uuid(); bo uuid := gen_random_uuid();   -- skip-then-scrub (review round 4)
   su text; bu uuid := gen_random_uuid();                                  -- switch-off after a skip (review round 5)
   bh uuid := gen_random_uuid();                                           -- restore counts (review round 6)
+  dx_id uuid := gen_random_uuid(); dy_id uuid := gen_random_uuid(); dx text; dy text; dx_tok text; dy_tok text;   -- definers
+  dy_task text; dy_hist text; dy_bk uuid := gen_random_uuid(); dy_path text; fp0 text; fp1 text; ans text; calls text[] := '{}';
 begin
   select u.id, u.scope, proxima_auth.mint_token(u.id) into a_id, a_scope, a_tok from proxima_auth.users u where u.role = 'owner';
   insert into proxima_auth.users (id, username, role, scope) values (b_id, b_name, 'member', 'user:' || b_name);
@@ -430,6 +432,93 @@ begin
     r := r || format('%s folders: object_folder matches storage.foldername on 26 tricky paths (%s differ%s)',
                      case when n = 0 then 'PASS' else 'FAIL' end, n, coalesce(': ' || v, ''));
   end if;
+  ---------------------------------------------------------------- every browser-callable data / backup / key function
+  dx := 'user:' || p || 'dx'; dy := 'user:' || p || 'dy'; dy_task := p || '_dyt'; dy_hist := p || '_dyh';
+  dy_path := 'user_' || p || 'dy/' || dy_task || '-0.png';
+  insert into proxima_auth.users (id, username, role, scope) values (dx_id, p || 'dx', 'member', dx), (dy_id, p || 'dy', 'member', dy);
+  dx_tok := proxima_auth.mint_token(dx_id); dy_tok := proxima_auth.mint_token(dy_id);
+  insert into public.tasks (id, device_id, status, start_time, outputs) values
+    (dy_task, dy, 'completed', 1, jsonb_build_array('https://x.supabase.co/storage/v1/object/public/generations/' || dy_path)),
+    (p || '_dxt', dx, 'completed', 1, '[]');
+  insert into public.history (id, device_id, timestamp, tasks) values
+    (dy_hist, dy, 1, jsonb_build_array(jsonb_build_object('id', dy_task, 'status', 'completed', 'outputs', '[]'::jsonb)));
+  insert into public.favorites (id, device_id, prompt) values (p || '_dyf', dy, 'y');
+  insert into public.settings (device_id, key, value) values (dy, p || '_dys', '"y"'::jsonb);
+  insert into public.data_backups (id, username, backup_type, task_count, tasks_snapshot) values
+    (dy_bk, dy, 'manual', 1, jsonb_build_array(jsonb_build_object('id', dy_task, 'device_id', dy, 'status', 'completed', 'start_time', 1, 'outputs', '[]'::jsonb)));
+  begin
+    perform public.set_my_provider_key(dy_tok, 'kie', 'fake-kie-y-' || md5(random()::text));
+    perform public.set_my_wavespeed_key(dy_tok, 'fake-ws-y-' || md5(random()::text));
+  exception when others then r := r || format('FAIL definers: seeding Y''s keys: %s %s', sqlstate, sqlerrm); end;
+  -- Y's whole state, as one fingerprint.
+  fp0 := md5(concat_ws('|',
+    (select string_agg(concat_ws(',', id, status, start_time, outputs::text), ';' order by id) from public.tasks where device_id = dy),
+    (select string_agg(concat_ws(',', id, tasks::text), ';' order by id) from public.history where device_id = dy),
+    (select string_agg(id, ';' order by id) from public.favorites where device_id = dy),
+    (select string_agg(concat_ws(',', key, value::text), ';' order by key) from public.settings where device_id = dy),
+    (select string_agg(concat_ws(',', id, kind, by_restore), ';' order by id) from public.sync_tombstones where device_id = dy),
+    (select string_agg(concat_ws(',', id, task_count, md5(coalesce(tasks_snapshot, '[]'::jsonb)::text)), ';' order by id) from public.data_backups where username = dy),
+    (select string_agg(concat_ws(',', provider, fingerprint, updated_at), ';' order by provider) from proxima_auth.provider_keys where account_id = dy_id),
+    (select concat_ws(',', email, email_verified, sessions_valid_after, login_failed) from proxima_auth.users where id = dy_id)));
+  execute 'set local role anon';
+  perform set_config('request.headers', json_build_object('x-proxima-session', dx_tok)::text, true);
+  -- Each call in its own block: an error is recorded, never ends the section.
+  begin ans := array_to_string(public.generations_live(dx_tok, array[dy_task]), ',');
+        calls := calls || format('generations_live %s', case when coalesce(ans, '') like '%' || dy_task || '%' then 'LEAK' else 'ok' end);
+  exception when others then calls := calls || format('generations_live err %s', sqlstate); end;
+  begin ans := array_to_string(public.paths_in_use(dx_tok, array[dy_path]), ',');
+        calls := calls || format('paths_in_use %s', case when coalesce(ans, '') like '%' || dy_path || '%' then 'LEAK' else 'ok' end);
+  exception when others then calls := calls || format('paths_in_use err %s', sqlstate); end;
+  begin perform public.purge_my_backups_of(dx_tok, array[dy_task], array[dy_hist]); calls := calls || text 'purge_my_backups_of ok';
+  exception when others then calls := calls || format('purge_my_backups_of err %s', sqlstate); end;
+  begin select string_agg(b.id::text, ',') into ans from public.list_my_backups_phase2(dx_tok, 50) b;
+        calls := calls || format('list_my_backups %s', case when coalesce(ans, '') like '%' || dy_bk::text || '%' then 'LEAK' else 'ok' end);
+  exception when others then calls := calls || format('list_my_backups err %s', sqlstate); end;
+  begin perform public.delete_my_backup_phase2(dx_tok, dy_bk); calls := calls || text 'delete_my_backup ok';
+  exception when others then calls := calls || format('delete_my_backup err %s', sqlstate); end;
+  begin ans := public.restore_my_backup_phase2(dx_tok, dy_bk)::text;
+        calls := calls || format('restore_my_backup %s', case when ans like '%"ok" : true%' then 'RESTORED-Y' else 'refused' end);
+  exception when others then calls := calls || format('restore_my_backup err %s', sqlstate); end;
+  begin perform public.clear_queued_rows(dx_tok, 'task', now_ms, array[dy_task]); calls := calls || text 'clear_queued_rows ok';
+  exception when others then calls := calls || format('clear_queued_rows err %s', sqlstate); end;
+  begin perform public.upsert_queued_history(dx_tok, jsonb_build_array(jsonb_build_object('id', dy_hist, 'device_id', dy, 'timestamp', 2, 'tasks', '[]'::jsonb)), now_ms);
+        calls := calls || text 'upsert_queued_history ok';
+  exception when others then calls := calls || format('upsert_queued_history err %s', sqlstate); end;
+  begin perform public.set_my_provider_key(dx_tok, 'kie', 'fake-kie-x-' || md5(random()::text));
+        ans := public.my_provider_keys(dx_tok)::text;
+        calls := calls || format('provider keys %s', case when (select count(*) from json_array_elements(ans::json -> 'keys')) = 1 then 'own only' else 'LEAK' end);
+        perform public.clear_my_provider_key(dx_tok, 'kie');
+  exception when others then calls := calls || format('provider keys err %s', sqlstate); end;
+  begin perform public.set_my_wavespeed_key(dx_tok, 'fake-ws-x-' || md5(random()::text)); calls := calls || text 'set_my_wavespeed_key ok';
+  exception when others then calls := calls || format('set_my_wavespeed_key err %s', sqlstate); end;
+  begin perform public.set_my_account(dx_tok, 'x@example.test', true, now_ms); calls := calls || text 'set_my_account ok';
+  exception when others then calls := calls || format('set_my_account err %s', sqlstate); end;
+  begin perform public.set_auto_backups(dx_tok, false); calls := calls || text 'set_auto_backups ran';
+  exception when others then calls := calls || format('set_auto_backups refused %s', sqlstate); end;
+  begin perform public.snapshot_my_data_phase2(dx_tok, 'manual', null); calls := calls || text 'snapshot ok';
+  exception when others then calls := calls || format('snapshot err %s', sqlstate); end;
+  begin perform public.reset_queued_rows(dx_tok, now_ms, array[dy_task], array[dy_hist], null); calls := calls || text 'reset_queued_rows ok';
+  exception when others then calls := calls || format('reset_queued_rows err %s', sqlstate); end;
+  begin perform public.server_time_ms(dx_tok); calls := calls || text 'server_time_ms ok';
+  exception when others then calls := calls || format('server_time_ms err %s', sqlstate); end;
+  execute 'reset role';
+  fp1 := md5(concat_ws('|',
+    (select string_agg(concat_ws(',', id, status, start_time, outputs::text), ';' order by id) from public.tasks where device_id = dy),
+    (select string_agg(concat_ws(',', id, tasks::text), ';' order by id) from public.history where device_id = dy),
+    (select string_agg(id, ';' order by id) from public.favorites where device_id = dy),
+    (select string_agg(concat_ws(',', key, value::text), ';' order by key) from public.settings where device_id = dy),
+    (select string_agg(concat_ws(',', id, kind, by_restore), ';' order by id) from public.sync_tombstones where device_id = dy),
+    (select string_agg(concat_ws(',', id, task_count, md5(coalesce(tasks_snapshot, '[]'::jsonb)::text)), ';' order by id) from public.data_backups where username = dy),
+    (select string_agg(concat_ws(',', provider, fingerprint, updated_at), ';' order by provider) from proxima_auth.provider_keys where account_id = dy_id),
+    (select concat_ws(',', email, email_verified, sessions_valid_after, login_failed) from proxima_auth.users where id = dy_id)));
+  r := r || format('%s definers: X''s %s calls naming Y''s ids leave Y unchanged and return nothing of Y''s [%s]',
+                   case when fp0 = fp1 and not exists (select 1 from unnest(calls) c where c ~ 'LEAK|RESTORED-Y') then 'PASS' else 'FAIL' end,
+                   cardinality(calls), array_to_string(calls, '; '));
+  -- X's own snapshot holds no row of Y's.
+  r := r || format('%s definers: X''s new backup holds none of Y''s rows',
+                   case when not exists (select 1 from public.data_backups b where b.username = dx and b.tasks_snapshot::text like '%' || dy_task || '%')
+                        then 'PASS' else 'FAIL' end);
+
   if not walls then r := r || text 'FAIL walls: proxima_auth.account_folders missing (20261025100000 not applied)'; end if;
 
   raise exception 'RESULT: % PASS, % FAIL :: %',
