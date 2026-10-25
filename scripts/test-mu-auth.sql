@@ -37,6 +37,9 @@ declare
   ko text := 'mu-owner-code-000001';
   ta text; tb text; tc text; ta_old text; t text; t2 text; t3 text; v_owner text; v_owner_id uuid; v_own_snap text;
   r json; r2 json; r3 json; r4 json; v_bk uuid; v_ep bigint; v_ep2 bigint; n int; n2 int; s text; v_md5 text;
+  -- 20261025500000_mu_p5_provider_keys moves WaveSpeed keys into Vault (proxima_auth.provider_keys, by account id): the
+  -- key cases read whichever store this database has (S1/S2 review, regression #1). Dynamic SQL: the table may not exist.
+  v_p5 boolean := to_regclass('proxima_auth.provider_keys') is not null; v_a_key boolean;
   ok boolean; v_m4 boolean; v_m3 boolean; v_pfx text; v_otok text;
   ip_t constant text := '{"x-forwarded-for":"203.0.113.7","cf-connecting-ip":"203.0.113.7"}';
   ip_u constant text := '{"x-forwarded-for":"198.51.100.9","cf-connecting-ip":"198.51.100.9"}';
@@ -66,7 +69,11 @@ begin
       ('mu-a-1', sa, 'completed', 1000, '[]'), ('mu-b-1', sb, 'completed', 1000, '[]'), ('mu-b-2', sb, 'completed', 1000, '[]');
     insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot, settings_snapshot)
       values (sb, 'manual', 1, 0, '[{"id":"mu-b-1"}]', '[]', '{}') returning id into v_bk;
-    insert into user_secrets (device_id, key, value) values (sb, 'wavespeed_api_key', jsonb_build_object('value', 'mu-test-key-B-0002'));
+    if v_p5 then
+      execute 'select proxima_auth._store_provider_key($1, ''wavespeed'', ''mu-test-key-B-0002'')' using b;
+    else
+      insert into user_secrets (device_id, key, value) values (sb, 'wavespeed_api_key', jsonb_build_object('value', 'mu-test-key-B-0002'));
+    end if;
     update proxima_auth.auth_config set signin_throttle = 'on', throttle_max_failures = 10, throttle_window = interval '15 minutes',
                                         throttle_guard_names = 50;
     select x.id, x.username, md5(row(x.login_failed, x.login_locked_at, x.backup_failed, x.backup_locked_until, x.sessions_valid_after)::text)
@@ -309,13 +316,19 @@ begin
     r4 := snapshot_my_data_phase2(ta, 'manual', null);
     perform set_my_wavespeed_key(ta, 'mu-test-key-A-0001');
     reset role;
+    if v_p5 then
+      execute 'select exists (select 1 from proxima_auth.provider_keys where account_id = $1 and provider = ''wavespeed'')' into v_a_key using a;
+      v_a_key := v_a_key and not exists (select 1 from user_secrets where device_id = sa);
+    else
+      v_a_key := exists (select 1 from user_secrets where device_id = sa and key = 'wavespeed_api_key');
+    end if;
     out := out || case when (select count(*) from tasks where id in ('mu-b-1', 'mu-b-2') and device_id = sb) = 2
                          and exists (select 1 from data_backups where id = v_bk) and n = 0
                          and (select md5(tasks_snapshot::text) from data_backups where id = v_bk) = v_md5
                          and r3->>'reason' = 'backup_not_found'
                          and (select count(*) from data_backups where username = sa) = n2 + 1
                          and not exists (select 1 from data_backups where username like 'u:%')
-                         and exists (select 1 from user_secrets where device_id = sa and key = 'wavespeed_api_key')
+                         and v_a_key
                          and not exists (select 1 from user_secrets where device_id like 'u:%')
       then 'ok A-never-touches-B; '
       else format('FAIL A-never-touches-B del=%s clr=%s list=%s rst=%s; ', r->>'deleted', r2->>'deleted', n, left(coalesce(r3->>'reason', 'ok'), 20)) end;

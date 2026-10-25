@@ -46,6 +46,8 @@ existence checks. Until then, every kie.ai step below is built and proven on the
   - provider keys in Vault: set_my_provider_key, clear_my_provider_key, my_provider_keys (fingerprints only), and
     get_provider_key (service role only; re-verifies the token, so revocation applies).
   - Tests: as anon with minted tokens, rolled back.
+  - Apply order: after the RLS session's pending P4 migrations (E = 20261025400000, and 20261025450000).
+    apply-migration.mjs refuses an older unrecorded file once a newer one is recorded.
 - **S2 Proxy `api/kie-proxy.ts`** (a new file; ws-proxy.ts is untouched).
   - Verifies the session the same way ws-proxy does and reads the account's key server-side.
   - Allows exactly four kie.ai calls: createTask, recordInfo, credit, download-url. It strips callBackUrl until K3's

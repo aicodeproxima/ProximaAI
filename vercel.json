@@ -3,6 +3,10 @@
     {
       "source": "/api/wavespeed-v2/:path*",
       "destination": "/api/ws-proxy?p=:path*"
+    },
+    {
+      "source": "/api/kie/:path*",
+      "destination": "/api/kie-proxy?p=:path*"
     }
   ]
 }

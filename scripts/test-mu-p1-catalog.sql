@@ -48,7 +48,9 @@ declare
     'public.upsert_queued_history(text,jsonb,bigint)', 'public.verify_admin(text,text)'];
   -- Browser-callable on purpose after P1, so not 'new since M1': the storage policies' folder check (P4, RLS session,
   -- 20261025100000_mu_p4_storage_folders).
-  later constant text[] := array['proxima_auth.my_folders(boolean)', 'proxima_auth.object_folder(text)'];
+  later constant text[] := array['proxima_auth.my_folders(boolean)', 'proxima_auth.object_folder(text)',
+    -- 20261025500000_mu_p5_provider_keys: a browser saves, lists (fingerprints only) and clears its own account's keys
+    'public.set_my_provider_key(text,text,text)', 'public.clear_my_provider_key(text,text)', 'public.my_provider_keys(text)'];
   m3_post constant text := 'b9ba44a18b04d17bdf0034b944a57035';   -- M3's issue_session (pg_get_functiondef md5)
   out text := ''; v text; n int; n2 int; v_m3 boolean; v_m4 boolean; v_tabs text[];
 begin
