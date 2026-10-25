@@ -69,17 +69,44 @@ not Supabase Auth.
   is keyed (device_id, id); the delete paths (delete_queued_rows, _clear_kind) look for an existing tombstone, task row
   or History row of a named id in the caller's own scope only, and every ON CONFLICT on tombstones targets
   (device_id, id). Each account keeps its own tombstone of an id, so one account's tombstone never stops another's.
-- Gate: scripts/test-mu-matrix.sql (owner A vs a seeded member B, as anon with minted tokens: rows, files, folders,
-  topics, tombstones; 48/0 live after the applies) and scripts/test-mu-catalog.sql (13/0).
+- Squat-proof backups (P4, RLS session) — 20261025400000_mu_p4_squat_proof_backups.sql (applied 2026-10-25 21:10:58
+  UTC; review rounds 3-7): `_drain_backup_scrubs` and the restore's scrub judge gone/live in the account's own rows; the
+  restore leaves out snapshot ids another account holds (counted as `skipped_in_use`), never scrubs what its restored
+  snapshot holds, and keeps the account's tombstones of the ids it leaves out.
+- Per-account id keys, step (a) (P4, RLS session) — 20261025450000_mu_p4_account_id_keys_a.sql (applied 2026-10-25
+  21:11:16 UTC): unique indexes (device_id, id) on tasks, history and favorites, for the client's step (b).
+- Gate: scripts/test-mu-matrix.sql (owner A vs seeded members, as anon with minted tokens: rows, files, folders,
+  topics, tombstones, id squatting, id keys; 63/0 live after 20261025450000) and scripts/test-mu-catalog.sql (13/0).
 - Related: 08e2bb2 (deleteArchivedPath true only when Storage confirms), 1bd2e68 (clear*Remote → {ok, error}).
 
 ## Open (P4, in progress)
 - Id squatting (review round 3 of the P4 walls): tasks, history and favorites keep a key of (id) across accounts, so a
-  member who learns a deleted id (an archived output's public path carries its task id) can create a row with it. Until
-  20261025400000 (squat-proof backups, built, review pending) that keeps the deleted item in the other account's backups
-  and fails that account's restores on the duplicate key. Root fix, agreed with the lockdown session 2026-10-25: (a) unique
+  member who learns a deleted id (an archived output's public path carries its task id) can create a row with it. Before
+  20261025400000 (live) that kept the deleted item in the other account's backups and failed that account's restores on
+  the duplicate key; now the account's own rows decide, within the residual below. Root fix, agreed with the lockdown
+  session 2026-10-25: (a, live 21:11:16 UTC) unique
   indexes on (device_id, id); (b) the client's upserts switch to onConflict "device_id,id"; (c) after 24 h with no
   on_conflict=id in the edge logs, the primary keys become (device_id, id) and every definer write path names that key.
+  Step (c) checklist so far (P4 reviews rounds 4-5): upsert_queued_history's `on conflict (id)`; `_history_drop_emptied`
+  deletes `where id = new.id`; 20261025400000's "left out because another account holds it" filters in the restore
+  (with a test that both accounts keep their own row of one id); the webhook paths (ws_webhook_apply, ws_webhook_sweep,
+  _tasks_take_webhook, _tasks_settle_webhook) key on task_id with no account; `_history_queue_item_scrub` joins old and
+  new rows by id alone (`join became n on n.id = o.id`); syncFavorite (src/lib/supabase.js:442) names no onConflict, so
+  the 24 h edge-log gate cannot see it (safe across the key swap, as it falls back to the primary key); the SQL suites'
+  `on conflict (id)` on these tables (test-history-emptied, -history-strip-restore, -mu-alias-probe, -mu-matrix incl.
+  its "held once, by A" id-key cases, -paths-in-use, -rls-phase0, -rls-plan, -rls-triggers, -tombstone-rowless,
+  -ws-webhook) must move first; a PWA device closed more than 24 h can come back on an old bundle after (c): its
+  uploads get 400 and stay queued until the service worker updates.
+  Between (a) and (c): an upsert's ON CONFLICT handles only its arbiter index, so two upserts of one brand-new id in
+  one scope at the same instant can end in 23505 instead of an update; the failed-sync queue retries it.
+  Until (c), accepted (P4 review rounds 5-6): an id a restore leaves out because another account holds it stays deleted
+  in the restoring account. Its tombstone stays, so that account's other devices drop it (deleting the tombstone made a
+  lagging device re-upload it into a refused batch, round 6), and the restore's own scrub never removes its copies
+  (round 4). A later all-tombstones scrub (switching Automatic backups off) applies that delete like any other, so those
+  copies go then; for a left-out History entry, its items go the same way. Before 20261025400000 such a restore failed
+  outright. Step (c) removes the left-out filters, the `v_skip_ids_*` lists and `skipped_in_use` together; the keep-list
+  (`v_keep_t` / `v_keep_h`) can stay. Webhook item (P4, with the webhook session): `_tasks_purge_webhook_events` and
+  `ws_predictions_deleted` record and purge webhook events by WaveSpeed task_id with no account either (round 7 lead).
 
 ## Accepted — do not re-report
 - An expired-token holder keeps receiving content-free pings until the topic rotates (rename, password change, unlock,

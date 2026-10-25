@@ -17,7 +17,13 @@ declare
   stmt text;
   ta text; tb text; n0a int; n0b int; na int; nb int;   -- live topics and ping counts
   d_id uuid := gen_random_uuid(); d_tok text; j json;    -- D renames into a folder E holds
+  kn int;
   tx text; now_ms bigint := (extract(epoch from clock_timestamp()) * 1000)::bigint + 60000;   -- after any restore marker
+  sv_id uuid := gen_random_uuid(); sm_id uuid := gen_random_uuid(); sv_tok text; sm_tok text;   -- squat: victim, squatter
+  sv text; sm text; sx text; sy text; bx uuid := gen_random_uuid(); bz uuid := gen_random_uuid();
+  sw text; bw uuid := gen_random_uuid(); bo uuid := gen_random_uuid();   -- skip-then-scrub (review round 4)
+  su text; bu uuid := gen_random_uuid();                                  -- switch-off after a skip (review round 5)
+  bh uuid := gen_random_uuid();                                           -- restore counts (review round 6)
 begin
   select u.id, u.scope, proxima_auth.mint_token(u.id) into a_id, a_scope, a_tok from proxima_auth.users u where u.role = 'owner';
   insert into proxima_auth.users (id, username, role, scope) values (b_id, b_name, 'member', 'user:' || b_name);
@@ -221,6 +227,152 @@ begin
   select count(*) filter (where device_id = a_scope), count(*) filter (where device_id = b_scope) into na, nb
     from public.sync_tombstones where id = tx;
   r := r || format('%s tombstones: History ids too (A %s, B %s)', case when na = 1 and nb = 1 then 'PASS' else 'FAIL' end, na, nb);
+
+  ---------------------------------------------------------------- id squatting (two seeded members, never the owner's rows)
+  sv := 'user:' || p || 'sv'; sm := 'user:' || p || 'sm'; sx := p || '_sx'; sy := p || '_sy';
+  insert into proxima_auth.users (id, username, role, scope) values (sv_id, p || 'sv', 'member', sv), (sm_id, p || 'sm', 'member', sm);
+  sv_tok := proxima_auth.mint_token(sv_id); sm_tok := proxima_auth.mint_token(sm_id);
+  -- With Automatic backups off (rolled back) a delete queues a backup scrub.
+  insert into public.app_secrets (key, value, updated_at) values ('auto_backups', '{"enabled": false}'::jsonb, now())
+    on conflict (key) do update set value = excluded.value;
+  insert into public.tasks (id, device_id, status, start_time, outputs) values (sx, sv, 'completed', 1, '[]');
+  insert into public.data_backups (id, username, backup_type, task_count, tasks_snapshot) values
+    (bx, sv, 'manual', 1, jsonb_build_array(jsonb_build_object('id', sx, 'device_id', sv, 'status', 'completed', 'start_time', 1, 'outputs', '[]'::jsonb)));
+  begin
+    execute 'set local role anon';
+    perform set_config('request.headers', json_build_object('x-proxima-session', sv_tok)::text, true);
+    j := public.delete_queued_rows(sv_tok, 'task', array[sx], now_ms);
+    perform set_config('request.headers', json_build_object('x-proxima-session', sm_tok)::text, true);
+    insert into public.tasks (id, device_id, status, start_time, outputs) values (sx, sm, 'completed', 1, '[]');   -- M squats X
+    execute 'reset role';
+    perform public._drain_backup_scrubs(sv);
+    select count(*) into n from public.data_backups where id = bx and tasks_snapshot @> jsonb_build_array(jsonb_build_object('id', sx));
+    r := r || format('%s squat: V''s deleted item leaves V''s backups although M holds a row with its id (%s left)',
+                     case when n = 0 then 'PASS' else 'FAIL' end, n);
+    -- A backup that still holds X (and Y): V's restore succeeds, leaves X to M, reports it.
+    insert into public.data_backups (id, username, backup_type, task_count, tasks_snapshot) values
+      (bz, sv, 'manual', 2, jsonb_build_array(jsonb_build_object('id', sx, 'device_id', sv, 'status', 'completed', 'start_time', 1, 'outputs', '[]'::jsonb),
+                                              jsonb_build_object('id', sy, 'device_id', sv, 'status', 'completed', 'start_time', 1, 'outputs', '[]'::jsonb)));
+    execute 'set local role anon';
+    perform set_config('request.headers', json_build_object('x-proxima-session', sv_tok)::text, true);
+    j := public.restore_my_backup_phase2(sv_tok, bz);
+    execute 'reset role';
+    r := r || format('%s squat: V''s restore of a backup holding M''s id succeeds and skips it (ok %s, skipped_in_use %s, M keeps X %s, V gets Y %s)',
+                     case when (j->>'ok')::boolean and (j->>'skipped_in_use')::int = 1
+                               and exists (select 1 from public.tasks where id = sx and device_id = sm)
+                               and exists (select 1 from public.tasks where id = sy and device_id = sv) then 'PASS' else 'FAIL' end,
+                     coalesce(j->>'ok', 'null'), coalesce(j->>'skipped_in_use', 'none'),
+                     exists (select 1 from public.tasks where id = sx and device_id = sm), exists (select 1 from public.tasks where id = sy and device_id = sv));
+  exception when others then
+    execute 'reset role';
+    r := r || format('FAIL squat: %s %s', sqlstate, sqlerrm);
+  end;
+  -- Skip-then-scrub: V's History holds W (its Generations row gone), M holds a tasks row W, V restores a backup holding
+  -- tasks W and Y; W is left out and must keep its copies in that backup and in V's older one.
+  sw := p || '_sw';
+  begin
+    insert into public.history (id, device_id, timestamp, tasks) values
+      (p || '_swh', sv, 1, jsonb_build_array(jsonb_build_object('id', sw, 'status', 'completed', 'outputs', '[]'::jsonb)));
+    insert into public.tasks (id, device_id, status, start_time, outputs) values (sw, sm, 'completed', 1, '[]');
+    insert into public.data_backups (id, username, backup_type, task_count, tasks_snapshot) values
+      (bw, sv, 'manual', 2, jsonb_build_array(jsonb_build_object('id', sw, 'device_id', sv, 'status', 'completed', 'start_time', 1, 'outputs', '[]'::jsonb),
+                                              jsonb_build_object('id', sy, 'device_id', sv, 'status', 'completed', 'start_time', 1, 'outputs', '[]'::jsonb))),
+      (bo, sv, 'manual', 1, jsonb_build_array(jsonb_build_object('id', sw, 'device_id', sv, 'status', 'completed', 'start_time', 1, 'outputs', '[]'::jsonb)));
+    execute 'set local role anon';
+    perform set_config('request.headers', json_build_object('x-proxima-session', sv_tok)::text, true);
+    j := public.restore_my_backup_phase2(sv_tok, bw);
+    execute 'reset role';
+    select count(*) filter (where id = bw), count(*) filter (where id = bo) into n, kn
+      from public.data_backups where id in (bw, bo) and tasks_snapshot @> jsonb_build_array(jsonb_build_object('id', sw));
+    r := r || format('%s squat: an id V''s restore left out keeps its copies in the restored and the older backup (%s, %s; ok %s)',
+                     case when n = 1 and kn = 1 and coalesce((j->>'ok')::boolean, false) then 'PASS' else 'FAIL' end, n, kn, coalesce(j->>'ok', 'null'));
+  exception when others then
+    execute 'reset role';
+    r := r || format('FAIL squat: skip-then-scrub %s %s', sqlstate, sqlerrm);
+  end;
+  su := p || '_su';
+  begin
+    update public.app_secrets set value = '{"enabled": true}'::jsonb where key = 'auto_backups';
+    insert into public.tasks (id, device_id, status, start_time, outputs) values (su, sv, 'completed', 1, '[]');
+    insert into public.data_backups (id, username, backup_type, task_count, tasks_snapshot) values
+      (bu, sv, 'manual', 1, jsonb_build_array(jsonb_build_object('id', su, 'device_id', sv, 'status', 'completed', 'start_time', 1, 'outputs', '[]'::jsonb)));
+    execute 'set local role anon';
+    perform set_config('request.headers', json_build_object('x-proxima-session', sv_tok)::text, true);
+    j := public.delete_queued_rows(sv_tok, 'task', array[su], now_ms + 600000);
+    perform set_config('request.headers', json_build_object('x-proxima-session', sm_tok)::text, true);
+    insert into public.tasks (id, device_id, status, start_time, outputs) values (su, sm, 'completed', 1, '[]');   -- M squats
+    perform set_config('request.headers', json_build_object('x-proxima-session', sv_tok)::text, true);
+    j := public.restore_my_backup_phase2(sv_tok, bu);
+    execute 'reset role';
+    -- The left-out id stays deleted in V's account: V's tombstone stays (V's other devices drop it, no refused upload),
+    -- and the restored backup keeps its copy. A later switch-off scrub applies that delete (accepted until step (c)).
+    select count(*) into n from public.data_backups where id = bu and tasks_snapshot @> jsonb_build_array(jsonb_build_object('id', su));
+    select count(*) into kn from public.sync_tombstones where device_id = sv and id = su;
+    r := r || format('%s squat: a left-out id stays deleted for V (tombstone %s) and keeps its copy in the restored backup (%s; restore ok %s)',
+                     case when n = 1 and kn = 1 and coalesce((j->>'ok')::boolean, false) then 'PASS' else 'FAIL' end, kn, n, coalesce(j->>'ok', 'null'));
+  exception when others then
+    execute 'reset role';
+    r := r || format('FAIL squat: switch-off %s %s', sqlstate, sqlerrm);
+  end;
+  -- A lagging device of V uploads the left-out id with a new row in one batch (the client's upsert): no stall.
+  begin
+    execute 'set local role anon';
+    perform set_config('request.headers', json_build_object('x-proxima-session', sv_tok)::text, true);
+    insert into public.tasks (id, device_id, status, start_time, outputs)
+      values (su, sv, 'completed', 2, '[]'), (p || '_snew', sv, 'completed', 2, '[]')
+      on conflict (id) do update set status = excluded.status;
+    execute 'reset role';
+    select count(*) filter (where id = su and device_id = sv), count(*) filter (where id = p || '_snew' and device_id = sv)
+      into n, kn from public.tasks where id in (su, p || '_snew');
+    r := r || format('%s squat: a lagging device''s batch with the left-out id lands its other row (left-out %s, new %s)',
+                     case when n = 0 and kn = 1 then 'PASS' else 'FAIL' end, n, kn);
+  exception when others then
+    execute 'reset role';
+    r := r || format('FAIL squat: lagging batch refused: %s %s', sqlstate, sqlerrm);
+  end;
+  begin
+    insert into public.data_backups (id, username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot) values
+      (bh, sv, 'manual', 1, 1,
+       jsonb_build_array(jsonb_build_object('id', p || '_ct', 'device_id', sv, 'status', 'completed', 'start_time', 1, 'outputs', '[]'::jsonb)),
+       jsonb_build_array(jsonb_build_object('id', p || '_ch', 'device_id', sv, 'timestamp', 1,
+                                            'tasks', jsonb_build_array(jsonb_build_object('id', p || '_ct', 'status', 'completed', 'outputs', '[]'::jsonb)))));
+    execute 'set local role anon';
+    perform set_config('request.headers', json_build_object('x-proxima-session', sv_tok)::text, true);
+    j := public.restore_my_backup_phase2(sv_tok, bh);
+    execute 'reset role';
+    r := r || format('%s restore counts: a backup of one task and one History entry reports tasks %s, History %s, skipped %s',
+                     case when (j->>'ok')::boolean and (j->>'tasks_restored')::int = 1 and (j->>'history_restored')::int = 1
+                               and coalesce((j->>'skipped_in_use')::int, 0) = 0 then 'PASS' else 'FAIL' end,
+                     j->>'tasks_restored', j->>'history_restored', coalesce(j->>'skipped_in_use', 'none'));
+  exception when others then
+    execute 'reset role';
+    r := r || format('FAIL restore counts: %s %s', sqlstate, sqlerrm);
+  end;
+
+  ---------------------------------------------------------------- per-account id keys, step (a): upserts naming (device_id, id)
+  foreach t in array array['tasks', 'history', 'favorites'] loop
+    execute 'set local role anon';
+    perform set_config('request.headers', json_build_object('x-proxima-session', a_tok)::text, true);
+    begin
+      execute format('insert into public.%I (id, device_id) values (%L, %L) on conflict (device_id, id) do update set device_id = excluded.device_id',
+                     t, p || '_k' || t, a_scope);
+      execute format('insert into public.%I (id, device_id) values (%L, %L) on conflict (device_id, id) do update set device_id = excluded.device_id',
+                     t, p || '_k' || t, a_scope);
+      r := r || format('PASS id keys: A''s upsert naming (device_id, id) works on its own %s row', t);
+    exception when others then r := r || format('FAIL id keys: A''s upsert on (device_id, id) of %s: %s %s', t, sqlstate, sqlerrm); end;
+    perform set_config('request.headers', json_build_object('x-proxima-session', b_tok)::text, true);
+    begin
+      execute format('insert into public.%I (id, device_id) values (%L, %L) on conflict (device_id, id) do update set device_id = excluded.device_id',
+                     t, p || '_k' || t, b_scope);
+      r := r || format('FAIL id keys: B''s upsert naming (device_id, id) with A''s %s id landed', t);
+    exception when sqlstate '23505' or sqlstate '42501' then
+                r := r || format('PASS id keys: B''s upsert with A''s %s id refused (%s)', t, sqlstate);
+              when others then r := r || format('FAIL id keys: B''s upsert of A''s %s id: %s %s', t, sqlstate, sqlerrm); end;
+    execute 'reset role';
+    execute format('select count(*) from public.%I where id = %L', t, p || '_k' || t) into n;
+    execute format('select count(*) from public.%I where id = %L and device_id = %L', t, p || '_k' || t, a_scope) into kn;
+    r := r || format('%s id keys: %s id held once, by A (%s rows, %s A''s)', case when n = 1 and kn = 1 then 'PASS' else 'FAIL' end, t, n, kn);
+  end loop;
 
   ---------------------------------------------------------------- folders follow renames, never change hands
   update proxima_auth.users set username = b_name || 'r', scope = 'user:' || b_name || 'r' where id = b_id;

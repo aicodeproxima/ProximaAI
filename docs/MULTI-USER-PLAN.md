@@ -213,9 +213,10 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
 - **Progress (2026-10-25, RLS session; 3 review rounds of 3 critics, every finding fixed):** live: 20261025100000 storage
   folders (20:18:55 UTC), 20261025200000 topic per account (20:19:49 UTC), 20261025300000 tombstones keyed
   (device_id, id) with scoped existence checks (20:20:13 UTC). Gate scripts/test-mu-matrix.sql 48/0 live; every suite 0
-  FAIL. Next: 20261025400000 squat-proof backups (review round 4), then the (device_id, id) keys of tasks / history /
-  favorites in three steps with the lockdown session (unique index, client onConflict, key swap after 24 h), webhook per
-  account, cron fairness and per-account auto_backups (members get "unknown" until then).
+  FAIL. Then 20261025400000 squat-proof backups (21:10:58 UTC) and 20261025450000 step (a) of the per-account id keys
+  (21:11:16 UTC) after review rounds 3-7 (round 7 empty): gate 63/0 live. Next: step (b) (the lockdown session's client
+  onConflict "device_id,id"), step (c) 24 h after it (key swap; checklist in docs/rls-review-context.md "Open (P4)"),
+  webhook per account, cron fairness and per-account auto_backups (members get "unknown" until then).
 - Policies:
   - `USING (device_id = scope)` for every command on all six tables;
   - the storage policies check the account's folders;
