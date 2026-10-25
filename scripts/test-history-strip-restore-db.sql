@@ -1,8 +1,10 @@
 -- Tests for supabase/migrations/20261024100000_history_strip_restore_removed.sql: a History write (not a restore) strips an
 -- item whose generation a restore removed (a by_restore task tombstone in the entry's scope) when the stored entry does
 -- not hold it already; a restore's History-only comeback keeps its items; user tombstones strip as before. Same harness as
--- test-history-strip-db.sql (one DO block, always rolled back by sql-tx). Before the migration is applied:
---   node scripts/tools/sql-tx.mjs supabase/migrations/20261024100000_history_strip_restore_removed.sql --test scripts/test-history-strip-restore-db.sql
+-- test-history-strip-db.sql (one DO block, always rolled back by sql-tx). The migration is live (2026-10-23 22:31:54 UTC)
+-- and P4 (20261025300000) later changed the function's conflict target, so run it against live, without the migration
+-- file (prepending the file now fails R3/R8/R10c with 42P10; review round 30 #4):
+--   node scripts/tools/sql-tx.mjs --test scripts/test-history-strip-restore-db.sql
 -- Fixtures only: 'user:__strip_restore_test' and ids 'hr-' (R1-R8, as the owner of the tables); R9 runs as anon with a token
 -- minted for the account's owner, in that account's own scope, with ids '__hr_probe_<txid>'. Each case catches its errors.
 do $t$
