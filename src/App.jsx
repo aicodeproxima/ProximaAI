@@ -4,7 +4,7 @@ import { CATALOG, visibleModels, editModelFor } from "./config/catalog.js";
 import { createUnsentPublisher } from "./lib/unsentPublish.js";
 import { isKieModelId, isKieGeneration, isKiePollUrl, KIE_CREDIT_USD, kieBalanceLabel } from "./lib/kie.js";
 import { buildPayload, chosenResolution, getEffectiveImageBatchCount, getImageBatchLimit, planImageBatchRequests } from "./lib/payloadBuilder.js";
-import { requestCost } from "./lib/pricing.js";
+import { requestCost, REFERENCE_INPUT_S } from "./lib/pricing.js";
 import { draftTask, unitQuote, taskUserSettings, effectivePerModelRes, labelPerModelRes, resolutionNotes, runLabels } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
 import { submitTask, pollResult, listPredictions, deletePredictions, checkBalance, checkKieBalance, uploadMedia, API_BASE } from "./lib/api.js";
@@ -5123,8 +5123,8 @@ export default function ProximaApp() {
                                 {(() => {
                                   const q = unitQuotes.get(m.id) || { cost: m.price, exact: true };
                                   const title = q.exact
-                                    ? `One generation at your current settings (default settings: ${formatCost(m.price)})`
-                                    : "Default-settings price: an input's length is not measured yet";
+                                    ? `One generation at your current settings (at the model's own defaults: ${formatCost(m.price)})`
+                                    : `About ${formatCost(q.cost)}: the price for a ${REFERENCE_INPUT_S} s input; the exact price follows once its length is measured`;
                                   return <span className="model-price" title={title}>{q.exact ? "" : "~"}{formatCost(q.cost)}</span>;
                                 })()}
                               </span>

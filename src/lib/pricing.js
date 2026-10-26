@@ -5,6 +5,11 @@ import { MODEL_PRICING, PRICING_FORMULAS } from "../config/modelPricing.js";
 import { compileFormula } from "./priceFormula.js";
 import { kieInput, kieCost } from "./kie.js";
 
+// A model priced by the length of an uploaded clip or audio shows (registry `price`) and estimates, until that length
+// is measured, the price of an input this long (price review 2026-10-26; scripts/test-pricing.mjs holds every registry
+// price to it).
+export const REFERENCE_INPUT_S = 5;
+
 // Exact price in dollars, or null when it cannot be computed (no published formula, an input whose
 // duration has not been measured yet, or a formula the evaluator rejects).
 export function priceRequest(model, payload, { mediaDuration } = {}) {

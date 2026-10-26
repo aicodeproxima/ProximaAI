@@ -2,7 +2,8 @@
 // Formulas are copied verbatim from WaveSpeed model pages. Run: node scripts/test-pricing.mjs
 import assert from "node:assert/strict";
 import { evaluateFormula, compileFormula } from "../src/lib/priceFormula.js";
-import { priceRequest, requestCost } from "../src/lib/pricing.js";
+import { priceRequest, requestCost, REFERENCE_INPUT_S as APP_REFERENCE_INPUT_S } from "../src/lib/pricing.js";
+import { readFileSync } from "node:fs";
 import { MODEL_PRICING, PRICING_FORMULAS } from "../src/config/modelPricing.js";
 import { MODELS } from "../src/config/models.js";
 import { buildPayload } from "../src/lib/payloadBuilder.js";
@@ -156,23 +157,43 @@ test("requestCost never double-counts a native batch the formula already prices"
   near(requestCost(m, payloadFor(m.id, { numImages: 4 }), { imagesPerRequest: 4 }), 0.012);
 });
 
-// Registry `price` is defined as one generation at the app's defaults, so the formula must reproduce it.
-test("every formula-priced model reproduces its registry price at default settings", () => {
+// Registry `price` is one generation at the app's defaults, so the formula must reproduce it exactly (in millionths, as
+// WaveSpeed bills). A model priced by the length of an uploaded clip or audio (get_duration) shows the price of a
+// REFERENCE_INPUT_S input (price review 2026-10-26: these used mixed conventions, and 12 showed less than WaveSpeed's
+// minimum charge; e.g. Gemini Omni video-edit showed $0.12 where even a 1 s clip costs $0.38). The requests carry every
+// input the app can send, so a formula that measures one is really applied.
+const REFERENCE_INPUT_S = 5;
+const MEDIA = { sourceImageUrl: "https://x/a.png", sourceVideoUrl: "https://x/v.mp4", sourceAudioUrl: "https://x/a.mp3", refVideoUrl: "https://x/r.mp4" };
+test("every formula-priced model reproduces its registry price (input-length models: at a 5 s input)", () => {
   const off = [];
-  let checked = 0;
+  let checked = 0, byLength = 0;
   for (const [category, list] of Object.entries(MODELS)) for (const m of list) {
     const entry = MODEL_PRICING[m.id];
     if (!entry?.formula && entry?.formula !== 0) continue;
-    if (/get_duration/.test(PRICING_FORMULAS[entry.formula])) continue; // input-length priced: registry holds the "starts at" price
+    const lengthPriced = /get_duration/.test(PRICING_FORMULAS[entry.formula]);
     const settings = { ...SETTINGS, prompt: "Public schema audit",
       resolution: m.params?.resolution?.default, duration: m.params?.duration?.default,
-      sourceImageUrl: ["i2i", "i2v", "i23d", "avatar"].includes(category) ? "https://x/a.png" : "" };
-    const price = priceRequest(m, buildPayload(m, settings, category));
+      ...(["i2i", "i2v", "i23d", "avatar", "v2v"].includes(category) ? MEDIA : {}) };
+    const price = priceRequest(m, buildPayload(m, settings, category), { mediaDuration: () => REFERENCE_INPUT_S });
     checked++;
-    if (price === null || Math.abs(price - m.price) > 0.0005) off.push(`${m.id}: registry ${m.price}, formula ${price}`);
+    if (lengthPriced) byLength++;
+    if (price === null || Math.round(price * 1e6) !== Math.round(m.price * 1e6)) off.push(`${m.id}: registry ${m.price}, formula ${price}${lengthPriced ? ` (${REFERENCE_INPUT_S} s input)` : ""}`);
   }
-  assert.ok(checked > 150, `only ${checked} models checked`);
+  assert.ok(checked > 200, `only ${checked} models checked`);
+  assert.ok(byLength >= 40, `only ${byLength} input-length models checked`);
   assert.deepEqual(off, []);
+});
+
+// The picker's tooltip says which settings a price is for (price review 2026-10-26: "default settings: $3.20" sat next to
+// Veo 3.1's $1.60 label, the form's 4 s start; an unmeasured clip's "~" price did not say it was for a 5 s input).
+// (synchronous: this file's test() does not await; an async body would always count as passed)
+test("the model picker's price tooltip names the settings it is for", () => {
+  const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  assert.ok(app.includes("? `One generation at your current settings (at the model's own defaults: ${formatCost(m.price)})`"), "exact");
+  assert.ok(app.includes(": `About ${formatCost(q.cost)}: the price for a ${REFERENCE_INPUT_S} s input; the exact price follows once its length is measured`;"), "estimate");
+  assert.ok(!app.includes("(default settings: ${formatCost(m.price)})"), "old wording gone");
+  assert.match(app, /import \{ requestCost, REFERENCE_INPUT_S \} from "\.\/lib\/pricing\.js";/);
+  assert.equal(APP_REFERENCE_INPUT_S, REFERENCE_INPUT_S, "the app and this sweep use one reference length");
 });
 
 console.log(`\n${n} passed, ${failed} failed`);
