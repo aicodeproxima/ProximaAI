@@ -2,11 +2,15 @@
 -- OFF removes what it replaced from every other backup at once (owner ruling on review wf_ec400a67-988 #11). Same
 -- harness as test-backup-scrub-db.sql (one DO block, always rolled back). Run as "begin;" + the migration + this file
 -- before it is applied; afterwards this file alone. Fixtures only: 'user:__rs_test', ids 'rs-'.
+-- From 20261025800000 every account has its own Automatic backups switch (proxima_auth.users.auto_backups, v_per
+-- below): each switch write below sets the fixture account's own switch too, the way the old global row is set.
 do $t$
 declare
   out text := '';
   u constant text := 'user:__rs_test';
   v_tok text; v_acc uuid; v_m1 uuid; v_m2 uuid; r json;
+  v_per constant boolean := exists (select 1 from pg_attribute where attrelid = to_regclass('proxima_auth.users')
+                                       and attname = 'auto_backups' and not attisdropped);
   holds_g boolean; holds_hg boolean; holds_a boolean;
 begin
   -- The fixture scope's token. Before P1's M1 a signed 'user:<x>' subject falls through to its own scope; from M1 the
@@ -23,6 +27,7 @@ begin
   -- 1. Switch OFF: restoring M1 scrubs the replaced generation G (and its History entry) from M2 right away.
   begin
     insert into app_secrets (key, value) values ('auto_backups', '{"enabled": false}') on conflict (key) do update set value = excluded.value;
+    if v_per then execute 'update proxima_auth.users set auto_backups = false where id = $1' using v_acc; end if;
     insert into tasks (id, device_id, status, start_time, outputs) values ('rs-A', u, 'completed', 1000, '[]');
     insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot)
       values (u, 'manual', 1, 0, (select jsonb_agg(row_to_json(t)) from tasks t where t.device_id = u), '[]') returning id into v_m1;
@@ -48,6 +53,7 @@ begin
     delete from history where device_id = u;
     delete from sync_tombstones where device_id = u;
     update app_secrets set value = '{"enabled": true}' where key = 'auto_backups';
+    if v_per then execute 'update proxima_auth.users set auto_backups = true where id = $1' using v_acc; end if;
     insert into tasks (id, device_id, status, start_time, outputs) values ('rs-A2', u, 'completed', 1000, '[]');
     insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot)
       values (u, 'manual', 1, 0, (select jsonb_agg(row_to_json(t)) from tasks t where t.device_id = u), '[]') returning id into v_m1;
@@ -84,9 +90,11 @@ begin
     select value into v_hold from settings where device_id = u and key = 'form-inputs:rs-phone';
     select value into v_theme from settings where device_id = u and key = 'rs-theme';
     update app_secrets set value = '{"enabled": true}' where key = 'auto_backups';
+    if v_per then execute 'update proxima_auth.users set auto_backups = true where id = $1' using v_acc; end if;
     v_snap := (snapshot_my_data_phase2(v_tok, 'manual', 'rs-test')->>'id')::uuid;
     select settings_snapshot into v_snapset from data_backups where id = v_snap;
     update app_secrets set value = '{"enabled": false}' where key = 'auto_backups';
+    if v_per then execute 'update proxima_auth.users set auto_backups = false where id = $1' using v_acc; end if;
     out := out || case when r->>'ok' = 'true' and v_hold->'paths' = '["uploads/rs/live.png"]'
                         and not exists (select 1 from settings where device_id = u and key = 'form-inputs:rs-gone')
                         and v_theme = '"light"' and v_snapset ? 'rs-theme' and not (v_snapset ? 'form-inputs:rs-phone')
@@ -101,6 +109,7 @@ begin
   declare v_b5 uuid; v_kept boolean; v_flag boolean;
   begin
     update app_secrets set value = '{"enabled": false}' where key = 'auto_backups';
+    if v_per then execute 'update proxima_auth.users set auto_backups = false where id = $1' using v_acc; end if;
     insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot)
       values (u, 'manual', 0, 1, '[]',   -- no tasks row for rs-X: it comes back History-only
               '[{"id":"rs-HX","device_id":"user:__rs_test","timestamp":1,"tasks":[{"id":"rs-X","status":"completed","cost":1,"outputs":[]}],"total_cost":1}]')
@@ -123,6 +132,7 @@ begin
   declare v_b1 uuid; v_b3 uuid; v_left boolean;
   begin
     update app_secrets set value = '{"enabled": false}' where key = 'auto_backups';
+    if v_per then execute 'update proxima_auth.users set auto_backups = false where id = $1' using v_acc; end if;
     -- B1 holds rs-Y as a tasks row; live, rs-Y is History-only (entry rs-HY, no tasks row)
     insert into data_backups (username, backup_type, task_count, history_count, tasks_snapshot, history_snapshot)
       values (u, 'manual', 1, 0, '[{"id":"rs-Y","device_id":"user:__rs_test","status":"completed"}]', '[]') returning id into v_b1;

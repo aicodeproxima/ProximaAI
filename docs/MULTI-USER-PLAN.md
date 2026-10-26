@@ -54,6 +54,7 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
 7. **One live-update topic.** It is derived from the single admin, so every account would wake every other account's
    devices. **FIXED 2026-10-25** (20261025200000: one topic per account; the owner's value did not change).
 8. **auto_backups is global** (app_secrets). One account turning backups off turns them off for everyone.
+   **FIXED 2026-10-26** (20261025800000: each account has its own switch; the owner's value did not change).
 9. **The proxy rate limit is OFF in production.** The Vercel runtime log at 22:12:22 UTC says "rate limiting DISABLED
    — UPSTASH not configured", and the limit counts request rate only. One account could flood the shared proxy. Owner
    ruling 2026-10-23: limits stay off by default, but the capability gets built (P5).
@@ -216,7 +217,8 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   FAIL. Then 20261025400000 squat-proof backups (21:10:58 UTC) and 20261025450000 step (a) of the per-account id keys
   (21:11:16 UTC) after review rounds 3-7 (round 7 empty): gate 63/0 live. Next: step (b) (the lockdown session's client
   onConflict "device_id,id"), step (c) 24 h after it (key swap; checklist in docs/rls-review-context.md "Open (P4)"),
-  webhook per account, cron fairness and per-account auto_backups (members get "unknown" until then).
+  webhook per account and cron fairness. 20261025800000 per-account Automatic backups applied
+  2026-10-26 06:07:28 UTC (review rounds 8-21, 3 critics each): gate 80/0 live.
 - Policies:
   - `USING (device_id = scope)` for every command on all six tables;
   - the storage policies check the account's folders;
@@ -246,7 +248,9 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   - a unique index on (device_id, task_id).
 - Cron fairness:
   - per-account loops with batch limits, SKIP LOCKED and statement timeouts;
-  - auto_backups becomes per account.
+  - auto_backups becomes per account (done 2026-10-26, 20261025800000; the 2-day backup now loops per account, and one
+    account's error never stops the others' backups). Past about 60 switched-on accounts its one subtransaction per
+    account overflows the 64-entry cache for the run's length: then a procedure that commits per account.
 - Gate:
   - a two-account SQL matrix runs as anon with two minted tokens, A against B. It covers every table × every command,
     every storage operation and every browser-callable definer function;

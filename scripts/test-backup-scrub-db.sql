@@ -4,11 +4,15 @@
 -- whose message is the result line, so everything rolls back. Run before the migration exists as "begin;" + migration +
 -- this file (node scripts/tools/sb-query.mjs --write -f <file>); after it is applied, this file alone. Fixtures only:
 -- 'user:__scrub_test', ids 'sx-'. Each case catches its own errors (a missing object at HEAD is a FAIL with its SQLSTATE).
+-- From 20261025800000 every account has its own Automatic backups switch (proxima_auth.users.auto_backups, v_per
+-- below): each switch write below sets the fixture account's own switch too, the way the old global row is set.
 do $t$
 declare
   out text := '';
   u constant text := 'user:__scrub_test';
   v_bk uuid; v_bk2 uuid; v_ctid tid; n int; r json; h jsonb; ok boolean; v_tok text; v_acc uuid;
+  v_per constant boolean := exists (select 1 from pg_attribute where attrelid = to_regclass('proxima_auth.users')
+                                       and attname = 'auto_backups' and not attisdropped);
 begin
   -- The fixture scope's token. Before P1's M1 a signed 'user:<x>' subject falls through to its own scope; from M1 the
   -- verifier fails closed on it, so a member account whose scope is u is seeded and its token minted (rolled back with
@@ -22,6 +26,7 @@ begin
   end if;
   insert into app_secrets (key, value) values ('auto_backups', '{"enabled": false}')
     on conflict (key) do update set value = excluded.value;
+  if v_per then execute 'update proxima_auth.users set auto_backups = false where id = $1' using v_acc; end if;
   insert into tasks (id, device_id, status, start_time, outputs) values
     ('sx-1', u, 'completed', 1000, '["https://h/1.png"]'),
     ('sx-2', u, 'completed', 1000, '["https://h/2.png"]'),
@@ -120,12 +125,14 @@ begin
   -- 8. With the switch on nothing is queued (the safety backup keeps the copy by design).
   begin
     update app_secrets set value = '{"enabled": true}' where key = 'auto_backups';
+    if v_per then execute 'update proxima_auth.users set auto_backups = true where id = $1' using v_acc; end if;
     insert into tasks (id, device_id, status, start_time, outputs) values ('sx-3', u, 'completed', 1000, '[]');
     delete from tasks where id = 'sx-3';
     update history set tasks = '[]', total_cost = 0 where id = 'sx-L1';
     out := out || case when not exists (select 1 from backup_scrub_queue where username = u)
       then 'ok switch-on; ' else 'FAIL switch-on; ' end;
     update app_secrets set value = '{"enabled": false}' where key = 'auto_backups';
+    if v_per then execute 'update proxima_auth.users set auto_backups = false where id = $1' using v_acc; end if;
   exception when others then out := out || format('FAIL switch-on %s; ', sqlstate); end;
 
   -- 9. An idle drain writes nothing.

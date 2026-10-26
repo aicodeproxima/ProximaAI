@@ -3,11 +3,15 @@
 -- trims a backed-up History entry to the items its live version still has ("Yes, remove them"; owner rulings
 -- 2026-10-22). Same harness as test-backup-scrub-db.sql. Run as "begin;" + 175100 (if not applied) + 175200 + this
 -- file; after both are applied, this file alone. Fixtures only: 'user:__scrub_test', ids 'sz-'.
+-- From 20261025800000 every account has its own Automatic backups switch (proxima_auth.users.auto_backups, v_per
+-- below): the fixture member then turns its own switch on and off; before it the owner flips the global one.
 do $t$
 declare
   out text := '';
   u constant text := 'user:__scrub_test';
   v_tok text; v_own text; v_acc uuid; v_b uuid; v_p uuid; v_q uuid; r json; n int; ok boolean; h jsonb;
+  v_per constant boolean := exists (select 1 from pg_attribute where attrelid = to_regclass('proxima_auth.users')
+                                       and attname = 'auto_backups' and not attisdropped);
 begin
   insert into app_secrets (key, value) values ('auto_backups', '{"enabled": true}')
     on conflict (key) do update set value = excluded.value;
@@ -24,8 +28,14 @@ begin
     execute 'insert into proxima_auth.users (username, role, scope) values ($1, ''member'', $2) returning id'
       into v_acc using substring(u from 6), u;
     execute 'select proxima_auth.mint_token($1)' into v_tok using v_acc;
-    -- The Automatic backups switch is global and the owner's alone in P1 (42501 for a member): the owner flips it.
-    execute 'select proxima_auth.mint_token(id) from proxima_auth.users where role = ''owner''' into v_own;
+    if v_per then
+      -- Per account: the member flips its own switch (a new account starts with it off).
+      v_own := v_tok;
+      perform set_auto_backups(v_own, true);
+    else
+      -- The Automatic backups switch is global and the owner's alone in P1 (42501 for a member): the owner flips it.
+      execute 'select proxima_auth.mint_token(id) from proxima_auth.users where role = ''owner''' into v_own;
+    end if;
   else
     v_tok := _sign_session_token(u, now() + interval '5 minutes');
     v_own := v_tok;
@@ -82,6 +92,7 @@ begin
   --    without an id) leave a backed-up entry that is still live when the switch goes off ("Yes, remove them").
   begin
     update app_secrets set value = '{"enabled": true}' where key = 'auto_backups';
+    if v_per then perform set_auto_backups(v_own, true); end if;   -- the member's own switch
     insert into history (id, device_id, timestamp, tasks, total_cost) values
       ('sz-H', u, 1000, '[{"id":"sz-k","status":"completed","cost":1,"outputs":["https://h/k1.png"]},{"id":"sz-lost","status":"completed","cost":2,"outputs":["https://h/l.png"]},{"status":"completed","cost":3,"outputs":["https://h/z1.png"]}]', 6),
       ('sz-G', u, 1000, '[{"status":"completed","cost":4,"outputs":["https://h/g.png"]}]', 4);

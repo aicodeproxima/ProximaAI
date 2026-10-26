@@ -56,16 +56,17 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
 - **Delete means delete (owner, 2026-10-21)**: deleting generations removes them everywhere the app can reach — this
   device, the cloud, WaveSpeed (`POST /api/v3/predictions/delete`), their uploaded and archived files, their History,
   and backup copies — via `purgeEverywhere` in App.jsx. Destructive buttons still call `createBackup("pre-*")` first,
-  but the server only takes it while **Automatic backups** (Settings → Cloud Backups, `app_secrets.auto_backups`) is
-  ON; it is OFF by the owner's choice. When ON, a failed backup aborts the delete. Never add a copy of deleted data
+  but the server only takes it while that account's own **Automatic backups** (Settings → Cloud Backups; per account,
+  `proxima_auth.users.auto_backups`, since 20261025800000) is ON; the owner's is OFF by choice. When ON, a failed backup
+  aborts the delete. Never add a copy of deleted data
   anywhere without going through that switch. A WaveSpeed result delivered after its generation was deleted is dropped
   by the server (`ws_deleted_predictions`, filled by the tasks delete trigger and by `api/ws-proxy.ts` before it
   forwards `POST api/v3/predictions/delete`; the proxy answers 503 if it cannot record, so the client queue retries).
   The 5-minute sweep also removes deliveries that waited over 2 days for a row that never came.
-  Backup copies are scrubbed by the server, never by the client: while the switch is off, the tasks/history delete
-  triggers and the history update trigger queue into `backup_scrub_queue` in the change's own transaction; cron
+  Backup copies are scrubbed by the server, never by the client: while an account's switch is off, the tasks/history
+  delete triggers and the history update trigger queue into `backup_scrub_queue` in the change's own transaction; cron
   `backup-scrub-drain` drains it every minute, and restore drains first and refuses while anything is left. Switching
-  OFF scrubs every existing backup of every deleted id, restore-replaced rows included, and trims backed-up History
+  OFF scrubs that account's backups of every id it deleted, restore-replaced rows included, and trims backed-up History
   entries to their live items (owner rulings 2026-10-22). Files go through the durable queue `proximaai-file-deletes`
   (`fileDelete.js`): held by `stagePurge` before any network call (`proximaai-held-purges-v3`, with the WaveSpeed
   deletes; a delete whose intents and hold cannot both be written changes nothing and says "storage is full"; when the

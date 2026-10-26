@@ -41,6 +41,10 @@ declare
   -- key cases read whichever store this database has (S1/S2 review, regression #1). Dynamic SQL: the table may not exist.
   v_p5 boolean := to_regclass('proxima_auth.provider_keys') is not null; v_a_key boolean;
   ok boolean; v_m4 boolean; v_m3 boolean; v_pfx text; v_otok text;
+  -- 20261025800000 gives every account its own Automatic backups switch (proxima_auth.users.auto_backups): case 2.
+  v_per constant boolean := exists (select 1 from pg_attribute where attrelid = to_regclass('proxima_auth.users')
+                                       and attname = 'auto_backups' and not attisdropped);
+  v_ab0 text; v_ab1 text; v_ab2 text;
   -- 20261026600000: a member signs in only from a client that marks its requests 'proxima-guard/1' (src/lib/session.js);
   -- every request here is the current client's (the old-build refusal is scripts/test-member-signin-guard-db.sql).
   ip_t constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"203.0.113.7","cf-connecting-ip":"203.0.113.7"}';
@@ -142,17 +146,39 @@ begin
              then 'ok topic-per-account (P4); ' else 'FAIL topic-per-account (P4); ' end end;
   exception when others then reset role; out := out || format('FAIL account-shape %s; ', left(sqlerrm, 60)); end;
 
-  -- 2. The global auto-backups switch is the owner's until P4: a member's get and set are refused with 42501.
+  -- 2. Automatic backups. Before P4 the switch is global and the owner's alone: a member's get and set are refused with
+  --    42501. From 20261025800000 every account has its own: A turns its own on and off, and nobody else's moves.
   begin
     t := proxima_auth.mint_token(v_owner_id);
     n := 0;
-    set local role anon;
-    begin perform get_auto_backups(ta); exception when insufficient_privilege then n := n + 1; end;
-    begin perform set_auto_backups(ta, false); exception when insufficient_privilege then n := n + 1; end;
-    perform get_auto_backups(t);
-    reset role;
-    out := out || case when n = 2 then 'ok auto-backups-owner-only; ' else format('FAIL auto-backups-owner-only refused=%s; ', n) end;
-  exception when others then reset role; out := out || format('FAIL auto-backups-owner-only %s; ', left(sqlerrm, 60)); end;
+    if v_per then
+      execute 'select md5(string_agg(id::text || auto_backups::text, '','' order by id)) from proxima_auth.users where id <> $1'
+        into v_ab0 using a;
+      set local role anon;
+      ok := set_auto_backups(ta, true);
+      reset role;
+      -- Right after A's switch-on (the seeded members start off, so a write to every row shows here, not at the end).
+      execute 'select md5(string_agg(id::text || auto_backups::text, '','' order by id)) from proxima_auth.users where id <> $1'
+        into v_ab1 using a;
+      set local role anon;
+      ok := ok and get_auto_backups(ta);
+      if set_auto_backups(ta, false) then ok := false; end if;   -- a call with an effect never sits behind a short-circuit
+      ok := ok and not get_auto_backups(ta);
+      perform get_auto_backups(t);
+      reset role;
+      execute 'select md5(string_agg(id::text || auto_backups::text, '','' order by id)) from proxima_auth.users where id <> $1'
+        into v_ab2 using a;
+      out := out || case when ok and v_ab0 = v_ab1 and v_ab0 = v_ab2 then 'ok auto-backups-per-account; '
+                         else format('FAIL auto-backups-per-account own=%s others-unchanged=%s/%s; ', ok, v_ab0 = v_ab1, v_ab0 = v_ab2) end;
+    else
+      set local role anon;
+      begin perform get_auto_backups(ta); exception when insufficient_privilege then n := n + 1; end;
+      begin perform set_auto_backups(ta, false); exception when insufficient_privilege then n := n + 1; end;
+      perform get_auto_backups(t);
+      reset role;
+      out := out || case when n = 2 then 'ok auto-backups-owner-only; ' else format('FAIL auto-backups-owner-only refused=%s; ', n) end;
+    end if;
+  exception when others then reset role; out := out || format('FAIL auto-backups %s; ', left(sqlerrm, 60)); end;
 
   -- 3. B signs in: a u:<uuid> token, B's own spelling of the name; the token resolves to B's scope.
   begin

@@ -75,8 +75,19 @@ not Supabase Auth.
   snapshot holds, and keeps the account's tombstones of the ids it leaves out.
 - Per-account id keys, step (a) (P4, RLS session) — 20261025450000_mu_p4_account_id_keys_a.sql (applied 2026-10-25
   21:11:16 UTC): unique indexes (device_id, id) on tasks, history and favorites, for the client's step (b).
+- Automatic backups per account (P4, RLS session) — 20261025800000_mu_p4_auto_backups_per_account.sql (applied
+  2026-10-26 06:07:28 UTC; review rounds 8-21, 3 critics each): each account has its own switch,
+  `proxima_auth.users.auto_backups`, seeded from the old global row (app_secrets 'auto_backups', no longer read), so the
+  owner's value did not change. The scrub triggers leave out only the rows of accounts whose own switch is on (a scope
+  without an account row counts as off); the 2-day cron backs up each switched-on account that has generations and is
+  neither disabled nor deleted, and one account's error is a WARNING naming the account by id that never stops the
+  others; switching off scrubs only the caller's own backups, and switching on first runs a switch-off's scrub still
+  queued (drained later it would reach what is deleted while on; if it cannot run, the switch stays off: try again in a
+  minute); pre-* and pre-restore safety backups and the restore's scrub follow the caller's switch. get/set_auto_backups
+  answer every signed-in account about its own switch (before: the owner only, members 42501).
 - Gate: scripts/test-mu-matrix.sql (owner A vs seeded members, as anon with minted tokens: rows, files, folders,
-  topics, tombstones, id squatting, id keys; 63/0 live after 20261025450000) and scripts/test-mu-catalog.sql (13/0).
+  topics, tombstones, id squatting, id keys, every browser-callable data, backup and key function, Automatic
+  backups per account; 80/0 live after 20261025800000) and scripts/test-mu-catalog.sql (13/0).
 - Related: 08e2bb2 (deleteArchivedPath true only when Storage confirms), 1bd2e68 (clear*Remote → {ok, error}).
 
 ## Open (P4, in progress)
@@ -102,13 +113,20 @@ not Supabase Auth.
   Until (c), accepted (P4 review rounds 5-6): an id a restore leaves out because another account holds it stays deleted
   in the restoring account. Its tombstone stays, so that account's other devices drop it (deleting the tombstone made a
   lagging device re-upload it into a refused batch, round 6), and the restore's own scrub never removes its copies
-  (round 4). A later all-tombstones scrub (switching Automatic backups off) applies that delete like any other, so those
-  copies go then; for a left-out History entry, its items go the same way. Before 20261025400000 such a restore failed
-  outright. Step (c) removes the left-out filters, the `v_skip_ids_*` lists and `skipped_in_use` together; the keep-list
-  (`v_keep_t` / `v_keep_h`) can stay. Webhook item (P4, with the webhook session): `_tasks_purge_webhook_events` and
-  `ws_predictions_deleted` record and purge webhook events by WaveSpeed task_id with no account either (round 7 lead).
+  (round 4). A later all-tombstones scrub (switching that account's own Automatic backups off, since 20261025800000)
+  applies that delete like any other, so those copies go then; for a left-out History entry, its items go the same way.
+  Before 20261025400000 such a restore failed outright. Step (c) removes the left-out filters, the `v_skip_ids_*` lists
+  and `skipped_in_use` together; the keep-list (`v_keep_t` / `v_keep_h`) can stay. Webhook item (P4, with the webhook
+  session): `_tasks_purge_webhook_events` and `ws_predictions_deleted` record and purge webhook events by WaveSpeed
+  task_id with no account either (round 7 lead).
 
 ## Accepted — do not re-report
+- A switch-off of Automatic backups queues its scrub at once, but a drain that starts between that switch-off and the
+  commit of a backup of the same account still being written takes the queued row without seeing that backup, which
+  then keeps those copies (a window as long as the backup: about 65 ms for a snapshot, the rest of a 2-day run). The
+  same holds for a delete still committing when the switch goes off: its trigger read the switch as on, and a drain
+  in between cannot see its tombstones yet (a few ms; the global switch had the same race). Closing either would make
+  switch-offs wait on backups and deletes (review rounds 13-14).
 - An expired-token holder keeps receiving content-free pings until the topic rotates (rename, password change, unlock,
   key rotation). Pings carry nothing.
 - A rename's own pings go to a topic of the new name with the old epoch (the epoch moves after the rows), which no
@@ -122,7 +140,10 @@ JS: scripts/test-session-header.mjs, test-sync-ping.mjs, test-storage-remove.mjs
 SQL, each rolls back (run alone against live; to test an unapplied migration, prepend its text in the same call):
 scripts/test-rls-{phase0,tables,storage,triggers,plan,rpcs,rename}.sql; P4 gate: scripts/test-mu-matrix.sql (two accounts:
 rows, files, folders, topics, tombstones; failing-first before the walls 26/19) with scripts/test-mu-catalog.sql, and the
-P4 rollback proof scripts/test-mu-p4-rollback.sql + scripts/fixtures/p4s-final.sql (both orders in its header); P1 M2: scripts/test-mu-scope-topic.sql (38
+P4 rollback proof scripts/test-mu-p4-rollback.sql + scripts/fixtures/p4s-final.sql (both orders in its header);
+20261025800000's rollback proof scripts/test-mu-p4-ab-rollback.sql with scripts/fixtures/p4s-ab-*.sql (each
+p4s-ab-guard-* fixture but the end marker -noop must refuse);
+P1 M2: scripts/test-mu-scope-topic.sql (38
 checks: both token formats, two accounts' rows, the topic; failing-first with M1 alone 22/14) and
 test-mu-scope-topic-rollback.sql (13), with scripts/fixtures/mu-owner-{unlock,rename}.sql moving the owner between M1
 and M2 (M2 must still apply); rollback proof =

@@ -1,19 +1,23 @@
 -- Rollback proof for the P4 walls: supabase/migrations/20261025100000_mu_p4_storage_folders.sql (A),
 -- 20261025200000_mu_p4_topic_per_account.sql (C), 20261025300000_mu_p4_tombstone_key.sql (D) and
--- 20261025400000_mu_p4_squat_proof_backups.sql (E), with their rollbacks RBa / RBc / RBd / RBe. This ONE file runs between the steps of ONE sql-tx call (everything rolled back); a temp table
--- carries the steps:
+-- 20261025400000_mu_p4_squat_proof_backups.sql (E) and 20261025800000_mu_p4_auto_backups_per_account.sql (AB), with their
+-- rollbacks RBa / RBc / RBd / RBe / RBab. This ONE file runs between the steps of ONE sql-tx call (everything rolled back);
+-- a temp table carries the steps:
 --   T=scripts/test-mu-p4-rollback.sql F=scripts/fixtures/p4s-final.sql (marks the last run, which reports)
 --   unapplied: node scripts/tools/sql-tx.mjs $T $A $T $C $T $D $T $RBd $T $RBc $T $RBa $T $A $C $D $F --test $T
 --   live:      node scripts/tools/sql-tx.mjs $T $RBd $T $RBc $T $RBa $T $A $T $C $T $D $F --test $T
 --   E alone while A, C, D are live and E is not: node scripts/tools/sql-tx.mjs $T $E $T $RBe $T $E $F --test $T
+--   AB alone while A, C, D, E are live and AB is not: node scripts/tools/sql-tx.mjs $T $AB $T $RBab $T $AB $F --test $T
+--   and once more with $ON first (scripts/fixtures/p4s-ab-on.sql), so both values cross AB
 -- Each step snapshots the storage policies, every proxima_auth function (md5 of its definition, ACL, config,
 -- volatility, definer), the eight public functions the walls redefine the same way, sync_tombstones' constraints and
--- indexes, the proxima_auth tables with their ACLs and the triggers on proxima_auth.users. Every snapshot taken in the
--- same state (which walls are on) must be identical, and the owner's live topic must be one value throughout: the walls
--- never rotate it. Nothing secret is printed.
+-- indexes, the proxima_auth tables with their ACLs, the triggers and columns of proxima_auth.users, the backup functions
+-- AB redefines and the old global switch row's value. Every snapshot taken in the same state (which walls are on) must be
+-- identical, and the owner's live topic and the owner's Automatic backups switch must each be one value throughout: the
+-- walls never rotate the topic, and AB carries the switch across both ways. Nothing secret is printed.
 do $t$
 declare
-  v_snap text; v_state text; v_step int; v_out text; n int; v_topic text;
+  v_snap text; v_state text; v_step int; v_out text; n int; v_topic text; v_ab boolean;
 begin
   v_state := concat_ws('+', case when to_regclass('proxima_auth.account_folders') is not null then 'folders' end,
                             case when to_regprocedure('proxima_auth.account_topic(uuid)') is not null then 'topic' end,
@@ -21,7 +25,9 @@ begin
                                         where c.conrelid = 'public.sync_tombstones'::regclass and c.contype = 'p')
                                       = 'PRIMARY KEY (device_id, id)' then 'tombkey' end,
                             case when pg_get_functiondef('public.restore_my_backup_phase2(text,uuid)'::regprocedure) ~ 'skipped_in_use'
-                                 then 'squat' end);
+                                 then 'squat' end,
+                            case when exists (select 1 from pg_attribute where attrelid = 'proxima_auth.users'::regclass
+                                                 and attname = 'auto_backups' and not attisdropped) then 'ab' end);
   v_state := coalesce(nullif(v_state, ''), 'none');
   v_snap := concat_ws(E'\n',
     (select string_agg(concat_ws('|', policyname, permissive, roles::text, cmd, qual, with_check), E'\n' order by policyname)
@@ -33,7 +39,12 @@ begin
                       'public._clear_kind(text,text,timestamp with time zone,text[])'::regprocedure,
                       'public.delete_queued_rows(text,text,text[],bigint)'::regprocedure,
                       'public._history_strip_deleted_items()'::regprocedure, 'public.sync_tombstone_record()'::regprocedure,
-                      'public._drain_backup_scrubs(text)'::regprocedure, 'public.restore_my_backup_phase2(text,uuid)'::regprocedure)),
+                      'public._drain_backup_scrubs(text)'::regprocedure, 'public.restore_my_backup_phase2(text,uuid)'::regprocedure,
+                      'public._tasks_queue_backup_scrub()'::regprocedure, 'public._history_queue_backup_scrub()'::regprocedure,
+                      'public._history_queue_item_scrub()'::regprocedure, 'public.create_auto_backup()'::regprocedure,
+                      'public.get_auto_backups(text)'::regprocedure, 'public.set_auto_backups(text,boolean)'::regprocedure,
+                      'public.snapshot_my_data_phase2(text,text,text)'::regprocedure)
+         or (p.pronamespace = 'public'::regnamespace and p.proname = '_auto_backups_on')),
     (select string_agg(conname || ':' || pg_get_constraintdef(oid), E'\n' order by conname)
        from pg_constraint where conrelid = 'public.sync_tombstones'::regclass),
     (select string_agg(pg_get_indexdef(indexrelid), E'\n' order by indexrelid::regclass::text)
@@ -41,10 +52,16 @@ begin
     (select string_agg(concat_ws('|', c.relname, c.relkind, c.relacl::text, c.relrowsecurity), E'\n' order by c.relname)
        from pg_class c where c.relnamespace = 'proxima_auth'::regnamespace),
     (select string_agg(pg_get_triggerdef(t.oid), E'\n' order by t.tgname)
-       from pg_trigger t where t.tgrelid = 'proxima_auth.users'::regclass and not t.tgisinternal));
+       from pg_trigger t where t.tgrelid = 'proxima_auth.users'::regclass and not t.tgisinternal),
+    (select string_agg(concat_ws(':', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, pg_get_expr(d.adbin, d.adrelid)),
+                       ',' order by a.attname)
+       from pg_attribute a left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+      where a.attrelid = 'proxima_auth.users'::regclass and a.attnum > 0 and not a.attisdropped),
+    (select 'auto_backups row ' || s.value::text from public.app_secrets s where s.key = 'auto_backups'));
   v_topic := proxima_auth.sync_topic();
+  v_ab := public._auto_backups_on();   -- the owner's switch in every state (the global row before AB, the owner's own after)
   if to_regclass('pg_temp.p4_rb') is null then
-    create temp table p4_rb (step int, state text, snap text, topic text) on commit drop;
+    create temp table p4_rb (step int, state text, snap text, topic text, ab boolean) on commit drop;
     create temp table p4_acc (acc text) on commit drop;
     insert into p4_acc values ('');
   end if;
@@ -59,7 +76,9 @@ begin
   end if;
   select count(*) into n from p4_rb x where x.topic is distinct from v_topic;
   v_out := v_out || format('%s step%s owner topic unchanged | ', case when n = 0 then 'PASS' else 'FAIL' end, v_step);
-  insert into p4_rb values (v_step, v_state, v_snap, v_topic);
+  select count(*) into n from p4_rb x where x.ab is distinct from v_ab;
+  v_out := v_out || format('%s step%s owner Automatic backups switch unchanged (%s) | ', case when n = 0 then 'PASS' else 'FAIL' end, v_step, v_ab);
+  insert into p4_rb values (v_step, v_state, v_snap, v_topic, v_ab);
   update p4_acc set acc = v_out;
   if current_setting('p4s.final', true) = 'on' then   -- set by scripts/fixtures/p4s-final.sql just before the last run
     raise exception 'RESULT: % PASS, % FAIL :: %',
