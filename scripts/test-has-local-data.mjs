@@ -22,7 +22,9 @@ const test = async (name, fn) => {
   catch (e) { failed++; console.log("FAIL -", name, "\n   ", String(e?.message || e).split("\n").slice(0, 3).join(" | ")); }
 };
 const none = async () => 0;
-const has = (opts) => S.hasLocalData(opts);
+// The import is stubbed as done; its real behaviour (and hasLocalData with it) is tested by test-prism-import.mjs.
+const done = async () => true;
+const has = (opts) => S.hasLocalData({ migrate: done, ...opts });
 
 await test("an empty browser (settings only) holds no account data", async () => {
   for (const k of ["proximaai-theme", "proximaai-background", "proximaai-device-id", "proximaai-browser-id", "proximaai-tab-id",
@@ -73,10 +75,14 @@ await test("localStorage that cannot be read counts", async () => {
 // (migrateFromLocalStorage); it is imported first here, so it counts like any other. An import that fails counts as data.
 await test("the old 'prism' data is imported first, so it counts; a failing import counts as data", async () => {
   const order = [];
-  const r = await has({ migrate: async () => { order.push("migrate"); }, storeCount: async (s) => { order.push(s); return s === "history" ? 2 : 0; } });
+  const r = await has({ migrate: async () => { order.push("migrate"); return true; }, storeCount: async (s) => { order.push(s); return s === "history" ? 2 : 0; } });
   assert.equal(r, true);
   assert.deepEqual(order.slice(0, 2), ["migrate", "tasks"], "imported before the stores are counted");
   assert.equal(await has({ migrate: async () => { throw new Error("prism blocked"); }, storeCount: none }), true);
+  // review r8 #2/#9: the real import never rejects; it answers false when a step failed, and anything but true counts
+  assert.equal(await has({ migrate: async () => false, storeCount: none }), true, "an unfinished import counts as data");
+  assert.equal(await has({ migrate: async () => undefined, storeCount: none }), true, "only a plain true means done");
+  assert.equal(await has({ migrate: done, storeCount: none }), false);
 });
 
 // Review r7 (tests #1): the default store count (Node has no IndexedDB, so the defaults are checked in the source, comments

@@ -83,18 +83,19 @@ function wrapRequest(req) {
   });
 }
 
-// Batch write helper — uses a single transaction for multiple puts
-async function batchPut(storeName, items) {
+// Batch write helper — uses a single transaction for multiple puts. `strict`: a failure rejects instead of being
+// swallowed (the prism import must not delete its source after a failed write, review r8 #2).
+async function batchPut(storeName, items, { strict = false } = {}) {
   if (!items.length) return;
   try {
     const db = await openDB();
     const txn = db.transaction(storeName, "readwrite");
     const store = txn.objectStore(storeName);
     for (const item of items) {
-      try { store.put(item); } catch {}
+      try { store.put(item); } catch (e) { if (strict) throw e; }
     }
     await new Promise((res, rej) => { txn.oncomplete = res; txn.onerror = () => rej(txn.error); });
-  } catch {}
+  } catch (e) { if (strict) throw e; }
 }
 
 // Batch delete helper
@@ -413,8 +414,9 @@ const emptyValue = (raw) => raw == null || /^\s*(\[\s*\]|\{\s*\}|null|""|)\s*$/.
 const storeRows = async (name) => wrapRequest((await tx(name)).count());
 export async function hasLocalData({ storeCount = storeRows, migrate = migrateFromLocalStorage } = {}) {
   // Review r7 (security #4): the pre-rename 'prism' database is imported first (local only; once per browser), as the first
-  // load after sign-in would, so its data counts like any other.
-  try { await migrate(); } catch { return true; }
+  // load after sign-in would, so its data counts like any other. An import that did not finish counts as data (review r8
+  // #2/#9: migrateFromLocalStorage answers false then; it never rejects).
+  try { if ((await migrate()) !== true) return true; } catch { return true; }
   try {
     for (const k of accountDataKeys()) if (!emptyValue(localStorage.getItem(k))) return true;
     for (let i = 0; i < localStorage.length; i++) {
@@ -435,65 +437,65 @@ export async function hasLocalData({ storeCount = storeRows, migrate = migrateFr
 
 // ─── Migration from localStorage + old "prism" DB ───
 
-// Helper: read all data from an old IndexedDB store
+// Helper: read all data from an old IndexedDB store. A missing store reads as empty; a failed read rejects (review r8 #2:
+// it used to read as empty, and the import then deleted the old database).
 function readOldStore(db, storeName) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains(storeName)) { resolve([]); return; }
     try {
       const txn = db.transaction(storeName, "readonly");
       const store = txn.objectStore(storeName);
       const req = store.getAll();
       req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => resolve([]);
-    } catch { resolve([]); }
+      req.onerror = () => reject(req.error || new Error(`read ${storeName} failed`));
+    } catch (e) { reject(e); }
   });
 }
 
-// Helper: open old DB without triggering version upgrade
+// Helper: open old DB without triggering version upgrade. null: there is no such database (the upgrade is aborted, so
+// none is created; the error that follows the abort is ignored). Any other failure rejects.
 function openOldDB(name, version) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     try {
       const req = indexedDB.open(name, version);
       req.onupgradeneeded = () => { req.transaction.abort(); resolve(null); };
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
-    } catch { resolve(null); }
+      req.onerror = () => reject(req.error || new Error(`open ${name} failed`));
+    } catch (e) { reject(e); }
   });
 }
 
+// The one-time import of the pre-rename data (the 'prism' database and prism-* localStorage keys). True when it is done
+// (or there was nothing, or it was done before); false when a step failed. Review r8 (#2/#9): every failure used to be
+// swallowed, so a failed write still deleted the old database (its only copy) and marked the browser as imported, and
+// hasLocalData (second account S5) could not see it. Now nothing old is removed and the browser is not marked unless
+// every step succeeded; the next load tries again (the writes are puts by key, so a repeat is harmless).
 export async function migrateFromLocalStorage() {
-  // Check if we already migrated
-  const migrated = localStorage.getItem("proximaai-migrated");
-  if (migrated) return;
-
   try {
+    if (localStorage.getItem("proximaai-migrated")) return true;
+
     // 1. Migrate from old "prism" IndexedDB (MUST happen first, before localStorage cleanup)
     const oldDb = await openOldDB("prism", 2);
     if (oldDb) {
+      let oldTasks, oldHistory, oldSettings, oldFavorites, oldPresets;
       try {
-        // Read ALL stores from old DB
-        const oldTasks = await readOldStore(oldDb, "tasks");
-        const oldHistory = await readOldStore(oldDb, "history");
-        const oldSettings = await readOldStore(oldDb, "settings");
-        const oldFavorites = await readOldStore(oldDb, "favorites");
-        const oldPresets = await readOldStore(oldDb, "presets");
-
-        oldDb.close();
-
-        // Write to new DB
-        if (oldTasks.length > 0) await batchPut("tasks", oldTasks);
-        if (oldHistory.length > 0) await batchPut("history", oldHistory);
-        if (oldFavorites.length > 0) await batchPut("favorites", oldFavorites);
-        if (oldPresets.length > 0) await batchPut("presets", oldPresets);
-        for (const s of oldSettings) {
-          if (s?.key && s?.value !== undefined) await setSetting(s.key, s.value);
-        }
-
-        // Delete old DB after successful migration
-        try { indexedDB.deleteDatabase("prism"); } catch {}
-      } catch {
+        oldTasks = await readOldStore(oldDb, "tasks");
+        oldHistory = await readOldStore(oldDb, "history");
+        oldSettings = await readOldStore(oldDb, "settings");
+        oldFavorites = await readOldStore(oldDb, "favorites");
+        oldPresets = await readOldStore(oldDb, "presets");
+      } finally {
         try { oldDb.close(); } catch {}
       }
+      await batchPut("tasks", oldTasks, { strict: true });
+      await batchPut("history", oldHistory, { strict: true });
+      await batchPut("favorites", oldFavorites, { strict: true });
+      await batchPut("presets", oldPresets, { strict: true });
+      for (const s of oldSettings) {
+        if (s?.key && s?.value !== undefined) await setSetting(s.key, s.value);
+      }
+      // Deleted only once everything above was written
+      try { indexedDB.deleteDatabase("prism"); } catch {}
     }
 
     // 2. Migrate from localStorage (fallback keys)
@@ -504,7 +506,7 @@ export async function migrateFromLocalStorage() {
     if (oldLogs) {
       let logs;
       try { logs = JSON.parse(oldLogs); } catch { logs = []; }
-      if (logs.length > 0) await batchPut("history", logs);
+      if (Array.isArray(logs)) await batchPut("history", logs, { strict: true });
       localStorage.removeItem("prism-logs");
     }
 
@@ -518,8 +520,9 @@ export async function migrateFromLocalStorage() {
 
     // Mark migration as done so it doesn't run again
     localStorage.setItem("proximaai-migrated", "1");
+    return true;
   } catch {
-    // Migration failed silently — old data preserved as fallback
+    return false;   // nothing old was removed after the failed step; tried again next time
   }
 }
 
