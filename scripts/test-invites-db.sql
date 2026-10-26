@@ -193,7 +193,7 @@ begin
   -- I7. The new member signs in like any account, as a member.
   begin
     set local role anon;
-    perform set_config('request.headers', '{"cf-connecting-ip":"198.51.100.23"}', true);
+    perform set_config('request.headers', '{"cf-connecting-ip":"198.51.100.23","x-client-info":"proxima-guard/1"}', true);   -- the current client (20261026600000)
     j := public.verify_admin(j_name, j_pw);
     reset role;
     ok := (j->>'ok')::boolean and j->>'role' = 'member' and (j->>'account_id')::uuid = joined;
@@ -381,8 +381,9 @@ begin
     out := out || format('FAIL I15 %s %s; ', sqlstate, left(sqlerrm, 80));
   end;
 
-  -- I16. A valid code answers at most 5 taken names (r5 security #1): the 6th try voids the invite (generic invalid), so a
-  --      leaked code cannot list account names.
+  -- I16. A valid code answers at most 5 taken names (r5 security #1): the 6th try - a TAKEN name, so a cap checked after the
+  --      name check would still answer username_taken (r6 tests #2) - voids the invite (generic invalid, counted against the
+  --      IP: r6 tests #8), and so does a free name after it. The owner sees it as 'void', not as revoked (r6 #9).
   begin
     set local role anon;
     perform set_config('request.headers', json_build_object('x-proxima-session', o_tk, 'cf-connecting-ip', '198.51.100.20')::text, true);
@@ -393,25 +394,43 @@ begin
       execute 'select public.join_with_invite($1, $2, $3)' into j using code5, case when i % 2 = 0 then upper(m_name) else '__inv_rows_' || tx end, j_pw;
       v := v || coalesce(j->>'reason', 'ok') || ' ';
     end loop;
-    execute 'select public.join_with_invite($1, $2, $3)' into j using code5, j_name || 'cap', j_pw;
     reset role;
+    execute 'select coalesce((select failures from proxima_auth.signin_throttle where ip_key = encode(extensions.hmac(host(''198.51.100.31''::inet),
+               (select throttle_key from proxima_auth.auth_config where id), ''sha256''), ''hex'')), 0)' into n2;
+    set local role anon;
+    perform set_config('request.headers', '{"cf-connecting-ip":"198.51.100.31"}', true);
+    execute 'select public.join_with_invite($1, $2, $3)' into j using code5, upper(m_name), j_pw;
+    execute 'select public.join_with_invite($1, $2, $3)' into j2 using code5, j_name || 'cap', j_pw;
+    reset role;
+    execute 'select coalesce((select failures from proxima_auth.signin_throttle where ip_key = encode(extensions.hmac(host(''198.51.100.31''::inet),
+               (select throttle_key from proxima_auth.auth_config where id), ''sha256''), ''hex'')), 0)' into n;
+    ok := n = n2 + 2;   -- the 6th (cap) and the 7th (dead code) both counted
     execute 'select count(*) from proxima_auth.invites where code_hash = encode(extensions.digest(replace($1, ''-'', ''''), ''sha256''), ''hex'')
                and revoked_at is not null and used_at is null' into n using code5;
-    ok := v = repeat('username_taken ', 5) and j::text = bad::text and n = 1 and not exists (select 1 from proxima_auth.users where username = j_name || 'cap');
-    out := out || case when ok then 'ok I16 taken-cap; ' else format('FAIL I16 taken-cap [%s] %s n=%s; ', v, j, n) end;
+    set local role anon;
+    perform set_config('request.headers', json_build_object('x-proxima-session', o_tk)::text, true);
+    execute 'select public.list_my_invites($1)' into j3 using o_tk;
+    reset role;
+    ok := ok and v = repeat('username_taken ', 5) and j::text = bad::text and j2::text = bad::text and n = 1
+      and not exists (select 1 from proxima_auth.users where username = j_name || 'cap')
+      and exists (select 1 from json_array_elements(j3->'invites') e where e->>'state' = 'void');
+    out := out || case when ok then 'ok I16 taken-cap; ' else format('FAIL I16 taken-cap [%s] %s %s n=%s; ', v, j, j2, n) end;
   exception when others then
     begin reset role; exception when others then null; end;
     out := out || format('FAIL I16 %s %s; ', sqlstate, left(sqlerrm, 80));
   end;
 
-  -- I17. Names with invisible or direction characters are refused (r5 security #2), and so are the boundaries (r5 tests #7):
-  --      a 7-character password, a 65-character name, ':' and '/'. None of them touches the invite.
+  -- I17. A name is letters, digits, '_' and '-' only (r6 security #3 / tests #7: an allow-list, so no invisible, direction,
+  --      variation, tag or look-alike character can pass), 2 to 64 of them; and the boundaries (r5 tests #7): a 7-character
+  --      password, a 65-character name. None of them touches the invite.
   begin
     set local role anon;
     perform set_config('request.headers', ip_a, true);
     v := '';
     for j3 in select to_json(x) from unnest(array[m_name || chr(8203), chr(8238) || 'abc', 'ab' || chr(173) || 'c', 'ab' || chr(65279),
-                 'ab' || chr(8288), 'ab' || chr(7), repeat('n', 65), 'a:b', 'a/b']) x loop
+                 'ab' || chr(8288), 'ab' || chr(7), 'ab' || chr(65039), 'ab' || chr(917569), 'ab' || chr(10240), 'ab' || chr(119155),
+                 'ab' || chr(65529), 'ab' || chr(6155), 'ab' || chr(1086), 'caf' || chr(233), 'ab' || chr(160),
+                 repeat('n', 65), 'a:b', 'a/b', 'a.b', 'a b', 'a+b', 'a@b', 'a''b']) x loop
       execute 'select public.join_with_invite($1, $2, $3)' into j using code4, j3#>>'{}', j_pw;
       if j->>'reason' is distinct from 'invalid_username' then v := v || format('%s=%s ', length(j3#>>'{}'), j->>'reason'); end if;
     end loop;
@@ -471,12 +490,24 @@ begin
   --      the invite row (FOR UPDATE), then the creator's row (FOR KEY SHARE) before the name check, so an owner renaming to
   --      the same name at the same moment makes it wait instead of deadlocking; a unique violation (a name or folder taken
   --      meanwhile) answers username_taken before the invite is marked used.
+  -- r6 (tests #1, security #4): on the body without its comments, so a comment cannot stand in for a statement; the creator's
+  --      row FOR SHARE (it waits for a concurrent disable, demote or delete, which FOR KEY SHARE does not); the two bcrypt
+  --      hashes are made before that lock, so the owner's row is held for milliseconds.
   begin
-    v := lower(pg_get_functiondef('public.join_with_invite(text,text,text)'::regprocedure));
+    v := regexp_replace(lower(pg_get_functiondef('public.join_with_invite(text,text,text)'::regprocedure)), '--[^\n]*', '', 'g');
     ok := position('pg_advisory_xact_lock(hashtextextended(''proxima-signin:'' || lower(v_name), 0))' in v) > 0
       and position('pg_advisory_xact_lock(' in v) < position('for update of i' in v)
-      and position('for update of i' in v) < position('for key share' in v)
-      and position('for key share' in v) < position('_username_taken(' in v)
+      and position('if v_inv.taken_count >= 5 then' in v) > position('for update of i' in v)
+      and position('if v_inv.taken_count >= 5 then' in v) < position('_username_taken(' in v)
+      and position('v_pw_hash := crypt(p_password, gen_salt(''bf'', 12));' in v) > position('for update of i' in v)
+      and position('v_pw_hash := crypt(p_password, gen_salt(''bf'', 12));' in v) < position('o.disabled_at is null for share;' in v)
+      and position('v_bk_hash := crypt(v_backup, gen_salt(''bf'', 12));' in v) > position('for update of i' in v)
+      and position('v_bk_hash := crypt(v_backup, gen_salt(''bf'', 12));' in v) < position('o.disabled_at is null for share;' in v)
+      -- r7 tests #5: the whole re-check, so its role condition, its refusal and its count cannot drop out unnoticed
+      and v ~ 'perform 1 from proxima_auth\.users o where o\.id = v_inv\.created_by and o\.role = ''owner'' and o\.deleted_at is null\s+and o\.disabled_at is null for share;\s*if not found then\s*perform proxima_auth\._throttle\(''join'', true\);\s*return json_build_object\(''ok'', false, ''reason'', ''invalid''\);'
+      and position('for update of i' in v) < position('o.disabled_at is null for share;' in v)
+      and position('o.disabled_at is null for share;' in v) < position('_username_taken(' in v)
+      and position('for key share' in v) = 0
       and v ~ 'exception when unique_violation then[^;]*return json_build_object\(''ok'', false, ''reason'', ''username_taken''\);\s*end;\s*update proxima_auth\.invites set used_at';
     out := out || case when ok then 'ok I20 lock-order-and-race-answer; ' else 'FAIL I20 lock-order-and-race-answer; ' end;
   exception when others then out := out || format('FAIL I20 %s %s; ', sqlstate, left(sqlerrm, 80)); end;
@@ -510,6 +541,21 @@ begin
   exception when others then
     begin reset role; exception when others then null; end;
     out := out || format('FAIL I22 %s %s; ', sqlstate, left(sqlerrm, 80));
+  end;
+
+  -- I23. 'void' only for an invite voided by 5 taken names (r7 tests #6): one the owner revoked after fewer reads 'revoked'.
+  begin
+    execute 'insert into proxima_auth.invites (code_hash, created_by, expires_at, revoked_at, taken_count) values (md5($1) || md5($1), $2, now() + interval ''1 day'', now(), 4) returning id'
+      into rid using 'rev4-' || tx, o;
+    set local role anon;
+    perform set_config('request.headers', json_build_object('x-proxima-session', o_tk)::text, true);
+    execute 'select public.list_my_invites($1)' into j using o_tk;
+    reset role;
+    ok := exists (select 1 from json_array_elements(j->'invites') e where e->>'id' = rid::text and e->>'state' = 'revoked');
+    out := out || case when ok then 'ok I23 revoked-not-void; ' else 'FAIL I23 revoked-not-void; ' end;
+  exception when others then
+    begin reset role; exception when others then null; end;
+    out := out || format('FAIL I23 %s %s; ', sqlstate, left(sqlerrm, 80));
   end;
 
   -- I21. After every refusal above, the invite still works (r5 tests #4): the file ends with a successful join on code4.

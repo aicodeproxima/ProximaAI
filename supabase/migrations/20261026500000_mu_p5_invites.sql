@@ -1,8 +1,9 @@
 -- Joining by invite (docs/SECOND-ACCOUNT-PLAN.md S1, decision K7; owner ruling 2026-10-23: invite only).
 --
 -- The owner creates a one-time code (Settings, password re-checked). It is valid for 7 days, at most 5 are open at a time,
--- and the server keeps only its sha-256: the code itself is shown once, to the owner. The person invited opens /join,
--- types the code, a name and a password, and gets a member account (role 'member', invited_by = the owner), its storage
+-- and the server keeps only its sha-256: the code itself is shown once, to the owner. The person invited opens /#join,
+-- types the code, a name (letters, digits, '_' and '-') and a password, and gets a member account (role 'member',
+-- invited_by = the owner), its storage
 -- folder claimed (users_keep_folder), a backup code shown once (stored as bcrypt, accepted by unlock_with_backup_code),
 -- and a session. Wrong codes count against the caller's IP like failed sign-ins (proxima_auth._throttle) and all get one
 -- generic answer; a name is checked with the same list rename_my_account uses (another account, rows under its scope,
@@ -106,7 +107,8 @@ begin
   return json_build_object('ok', true, 'code', v_code, 'expires_at', extract(epoch from v_exp)::bigint);
 end $function$;
 
--- Browser (owner): the owner's invites, newest first, with their state (open, used, revoked, expired) and who used them.
+-- Browser (owner): the owner's invites, newest first, with their state (open, used, revoked, void: voided by 5 taken names,
+-- expired) and who used them.
 -- Never a code or a hash.
 create function public.list_my_invites(p_session_token text) returns json
   language plpgsql security definer set search_path to 'public', 'pg_catalog'
@@ -120,7 +122,9 @@ begin
              'id', i.id,
              'created_at', extract(epoch from i.created_at)::bigint,
              'expires_at', extract(epoch from i.expires_at)::bigint,
-             'state', case when i.used_at is not null then 'used' when i.revoked_at is not null then 'revoked'
+             'state', case when i.used_at is not null then 'used'
+                           when i.revoked_at is not null and i.taken_count >= 5 then 'void'   -- 5 taken names (review r6 #9)
+                           when i.revoked_at is not null then 'revoked'
                            when i.expires_at <= now() then 'expired' else 'open' end,
              'used_at', extract(epoch from i.used_at)::bigint,
              'used_by_username', u.username)
@@ -152,15 +156,15 @@ create function public.join_with_invite(p_code text, p_username text, p_password
 as $function$
 declare
   v_name text := btrim(p_username);
-  v_th jsonb; v_inv proxima_auth.invites; v_id uuid; v_backup text; v_s jsonb;
+  v_th jsonb; v_inv proxima_auth.invites; v_id uuid; v_backup text; v_s jsonb; v_pw_hash text; v_bk_hash text;
 begin
   if not coalesce((select c.members_open from proxima_auth.auth_config c where c.id), false) then
     return json_build_object('ok', false, 'reason', 'closed');
   end if;
   -- Shapes first: nothing is looked up for a request that could not create an account.
-  -- Review r5 (security #2): no control, invisible or direction characters either (a name that looks like another).
-  if v_name is null or length(v_name) < 2 or length(v_name) > 64 or v_name ~ '[.:/[:space:]]'
-     or v_name ~ '[[:cntrl:]­͏؜ᅟᅠ឴឵᠎​-‏‪-‮⁠-⁯ㅤ﻿ﾠ]' then
+  -- Review r6 (security #3): letters, digits, '_' and '-' only, 2 to 64 (an allow-list: no invisible, direction, variation,
+  -- tag or look-alike character can make a name that looks like another account's; a subset of users_username_shape).
+  if v_name is null or v_name !~ '^[A-Za-z0-9_-]{2,64}$' then
     return json_build_object('ok', false, 'reason', 'invalid_username');
   end if;
   if p_password is null or length(p_password) < 8 then
@@ -188,11 +192,20 @@ begin
     perform proxima_auth._throttle('join', true);
     return json_build_object('ok', false, 'reason', 'invalid');
   end if;
-  -- Review r5 (security #3): the creator's row is held (FOR KEY SHARE, as the member's invited_by will hold it) before the
-  -- name check, and its state re-checked under that lock: an owner renaming to this name meanwhile is waited for (no
-  -- deadlock on the new name's index entry), and an owner disabled or demoted meanwhile ends the code's use.
+  -- The two bcrypt hashes (about half a second) are made now, before the creator's row is held, so that row is held for
+  -- milliseconds (review r6).
+  v_backup := proxima_auth._random_code(20);
+  v_pw_hash := crypt(p_password, gen_salt('bf', 12));
+  v_bk_hash := crypt(v_backup, gen_salt('bf', 12));
+  -- Review r5 (security #3) and r6 (security #4): the creator's row is held FOR SHARE before the name check, and its state
+  -- re-checked under that lock: an owner renaming to this name meanwhile is waited for (no deadlock on the new name's index
+  -- entry), and so is an owner disabled, demoted or deleted meanwhile (those updates take FOR NO KEY UPDATE, which FOR
+  -- SHARE waits for and FOR KEY SHARE would not); once they commit, the code no longer works. The price, deliberate: a join
+  -- also waits while any owner-row update runs (a sign-in or key save: milliseconds; a backups switch-on that drains a
+  -- queued switch-off scrub inline: as long as that drain, 20261025800000/20261026200000), and fails at the 3 s statement
+  -- limit if that drain runs past about 2.5 s; trying again works. Joins and switch toggles are both rare.
   perform 1 from proxima_auth.users o where o.id = v_inv.created_by and o.role = 'owner' and o.deleted_at is null
-     and o.disabled_at is null for key share;
+     and o.disabled_at is null for share;
   if not found then
     perform proxima_auth._throttle('join', true);
     return json_build_object('ok', false, 'reason', 'invalid');
@@ -201,11 +214,9 @@ begin
     update proxima_auth.invites set taken_count = taken_count + 1 where id = v_inv.id;
     return json_build_object('ok', false, 'reason', 'username_taken');
   end if;
-  v_backup := proxima_auth._random_code(20);
   begin
     insert into proxima_auth.users (username, role, scope, password_hash, backup_code_hash, invited_by)
-      values (v_name, 'member', 'user:' || v_name, crypt(p_password, gen_salt('bf', 12)), crypt(v_backup, gen_salt('bf', 12)),
-              v_inv.created_by)
+      values (v_name, 'member', 'user:' || v_name, v_pw_hash, v_bk_hash, v_inv.created_by)
       returning id into v_id;
   exception when unique_violation then   -- a name taken meanwhile, or its folder (users_keep_folder)
     return json_build_object('ok', false, 'reason', 'username_taken');
