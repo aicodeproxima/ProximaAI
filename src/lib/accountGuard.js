@@ -38,6 +38,18 @@ export function sessionFitsBrowser(token, stored) {
   return tokenAccountId(token) === stored.id.toLowerCase();
 }
 
+// A signed-in page, when another tab changed the session or this browser's record (or at the 60-second check): it stays
+// only while the session in storage is still its own account's (`pageAccount`, the account it signed in as; session.js
+// bindPageAccount) and fits the record. Otherwise it leaves (reloads, so the load decision runs again) instead of carrying
+// on under another session: review r8 #14 (another account signed in and claimed after this browser's data was cleared:
+// that session fits the record, but it is not this page's) and #4 (two tabs claiming at once).
+export function pageMustLeave({ authed, pageAccount, token, stored }) {
+  if (!authed) return false;
+  if (typeof token !== "string" || !token) return true;
+  if (pageAccount && tokenAccountId(token) !== String(pageAccount).toLowerCase()) return true;
+  return !sessionFitsBrowser(token, stored);
+}
+
 // At page load (review r6 security #1): "none" (no session), "fit" (the record names its account: use it), "check" (no
 // record yet: ask the server whose session it is, and decide with browserAccountDecision BEFORE anything loads or syncs),
 // "refuse" (another account's, or an unreadable record).

@@ -4,6 +4,8 @@
 // localStorage no longer signs anyone in. The token is the only credential the browser keeps: the
 // WaveSpeed key stays on the server.
 
+import { tokenAccountId } from "./accountGuard.js";
+
 const SESSION_KEY = "proximaai-session";
 const USER_KEY = "proximaai-user"; // drives getDeviceId() -> "user:<name>" (the data scope)
 
@@ -15,8 +17,23 @@ export function getSession() {
   return null;
 }
 
+// The account this page signed in as (second account S5, review r8 #1/#4/#6/#14): set when the page's session is
+// confirmed (a fitting session at load, the account check, sign-in, join), cleared at sign-out. While it is set, a session
+// in storage that names ANOTHER account (another tab signed in as someone else) is never sent from this page:
+// sessionToken() reads it as none (so the proxy, the RPCs and the data fetch all go without it), a refusal never clears
+// that account's session, and the page is told to leave (onForeignSession) instead of carrying on under it.
+let pageAccount = null;
+let foreignHandler = null;
+export function bindPageAccount(id) { pageAccount = typeof id === "string" && id ? id.toLowerCase() : null; }
+export function pageAccountId() { return pageAccount; }
+export function onForeignSession(fn) { foreignHandler = fn; }
+const isForeign = (token) => !!(pageAccount && token && tokenAccountId(token) !== pageAccount);
+const leaveForForeign = () => { try { queueMicrotask(() => { try { foreignHandler?.(); } catch {} }); } catch {} };
+
 export function sessionToken() {
-  return getSession()?.token || null;
+  const token = getSession()?.token || null;
+  if (token && isForeign(token)) { leaveForForeign(); return null; }
+  return token;
 }
 
 // The database's row policies admit a data request only when this header carries a token the server verifies (PostgREST
@@ -81,6 +98,7 @@ export function isSuperseded(tokenUsed) {
 }
 export function reportSessionExpired(tokenUsed) {
   if (isSuperseded(tokenUsed)) return;
+  if (isForeign(getSession()?.token)) { leaveForForeign(); return; }   // another account's session: not this page's to clear
   clearSession();
   try { expiredHandler?.(); } catch {}
 }

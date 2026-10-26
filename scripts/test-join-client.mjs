@@ -70,11 +70,47 @@ await test("an invite link opened while signed in is only removed, never kept fo
   assert.ok(!/setInfo\(/.test(eff), "the join link does not wipe a notice (session expired)");
 });
 
-await test("another tab changing the session or the record: a tab whose session no longer fits reloads (r7 #1/#2)", () => {
-  const eff = between(app, "const onStorage = (e) => {", "}, [isAuthed]);");
-  assert.match(eff, /if \(e\.key !== "proximaai-session" && e\.key !== BROWSER_ACCOUNT_KEY\) return;/);
-  assert.match(eff, /if \(isAuthedRef\.current && !sessionFitsBrowser\(getSession\(\)\?\.token, readBrowserAccount\(\)\)\) window\.location\.reload\(\);/);
-  assert.match(eff, /window\.addEventListener\("storage", onStorage\);/);
+// Whole effects are compared with their whitespace folded (review r8 #10: a pinned line can stay while an early return,
+// an emptied dependency list or a listener removed at once undoes the fix around it).
+const fold = (t) => t.replace(/\s+/g, " ").trim();
+const effectOf = (anchor) => { const at = app.indexOf(anchor); assert.ok(at >= 0, `missing: ${anchor}`); const i = app.lastIndexOf("useEffect(() => {", at); const j = app.indexOf("]);", app.indexOf("}, [", at)); assert.ok(i >= 0 && j > i, `effect of ${anchor}`); return fold(app.slice(i, j + 3)); };
+
+await test("another tab changing the session or the record: a page not on its own account's session leaves (r7 #1/#2, r8 #4/#14)", () => {
+  assert.equal(effectOf("const onStorage = (e) => {"), fold(`useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key != null && e.key !== "proximaai-session" && e.key !== BROWSER_ACCOUNT_KEY) return;
+      if (pageMustLeave({ authed: isAuthedRef.current, pageAccount: pageAccountId(), token: getSession()?.token, stored: readBrowserAccount() })) leavePage();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);`));
+});
+
+await test("the page's own account: bound on every way in, cleared at sign-out; a page that must leave stops first (r8 #1/#6/#8/#14)", () => {
+  // #8: every guard reads isAuthedRef; it follows isAuthed on every render
+  assert.match(app, /const \[isAuthed, setIsAuthed\] = useState\(bootFit === "fit"\);\s*const isAuthedRef = useRef\(isAuthed\);\s*isAuthedRef\.current = isAuthed;/);
+  // bound: a fitting session at load, the account check, sign-in and join (handleSignedIn), each before isAuthed
+  assert.match(app, /const decision = bootSessionDecision\(getSession\(\), readBrowserAccount\(\)\);\s*if \(decision === "refuse"\) clearSession\(\);\s*if \(decision === "fit"\) bindPageAccount\(tokenAccountId\(getSession\(\)\?\.token\)\);/);
+  const signed = between(app, "function handleSignedIn(session) {", "\n  }\n");
+  assert.ok(signed.indexOf("bindPageAccount(tokenAccountId(session?.token));") > 0 && signed.indexOf("bindPageAccount(") < signed.indexOf("setIsAuthed(true)"), "sign-in binds first");
+  const check = between(app, "if (accountCheck !== \"checking\") return;", "}, [accountCheck]);");
+  assert.ok(check.indexOf("bindPageAccount(tokenAccountId(getSession()?.token));") > 0 && check.indexOf("bindPageAccount(") < check.indexOf("setIsAuthed(true)"), "the check binds first");
+  assert.match(between(app, "function signOutLocal() {", "\n  }\n"), /^function signOutLocal\(\) \{\s*clearSession\(\);\s*bindPageAccount\(null\);/);
+  assert.equal(app.split("setIsAuthed(true)").length - 1, 2, "no other way in");
+  // leaving: stop sending, then reload; told by session.js when a foreign token is asked for
+  assert.match(fold(app), new RegExp(fold(`const leavingRef = useRef(false);
+  function leavePage() {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    isAuthedRef.current = false;
+    window.location.reload();
+  }`).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(app, /useEffect\(\(\) => \{\s*onForeignSession\(leavePage\);\s*return \(\) => onForeignSession\(null\);\s*\}, \[\]\);/);
+  // the 60-second check leaves too (a storage event can be missed, a cancelled reload must not keep a foreign session)
+  assert.match(app, /const check = \(\) => \{\s*if \(!getSession\(\)\) expireSessionRef\.current\?\.\(\);\s*else if \(pageMustLeave\(\{ authed: isAuthedRef\.current, pageAccount: pageAccountId\(\), token: getSession\(\)\?\.token, stored: readBrowserAccount\(\) \}\)\) leavePage\(\);\s*\};/);
+  // #1/#6: a leaving page neither flushes under the other session nor asks "Reload site?"
+  assert.match(app, /const flushPending = \(\) => \{\s*if \(leavingRef\.current\) return;/);
+  assert.match(app, /const onBeforeUnload = \(e\) => \{\s*if \(leavingRef\.current\) return;\s*flushPending\(\);/);
 });
 
 await test("the account check: a time limit, Sign out while checking, a retry when back online, an expired session said so (r7 #6)", () => {
@@ -159,7 +195,7 @@ await test("unlock and reset name the account everywhere, the Account screen's b
 });
 
 await test("at load: none, fit, check (before anything loads) or refuse, and the check never trusts on failure (r6 #1, #19)", () => {
-  assert.match(app, /const \[bootFit\] = useState\(\(\) => \{\s*const decision = bootSessionDecision\(getSession\(\), readBrowserAccount\(\)\);\s*if \(decision === "refuse"\) clearSession\(\);\s*return decision;\s*\}\);/);
+  assert.match(app, /const \[bootFit\] = useState\(\(\) => \{\s*const decision = bootSessionDecision\(getSession\(\), readBrowserAccount\(\)\);\s*if \(decision === "refuse"\) clearSession\(\);\s*if \(decision === "fit"\) bindPageAccount\(tokenAccountId\(getSession\(\)\?\.token\)\);\s*return decision;\s*\}\);/);
   assert.match(app, /const \[isAuthed, setIsAuthed\] = useState\(bootFit === "fit"\);/);
   assert.match(app, /const \[accountCheck, setAccountCheck\] = useState\(bootFit === "check" \? "checking" : null\);/);
   const eff = between(app, "if (accountCheck !== \"checking\") return;", "}, [accountCheck]);");

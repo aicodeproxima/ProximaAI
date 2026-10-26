@@ -9,7 +9,7 @@ import { draftTask, unitQuote, taskUserSettings, effectivePerModelRes, labelPerM
 import { probeMediaDuration } from "./lib/mediaDuration.js";
 import { submitTask, pollResult, listPredictions, deletePredictions, checkBalance, checkKieBalance, uploadMedia, API_BASE } from "./lib/api.js";
 import { queueDeletes, dropDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds, waitHeldIds } from "./lib/wsDelete.js";
-import { getSession, setSession, clearSession, onSessionExpired } from "./lib/session.js";
+import { getSession, setSession, clearSession, onSessionExpired, bindPageAccount, pageAccountId, onForeignSession } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import VersionInfo from "./lib/VersionInfo.jsx";
 import { downscaleImage } from "./lib/imageUpload.js";
@@ -17,7 +17,7 @@ import { getSetting, hasLocalData, setSetting, cachedProviderKeys, cacheProvider
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { readBrowserAccount, browserAccountDecision, claimBrowser, browserAccountMessage, freeForNewAccount, bootSessionDecision, tokenAccountId,
-  sessionFitsBrowser, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
+  pageMustLeave, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
 import InviteSection from "./components/InviteSection.jsx";
 import { clearSettlement } from "./lib/clearOutcome.js";
 import { SNAPSHOT_SLACK_MS, serverNow } from "./lib/serverClock.js";
@@ -1546,11 +1546,26 @@ export default function ProximaApp() {
   const [bootFit] = useState(() => {
     const decision = bootSessionDecision(getSession(), readBrowserAccount());
     if (decision === "refuse") clearSession();
+    if (decision === "fit") bindPageAccount(tokenAccountId(getSession()?.token));
     return decision;
   });
   const [isAuthed, setIsAuthed] = useState(bootFit === "fit");
   const isAuthedRef = useRef(isAuthed);
   isAuthedRef.current = isAuthed;
+  // Review r8 (#1/#6): a page that must leave (another account's session, or signed out elsewhere) stops sending at once,
+  // skips its unload flush and the "Reload site?" prompt (its writes are in the failed-sync queue and replay under the
+  // right session), and reloads so the load decision runs again.
+  const leavingRef = useRef(false);
+  function leavePage() {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    isAuthedRef.current = false;
+    window.location.reload();
+  }
+  useEffect(() => {
+    onForeignSession(leavePage);
+    return () => onForeignSession(null);
+  }, []);
   const [accountCheck, setAccountCheck] = useState(bootFit === "check" ? "checking" : null);   // "checking" | "failed" | null
   const [sessionRefusal, setSessionRefusal] = useState(() => (bootFit === "refuse"
     ? browserAccountMessage(readBrowserAccount()?.unreadable ? { reason: "unreadable-record" } : { reason: "other-account", other: readBrowserAccount()?.username })
@@ -1563,17 +1578,17 @@ export default function ProximaApp() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  // Review r7 (security #1/#2): another tab signing in or out, or claiming this browser for another account: a tab whose
-  // session no longer fits the record reloads (the load decision runs again) instead of sending one account's work under
-  // the other's session.
+  // Review r7 (security #1/#2), r8 (#4/#14): another tab signing in or out, or claiming this browser for another account
+  // (a null key: its storage was cleared): a signed-in page that is no longer on its own account's session, or whose
+  // session no longer fits the record, leaves instead of sending its work under the other session.
   useEffect(() => {
     const onStorage = (e) => {
-      if (e.key !== "proximaai-session" && e.key !== BROWSER_ACCOUNT_KEY) return;
-      if (isAuthedRef.current && !sessionFitsBrowser(getSession()?.token, readBrowserAccount())) window.location.reload();
+      if (e.key != null && e.key !== "proximaai-session" && e.key !== BROWSER_ACCOUNT_KEY) return;
+      if (pageMustLeave({ authed: isAuthedRef.current, pageAccount: pageAccountId(), token: getSession()?.token, stored: readBrowserAccount() })) leavePage();
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [isAuthed]);
+  }, []);
   function refuseSession(message) { clearSession(); setAccountCheck(null); setSessionRefusal(message); }
   useEffect(() => {
     if (accountCheck !== "checking") return;
@@ -1593,6 +1608,7 @@ export default function ProximaApp() {
         if (!verdict.ok) { refuseSession(browserAccountMessage(verdict)); return; }
         if (verdict.claim && !claimBrowser({ id: a.id, role: a.role, username: a.username })) { refuseSession(browserAccountMessage({ reason: "claim-failed" })); return; }
         setAccountCheck(null);
+        bindPageAccount(tokenAccountId(getSession()?.token));
         setIsAuthed(true);
       } catch {
         if (cancelled) return;
@@ -2138,6 +2154,7 @@ export default function ProximaApp() {
     setSessionNotice("");
     setSessionRefusal("");
     setJoinLink(null);
+    bindPageAccount(tokenAccountId(session?.token));
     setIsAuthed(true);
   }
 
@@ -2153,6 +2170,7 @@ export default function ProximaApp() {
   // resume after the next sign-in, within the 48-hour window).
   function signOutLocal() {
     clearSession();
+    bindPageAccount(null);
     resetDeviceIdCache();
     for (const id of Object.keys(pollRefs.current)) clearTimeout(pollRefs.current[id]);
     pollRefs.current = {};
@@ -2188,7 +2206,11 @@ export default function ProximaApp() {
   }, []);
   useEffect(() => {
     if (!isAuthed) return;
-    const check = () => { if (!getSession()) expireSessionRef.current?.(); };
+    // Review r8 #6: a storage event can be missed, and a cancelled reload must not keep a foreign session: checked here too.
+    const check = () => {
+      if (!getSession()) expireSessionRef.current?.();
+      else if (pageMustLeave({ authed: isAuthedRef.current, pageAccount: pageAccountId(), token: getSession()?.token, stored: readBrowserAccount() })) leavePage();
+    };
     const id = setInterval(check, 60000);
     document.addEventListener("visibilitychange", check);
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", check); };
@@ -2989,6 +3011,7 @@ export default function ProximaApp() {
   // (b) warn the user and rely on the failed-sync queue to replay on next mount.
   useEffect(() => {
     const flushPending = () => {
+      if (leavingRef.current) return;   // review r8 #1: never under another account's session (the queue replays later)
       // 1. Fire any pending task batch immediately
       if (taskSyncTimerRef.current) {
         clearTimeout(taskSyncTimerRef.current);
@@ -3008,6 +3031,7 @@ export default function ProximaApp() {
       if (document.visibilityState === "hidden") flushPending();
     };
     const onBeforeUnload = (e) => {
+      if (leavingRef.current) return;   // review r8 #6: leaving for another session is not "unsaved changes"
       flushPending();
       // If there are still unsaved writes in the failed queue, warn the user
       const failed = getFailedSyncs();
