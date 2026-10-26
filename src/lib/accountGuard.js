@@ -50,6 +50,20 @@ export function pageMustLeave({ authed, pageAccount, token, stored }) {
   return !sessionFitsBrowser(token, stored);
 }
 
+// The account check's next step once get_my_account answered (review r7 #6, r8 #3). `checked`: the token the check asked
+// about; `now`: the token in storage when the answer came; `answer`: the reply (undefined when the call failed or timed
+// out). A sign-in or sign-out in another tab while the check waited wins over the answer: "restart" (the page reloads and
+// decides again) or "expired", so this page never clears or claims for a session it did not check. "drop": the server
+// says the token names no account ('forbidden'). "failed": retryable, never trusted (also an answer about another account
+// than the token names). "decide": ask browserAccountDecision.
+export function accountCheckStep({ checked, now, answer }) {
+  if (typeof now !== "string" || !now) return "expired";
+  if (now !== checked) return "restart";
+  if (answer?.reason === "forbidden" && !answer.ok) return "drop";
+  if (!answer?.ok || typeof answer.id !== "string" || tokenAccountId(now) !== answer.id.toLowerCase()) return "failed";
+  return "decide";
+}
+
 // At page load (review r6 security #1): "none" (no session), "fit" (the record names its account: use it), "check" (no
 // record yet: ask the server whose session it is, and decide with browserAccountDecision BEFORE anything loads or syncs),
 // "refuse" (another account's, or an unreadable record).

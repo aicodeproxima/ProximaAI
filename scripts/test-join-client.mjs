@@ -113,10 +113,22 @@ await test("the page's own account: bound on every way in, cleared at sign-out; 
   assert.match(app, /const onBeforeUnload = \(e\) => \{\s*if \(leavingRef\.current\) return;\s*flushPending\(\);/);
 });
 
+await test("the account check acts only on the session it checked (r8 #3)", () => {
+  const eff = between(app, "if (accountCheck !== \"checking\") return;", "}, [accountCheck]);");
+  assert.match(eff, /const checked = getSession\(\)\?\.token;/);
+  assert.match(eff, /const step = accountCheckStep\(\{ checked, now: getSession\(\)\?\.token, answer \}\);/);
+  assert.match(eff, /if \(step === "restart"\) \{ window\.location\.reload\(\); return; \}/);
+  assert.match(eff, /if \(step === "drop"\) \{ clearSession\(\); setAccountCheck\(null\); setSessionNotice\(SESSION_EXPIRED\); return; \}/);
+  assert.match(eff, /if \(step === "expired"\) \{ setAccountCheck\(null\); setSessionNotice\(SESSION_EXPIRED\); return; \}/);
+  assert.match(eff, /if \(step !== "decide"\) \{ setAccountCheck\("failed"\); return; \}/);
+  const v = eff.indexOf("const verdict = browserAccountDecision("), again = eff.indexOf("if (getSession()?.token !== checked) { window.location.reload(); return; }"), refuse = eff.indexOf("refuseSession(");
+  assert.ok(v > 0 && again > v && refuse > again, `re-checked after the data count, before any refusal or claim: ${v} ${again} ${refuse}`);
+  assert.ok(!/clearSession\(\)/.test(eff.slice(0, eff.indexOf("const step = "))), "nothing cleared before the step");
+});
+
 await test("the account check: a time limit, Sign out while checking, a retry when back online, an expired session said so (r7 #6)", () => {
   const eff = between(app, "if (accountCheck !== \"checking\") return;", "}, [accountCheck]);");
-  assert.match(eff, /const a = await Promise\.race\(\[getMyAccount\(\), new Promise\(\(_, fail\) => setTimeout\(\(\) => fail\(new Error\("timeout"\)\), 15000\)\)\]\);/);
-  assert.match(eff, /if \(!getSession\(\)\) \{ setAccountCheck\(null\); setSessionNotice\(SESSION_EXPIRED\); return; \}/);
+  assert.match(eff, /try \{ answer = await Promise\.race\(\[getMyAccount\(\), new Promise\(\(_, fail\) => setTimeout\(\(\) => fail\(new Error\("timeout"\)\), 15000\)\)\]\); \} catch \{\}/);
   assert.match(app, /if \(accountCheck !== "failed"\) return;\s*const back = \(\) => setAccountCheck\("checking"\);\s*window\.addEventListener\("online", back\);/);
   const screen = between(app, "if (accountCheck) {", "<LoginScreen onSignedIn=");
   assert.equal(screen.split(">Sign out</button>").length - 1, 2, "Sign out on both the checking and the failed screen");
@@ -199,16 +211,14 @@ await test("at load: none, fit, check (before anything loads) or refuse, and the
   assert.match(app, /const \[isAuthed, setIsAuthed\] = useState\(bootFit === "fit"\);/);
   assert.match(app, /const \[accountCheck, setAccountCheck\] = useState\(bootFit === "check" \? "checking" : null\);/);
   const eff = between(app, "if (accountCheck !== \"checking\") return;", "}, [accountCheck]);");
-  const gone = eff.indexOf('if (!getSession()) { setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }');
-  const forbidden = eff.indexOf('if (a?.reason === "forbidden") { clearSession(); setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }');
-  const other = eff.indexOf('if (!a?.ok) { setAccountCheck("failed"); return; }');
+  const stepAt = eff.indexOf("const step = accountCheckStep("), failedAt = eff.indexOf('if (step !== "decide") { setAccountCheck("failed"); return; }');
   const verdictAt = eff.indexOf("const verdict = browserAccountDecision(");
-  assert.ok(gone > 0 && forbidden > gone && other > forbidden && verdictAt > other, `order ${gone} ${forbidden} ${other} ${verdictAt}`);
+  assert.ok(stepAt > 0 && failedAt > stepAt && verdictAt > failedAt, `order ${stepAt} ${failedAt} ${verdictAt}`);
   assert.match(eff, /const verdict = browserAccountDecision\(\{ stored: readBrowserAccount\(\), hasLocalData: await hasLocalData\(\), account: \{ id: a\.id, role: a\.role, username: a\.username \} \}\);/);
   assert.match(eff, /if \(!verdict\.ok\) \{ refuseSession\(browserAccountMessage\(verdict\)\); return; \}/);
   assert.match(eff, /if \(verdict\.claim && !claimBrowser\(\{ id: a\.id, role: a\.role, username: a\.username \}\)\) \{ refuseSession\(browserAccountMessage\(\{ reason: "claim-failed" \}\)\); return; \}/);
   assert.ok(eff.indexOf("setIsAuthed(true)") > eff.indexOf("claimBrowser("), "signed in only after the claim");
-  assert.match(eff, /\} catch \{\s*if \(cancelled\) return;\s*if \(!getSession\(\)\) \{ setAccountCheck\(null\); setSessionNotice\(SESSION_EXPIRED\); return; \}\s*setAccountCheck\("failed"\);\s*\}/);
+  assert.match(eff, /\} catch \{ if \(!cancelled\) setAccountCheck\("failed"\); \}\s*\}\)\(\);/);
   assert.ok(!/if \(!isAuthed \|\| readBrowserAccount\(\)\) return;/.test(app), "the old after-load claim is gone (the check runs before)");
   assert.match(app, /if \(accountCheck\) \{/);
 });

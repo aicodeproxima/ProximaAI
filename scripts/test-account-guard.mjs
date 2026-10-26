@@ -137,5 +137,26 @@ await test("a browser free for a new account (join): no record and no local data
   assert.equal(G.freeForNewAccount({ stored: { id: owner.id }, hasLocalData: false }), false);
 });
 
+// Review r8 #3: the account check acts only on the session it checked. A sign-in or sign-out in another tab while the
+// check waited wins over the answer: the page starts again ("restart") or says the session ended; it never clears or
+// claims for a session it did not check. A failure or timeout stays retryable; only the server's 'forbidden' (the token
+// names no account) drops the session; an answer about another account than the token names is never trusted.
+await test("accountCheckStep: the next step of the account check, on the session it checked", () => {
+  const T = `u:${owner.id}.9999999999.sig`, T2 = `u:${owner.id}.9999999999.sig2`, OTHER = "u:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.9999999999.s";
+  const step = (o) => G.accountCheckStep({ checked: T, now: T, answer: { ok: true, id: owner.id }, ...o });
+  assert.equal(step({}), "decide");
+  assert.equal(step({ answer: { ok: true, id: owner.id.toUpperCase() } }), "decide", "case does not matter");
+  assert.equal(step({ now: null }), "expired", "signed out, or the token was refused and dropped");
+  assert.equal(step({ now: T2 }), "restart", "another tab signed in meanwhile (even the same account): decide again");
+  assert.equal(step({ now: OTHER }), "restart");
+  assert.equal(step({ now: OTHER, answer: { ok: false, reason: "forbidden" } }), "restart", "a late 'forbidden' never clears a newer session");
+  assert.equal(step({ answer: undefined }), "failed", "the call failed or timed out");
+  assert.equal(step({ answer: null }), "failed");
+  assert.equal(step({ answer: { ok: false, reason: "forbidden" } }), "drop");
+  assert.equal(step({ answer: { ok: false, reason: "throttled" } }), "failed", "any other answer stays retryable");
+  assert.equal(step({ answer: { ok: true, id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" } }), "failed", "an answer about another account is not trusted");
+  assert.equal(step({ answer: { ok: true } }), "failed");
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

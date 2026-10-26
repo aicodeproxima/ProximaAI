@@ -17,7 +17,7 @@ import { getSetting, hasLocalData, setSetting, cachedProviderKeys, cacheProvider
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { readBrowserAccount, browserAccountDecision, claimBrowser, browserAccountMessage, freeForNewAccount, bootSessionDecision, tokenAccountId,
-  pageMustLeave, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
+  pageMustLeave, accountCheckStep, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
 import InviteSection from "./components/InviteSection.jsx";
 import { clearSettlement } from "./lib/clearOutcome.js";
 import { SNAPSHOT_SLACK_MS, serverNow } from "./lib/serverClock.js";
@@ -1593,28 +1593,30 @@ export default function ProximaApp() {
   useEffect(() => {
     if (accountCheck !== "checking") return;
     let cancelled = false;
+    const checked = getSession()?.token;
     (async () => {
+      // Review r7 #6: a time limit (a stalled connection would otherwise hold this screen for minutes). Review r8 #3: the
+      // answer is acted on only for the session it was asked about (accountGuard.js accountCheckStep): another tab's
+      // sign-in or sign-out meanwhile starts the page again; only the server's 'forbidden' drops the session.
+      let answer;
+      try { answer = await Promise.race([getMyAccount(), new Promise((_, fail) => setTimeout(() => fail(new Error("timeout")), 15000))]); } catch {}
+      if (cancelled) return;
+      const step = accountCheckStep({ checked, now: getSession()?.token, answer });
+      if (step === "restart") { window.location.reload(); return; }
+      if (step === "expired") { setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
+      if (step === "drop") { clearSession(); setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
+      if (step !== "decide") { setAccountCheck("failed"); return; }
       try {
-        // Review r7 #6: a time limit (a stalled connection would otherwise hold this screen for minutes); a token the
-        // server rejected (sessionRpc dropped it) or that names no account (get_my_account's only ok:false, 'forbidden')
-        // ends in sign-in with the reason; any other answer stays retryable.
-        const a = await Promise.race([getMyAccount(), new Promise((_, fail) => setTimeout(() => fail(new Error("timeout")), 15000))]);
-        if (cancelled) return;
-        if (!getSession()) { setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
-        if (a?.reason === "forbidden") { clearSession(); setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
-        if (!a?.ok) { setAccountCheck("failed"); return; }
+        const a = answer;
         const verdict = browserAccountDecision({ stored: readBrowserAccount(), hasLocalData: await hasLocalData(), account: { id: a.id, role: a.role, username: a.username } });
         if (cancelled) return;
+        if (getSession()?.token !== checked) { window.location.reload(); return; }   // changed while the data was counted
         if (!verdict.ok) { refuseSession(browserAccountMessage(verdict)); return; }
         if (verdict.claim && !claimBrowser({ id: a.id, role: a.role, username: a.username })) { refuseSession(browserAccountMessage({ reason: "claim-failed" })); return; }
         setAccountCheck(null);
         bindPageAccount(tokenAccountId(getSession()?.token));
         setIsAuthed(true);
-      } catch {
-        if (cancelled) return;
-        if (!getSession()) { setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
-        setAccountCheck("failed");
-      }
+      } catch { if (!cancelled) setAccountCheck("failed"); }
     })();
     return () => { cancelled = true; };
   }, [accountCheck]);
