@@ -399,6 +399,40 @@ export async function getStorageStats() {
   } catch { return { tasks: 0, history: 0, favorites: 0, usedMB: null }; }
 }
 
+// Second account S5 (src/lib/accountGuard.js): does this browser hold an account's data? Its generations, History and
+// favorites (IndexedDB), and every queue or record of its work kept in localStorage (review r6 security #2): the failed-sync
+// queue read raw, the WaveSpeed and file delete queues, held purges, relinks, the delete records, clear stashes, a form's
+// held paths, cached key fingerprints. Per-browser settings (theme, ids, clocks) do not count. Anything unreadable answers
+// true: the guard then refuses an account it cannot prove the data is not another's. `storeCount` (tests): rows in a store.
+const accountDataKeys = () => [FAILED_KEY, "proximaai-ws-deletes", "proximaai-file-deletes", "proximaai-held-purges-v3", "proximaai-held-purges-v2",
+  "proximaai-held-purges", "proximaai-relinks", "proximaai-orphan-claimants", "proximaai-history-resync", "proximaai-released-predictions",
+  "proximaai-final-confirms", "proximaai-confirmed-deletes", "proximaai-confirmed-queued", "proximaai-confirmed-seqs", "proximaai-assumed-confirms",
+  "proximaai-flights", "proximaai-deletes-in-flight", "proximaai-voided-at", "proximaai-logs"];
+const ACCOUNT_DATA_PREFIXES = ["proximaai-clear-stash:", "proximaai-provider-keys:"];
+const emptyValue = (raw) => raw == null || /^\s*(\[\s*\]|\{\s*\}|null|""|)\s*$/.test(raw);
+const storeRows = async (name) => wrapRequest((await tx(name)).count());
+export async function hasLocalData({ storeCount = storeRows, migrate = migrateFromLocalStorage } = {}) {
+  // Review r7 (security #4): the pre-rename 'prism' database is imported first (local only; once per browser), as the first
+  // load after sign-in would, so its data counts like any other.
+  try { await migrate(); } catch { return true; }
+  try {
+    for (const k of accountDataKeys()) if (!emptyValue(localStorage.getItem(k))) return true;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (ACCOUNT_DATA_PREFIXES.some(p => k.startsWith(p)) && !emptyValue(localStorage.getItem(k))) return true;
+      if (k.startsWith(FORM_KEY)) {
+        let paths; try { paths = JSON.parse(localStorage.getItem(k))?.paths; } catch { return true; }
+        if (!Array.isArray(paths) || paths.length) return true;
+      }
+    }
+  } catch { return true; }
+  try {
+    for (const name of ["tasks", "history", "favorites"]) if (await storeCount(name)) return true;
+    return false;
+  } catch { return true; }
+}
+
 // ─── Migration from localStorage + old "prism" DB ───
 
 // Helper: read all data from an old IndexedDB store

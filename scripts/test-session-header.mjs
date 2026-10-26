@@ -47,15 +47,17 @@ await test("signed in: Storage requests carry the token, and a file body is pass
   assert.equal(calls[0].init.body, file);
 });
 
-await test("x-client-info keeps its value and gains the marker the edge logs show: sess/1 signed in, sess/0 out", async () => {
+// Second account S5: every request also says this build keeps one account per browser (proxima-guard/1), the sign-in call
+// above all (verify_admin refuses a member without it: migration 20261026600000).
+await test("x-client-info keeps its value and gains the markers the edge logs show: sess/1 signed in, sess/0 out, the guard mark", async () => {
   setSession({ token: "tok-1", expires_at: EXP, username: "owner" });
   await wrapped(`${BASE}/rest/v1/tasks`, sbInit());
-  assert.equal(hdr(0).get("x-client-info"), "postgrest-js/0.0.0-automated proxima-rls/1 sess/1");
+  assert.equal(hdr(0).get("x-client-info"), "postgrest-js/0.0.0-automated proxima-rls/1 sess/1 proxima-guard/1");
   await wrapped(`${BASE}/storage/v1/object/list/generations`, { method: "POST", headers: { apikey: "pk" } });
-  assert.equal(hdr(1).get("x-client-info"), "proxima-rls/1 sess/1");
+  assert.equal(hdr(1).get("x-client-info"), "proxima-rls/1 sess/1 proxima-guard/1");
   clearSession();
   await wrapped(`${BASE}/rest/v1/rpc/verify_admin`, sbInit());
-  assert.equal(hdr(2).get("x-client-info"), "postgrest-js/0.0.0-automated proxima-rls/1 sess/0");
+  assert.equal(hdr(2).get("x-client-info"), "postgrest-js/0.0.0-automated proxima-rls/1 sess/0 proxima-guard/1");
 });
 
 await test("the token is read per request: sign-in, rename and sign-out apply at once", async () => {

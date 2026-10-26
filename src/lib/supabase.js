@@ -846,12 +846,45 @@ export async function signIn(username, password) {
   return data || { ok: false, reason: "invalid" };
 }
 
-export async function unlockWithBackupCode(code, newPassword = null) {
+// Always by name (every account, members included: P1's unlock_with_backup_code). The legacy owner-only call is never made
+// (review r7 #3: it acts on the owner's row whoever calls it; older builds are refused it by 20261026600000).
+export async function unlockWithBackupCode(code, newPassword = null, username = "") {
+  if (!username) throw new Error("Enter your username");
   await initSupabase();
   if (!supabase) throw new Error("Cloud not configured");
-  const { data, error } = await supabase.rpc("unlock_admin_with_backup_code", { p_code: code, p_new_password: newPassword || null });
+  const { data, error } = await supabase.rpc("unlock_with_backup_code", { p_username: username, p_code: code, p_new_password: newPassword || null });
   if (error) throw error;
   return data || { ok: false, reason: "invalid" };
+}
+
+// ─── Invites (supabase/migrations/20261026500000_mu_p5_invites.sql; docs/SECOND-ACCOUNT-PLAN.md K7) ───
+// A function the server does not have yet (the migration not applied) answers like the closed members switch.
+const notOnServer = (err) => err?.code === "PGRST202" || /could not find the function/i.test(err?.message || "");
+
+// Anyone, before a session exists: a member account from an invite. The server's answer as is ({ ok, token, expires_at,
+// username, account_id, role, scope, backup_code } or { ok:false, reason }); throws only when the server can't be reached.
+export async function joinWithInvite(code, username, password) {
+  await initSupabase();
+  if (!supabase) throw new Error("Cloud not configured");
+  const { data, error } = await supabase.rpc("join_with_invite", { p_code: code, p_username: username, p_password: password });
+  if (error) { if (notOnServer(error)) return { ok: false, reason: "closed" }; throw error; }
+  return data || { ok: false, reason: "invalid" };
+}
+
+// The owner (password re-checked): { ok, code, expires_at } once, or { ok:false, reason }.
+export async function createInvite(currentPassword) {
+  try { return await sessionRpc("create_invite", { p_current_password: currentPassword }); }
+  catch (err) { if (notOnServer(err)) return { ok: false, reason: "closed" }; throw err; }
+}
+
+// The owner's invites (state only): { ok, invites: [{ id, created_at, expires_at, state, used_at, used_by_username }] }.
+export async function listMyInvites() {
+  try { return await sessionRpc("list_my_invites"); }
+  catch (err) { if (notOnServer(err)) return { ok: true, invites: [] }; throw err; }
+}
+
+export async function revokeInvite(id) {
+  return sessionRpc("revoke_invite", { p_invite_id: id });
 }
 
 // A token-checked no-op. Throws (and signs this device out) once the server stops accepting the session —

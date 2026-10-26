@@ -995,7 +995,9 @@ export class Page {
     }
   }
   // ─── App.jsx 3361-3390 the forms' holds publication (task B13c): this page's form, every tab's key, and the paths this
-  // browser's queued, not yet uploaded rows use (storage.js unsentUploadPaths), published when they change ───
+  // browser's queued, not yet uploaded rows use (storage.js unsentUploadPaths), published when they change. App.jsx sends
+  // nothing to the cloud before the account is confirmed (isAuthedRef, second account S5 review r7 #8); every simulated
+  // page is signed in, so that guard is always open here and is not modelled. ───
   async publishForms() {
     const S = this.S;
     S.publishFormPaths([...P.pathsInUse([{ sourceImageUrl: this.formInput }])]);

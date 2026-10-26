@@ -29,6 +29,9 @@ export function sessionToken() {
 // the marker "proxima-rls/1 sess/1|0" shows per device what was sent.
 export const SESSION_HEADER = "x-proxima-session";
 export const RLS_MARK = "proxima-rls/1";
+// This build keeps one account's data per browser (src/lib/accountGuard.js): a member signs in only from such a build
+// (verify_admin, migration 20261026600000).
+export const GUARD_MARK = "proxima-guard/1";
 const urlOf = (input) => (typeof input === "string" ? input : input instanceof URL ? input.href : input?.url || "");
 export function withSessionHeader(baseFetch, { baseUrl = "", getToken = sessionToken } = {}) {
   const root = String(baseUrl).replace(/\/+$/, "");
@@ -46,7 +49,7 @@ export function withSessionHeader(baseFetch, { baseUrl = "", getToken = sessionT
     const own = init?.headers ?? (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined);
     const headers = new Headers(own);
     if (token) headers.set(SESSION_HEADER, token); else headers.delete(SESSION_HEADER);
-    headers.set("x-client-info", [headers.get("x-client-info"), `${RLS_MARK} sess/${token ? 1 : 0}`].filter(Boolean).join(" "));
+    headers.set("x-client-info", [headers.get("x-client-info"), `${RLS_MARK} sess/${token ? 1 : 0} ${GUARD_MARK}`].filter(Boolean).join(" "));
     return baseFetch(input, { ...init, headers });   // body passed by reference: a 50 MB upload is never copied
   };
 }

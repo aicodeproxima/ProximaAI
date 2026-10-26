@@ -109,7 +109,7 @@ await test("#2 wiring: one publishUnsent for the timer, pagehide and the hidden 
   const eff = between("// This tab's Generate form inputs, published for every tab's file flush", "const mediaDuration = url =>");
   assert.match(eff, /publishUnsent\(\);/);
   assert.match(eff, /publishUnsent\(\{ exiting: true \}\);/);
-  assert.match(eff, /document\.visibilityState === "hidden"\) publishUnsent\(\);/);
+  assert.match(eff, /document\.visibilityState === "hidden" && isAuthedRef\.current\) publishUnsent\(\);/);   // r7 #8: signed in only
   assert.ok(!/cloudUnsentPubRef/.test(src), "the component ref is gone (module-level state: the senders share it)");
 });
 

@@ -33,6 +33,8 @@ export function signInSwitchesToUnlock(r) {
 // sign_in answer -> one message. Every failure except the network limit (and the old server's `locked`) reads the same.
 export function signInError(r) {
   if (r?.reason === "throttled") return throttledText(r.retry_after);
+  // A member signing in from a build older than one-account-per-browser (migration 20261026600000).
+  if (r?.reason === "update_required") return "This page is out of date. Reload it, then sign in again.";
   if (signInSwitchesToUnlock(r)) return SIGNIN_LOCKED_OLD;
   return SIGNIN_FAILED;
 }
@@ -50,6 +52,42 @@ export function backupCodeError(r) {
   if (r?.reason === "backup_locked") return backupLockedText(r.retry_after);
   if (r?.reason === "weak_password") return "New password must be at least 8 characters";
   return BACKUP_CODE_FAILED;
+}
+
+// join_with_invite answer -> one message (supabase/migrations/20261026500000_mu_p5_invites.sql). Every code that doesn't
+// work (unknown, used, expired, revoked) reads the same, as the server answers.
+export function joinError(r) {
+  if (r?.reason === "closed") return "Joining isn't open yet. Ask the person who invited you when to try again.";
+  if (r?.reason === "invalid_username") return "Choose a name of 2 to 64 letters, digits, - or _ (no spaces or other characters).";
+  if (r?.reason === "weak_password") return "Use a password of at least 8 characters.";
+  if (r?.reason === "username_taken") return "That name is taken. Choose another one (after 5 taken names this invite stops working).";
+  if (r?.reason === "throttled") return throttledText(r.retry_after);
+  return "That invite code doesn't work. It may be mistyped, used, expired or revoked.";
+}
+
+// The join screen after a network failure (the server may have made the account before the answer was lost), and after a
+// dead-code answer that follows one.
+export const JOIN_MAYBE_CREATED = "If your account was created, sign in with the name and password you chose. If you didn't see your backup code, set a new one in Settings → Account.";
+
+export const SESSION_EXPIRED = "Your session expired — sign in again.";
+
+// Sign-in after a join whose page was lost before CONTINUE (the account exists; review r7 #7).
+export function joinedNote(name) {
+  return `Your account ${name} was created. Sign in with the password you chose. If you didn't save your backup code, set a new one in Settings → Account.`;
+}
+
+// A copy to the clipboard that the browser refused or cannot do (no clipboard in this context).
+export const COPY_BY_HAND = "Couldn't copy. Select it and copy it by hand.";
+
+// The join screen on a browser that already holds an account's data (src/lib/accountGuard.js).
+export const JOIN_BROWSER_TAKEN = "This browser keeps another account's generations. Open your invite in a private window or on your own device to make your account.";
+
+// create_invite answer -> one message (the owner's Settings).
+export function inviteError(r) {
+  if (r?.reason === "closed") return "Member accounts are not switched on yet, so invites can't be made.";
+  if (r?.reason === "too_many") return "You have 5 open invites. Revoke one before making another.";
+  if (r?.reason === "forbidden") return "Only the owner can invite people.";
+  return accountError(r, "Couldn't make the invite. Try again.");
 }
 
 // Password-checked account RPCs (rename, change password, set backup code) for the signed-in account.

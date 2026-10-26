@@ -13,12 +13,15 @@ import { getSession, setSession, clearSession, onSessionExpired } from "./lib/se
 import useUpdateAvailable from "./lib/updateCheck.js";
 import VersionInfo from "./lib/VersionInfo.jsx";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, advanceFormStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
+import { getSetting, hasLocalData, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, advanceFormStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
-import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
+import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
+import { readBrowserAccount, browserAccountDecision, claimBrowser, browserAccountMessage, freeForNewAccount, bootSessionDecision, tokenAccountId,
+  sessionFitsBrowser, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
+import InviteSection from "./components/InviteSection.jsx";
 import { clearSettlement } from "./lib/clearOutcome.js";
 import { SNAPSHOT_SLACK_MS, serverNow } from "./lib/serverClock.js";
-import { initSupabase, isSupabaseConfigured, pullSettings, pullRestoreAt, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry as rawSyncHistoryEntry, syncTask as rawSyncTask, syncTasksBatch as rawSyncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch as rawSyncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, serverTimeRemote, deleteHistoryRemote, upsertQueuedHistory as rawUpsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, myProviderKeys, saveProviderKey, clearProviderKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds, taskRowsPresentRemote } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, pullSettings, pullRestoreAt, joinWithInvite, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry as rawSyncHistoryEntry, syncTask as rawSyncTask, syncTasksBatch as rawSyncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch as rawSyncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, serverTimeRemote, deleteHistoryRemote, upsertQueuedHistory as rawUpsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, myProviderKeys, saveProviderKey, clearProviderKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds, taskRowsPresentRemote } from "./lib/supabase.js";
 import { planDeleteStage, ownedPaths, publicUrlOf, pathsInUse, relinkHold, elsewherePurge, entriesWithout } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue, sameFormSet, liveUnsent } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -175,18 +178,54 @@ const loginBlur = e => { e.target.style.borderColor = "rgba(99,102,241,0.15)"; e
 const maskedCodeStyle = (shown) => (shown ? {} : { WebkitTextSecurity: "disc" });
 const visuallyHidden = { position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 };
 
-function LoginScreen({ onSignedIn, notice = "" }) {
-  const [mode, setMode] = useState("signin"); // "signin" | "reset" (forgot password) | "unlock" (locked out)
+// Second account S4 (review r6 #4/#8): an invite link (#join, or #join=<code>) is taken by the app, at load and on a hash
+// change, wherever the app is, and removed from the address at once. Returns { code } or null.
+function takeJoinHash() {
+  const m = /^#join(?:=([^&]*))?(?:&.*)?$/i.exec(window.location.hash || "");
+  if (!m) return null;
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  let code = "";
+  if (m[1]) { try { code = decodeURIComponent(m[1]); } catch { code = m[1]; } }
+  return { code };
+}
+
+function LoginScreen({ onSignedIn, notice = "", refusal = "", joinLink = null }) {
+  const [mode, setMode] = useState("signin"); // "signin" | "reset" (forgot password) | "unlock" (locked out) | "join" (invite)
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [backupCode, setBackupCode] = useState("");
   const [showCode, setShowCode] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(refusal);   // review r6 #10: a refusal reads as an error, not a success notice
   const [info, setInfo] = useState(notice);
   const [loading, setLoading] = useState(false);
+  const [inviteCode, setInviteCode] = useState("");
+  const [joined, setJoined] = useState(null);   // { backupCode, claimed, session }: the new account's code, shown once before sign-in
+  const [savedCode, setSavedCode] = useState(false);
+  const [joinNetFailed, setJoinNetFailed] = useState(false);   // a join's answer was lost: the account may exist (review r6 #7)
   const font = `'JetBrains Mono', 'Fira Code', monospace`;
+
+  // Second account S4: an invite link (taken by the app, takeJoinHash) opens the join form, its code filled in when the link
+  // carries one. Review r6 #7: an account made here whose page was lost before CONTINUE opens sign-in with its name.
+  useEffect(() => {
+    if (!joinLink) return;
+    setMode("join"); setError("");
+    if (joinLink.code) setInviteCode(joinLink.code);
+  }, [joinLink]);
+  useEffect(() => {
+    const note = readJoinedNote();
+    if (note && !joinLink) { setUsername(note); setInfo(joinedNote(note)); }
+  }, []);
+  // Review r6 #11: the join form says at once when this browser already holds an account's data.
+  useEffect(() => {
+    if (mode !== "join" || joined) return;
+    let cancelled = false;
+    (async () => {
+      if (!freeForNewAccount({ stored: readBrowserAccount(), hasLocalData: await hasLocalData() }) && !cancelled) setError(JOIN_BROWSER_TAKEN);
+    })();
+    return () => { cancelled = true; };
+  }, [mode, joined]);
   const fontBody = `'DM Sans', 'Segoe UI', sans-serif`;
 
   // Secrets never outlive the attempt or the mode they were typed in.
@@ -199,7 +238,15 @@ function LoginScreen({ onSignedIn, notice = "" }) {
     setLoading(true); setError(""); setInfo("");
     try {
       const r = await signIn(username.trim(), password);
-      if (r.ok) { clearSecrets(); onSignedIn({ token: r.token, expires_at: r.expires_at, username: r.username }); return; }
+      if (r.ok) {
+        // Second account S5 (src/lib/accountGuard.js): this browser's data belongs to one account; another one is refused
+        // here, before its session is kept.
+        const verdict = browserAccountDecision({ stored: readBrowserAccount(), hasLocalData: await hasLocalData(), account: { id: r.account_id, role: r.role, username: r.username } });
+        if (!verdict.ok) { clearSecrets(); setError(browserAccountMessage(verdict)); return; }
+        if (verdict.claim && !claimBrowser({ id: r.account_id, role: r.role, username: r.username })) { clearSecrets(); setError(browserAccountMessage({ reason: "claim-failed" })); return; }
+        forgetJoinedNote();
+        clearSecrets(); onSignedIn({ token: r.token, expires_at: r.expires_at, username: r.username }); return;
+      }
       setPassword("");
       // attempts_left / not_provisioned are never shown. Only the OLD server (before M1) answers `locked`: switch to
       // unlock mode with its message (design §5); the new server's answers are generic.
@@ -212,15 +259,39 @@ function LoginScreen({ onSignedIn, notice = "" }) {
     }
   }
 
+  // Second account S4: a member account from an invite (supabase/migrations/20261026500000_mu_p5_invites.sql). Only from a
+  // browser no account's data is in (S5); the backup code is shown once, and the session kept only after it was saved.
+  async function handleJoin(e) {
+    e.preventDefault();
+    if (!inviteCode.trim() || !username.trim() || !password || loading) return;
+    if (password.length < 8) { setError(joinError({ reason: "weak_password" })); return; }
+    if (password !== confirmPassword) { setError("Passwords don't match"); return; }
+    setLoading(true); setError(""); setInfo("");
+    try {
+      if (!freeForNewAccount({ stored: readBrowserAccount(), hasLocalData: await hasLocalData() })) { setError(JOIN_BROWSER_TAKEN); return; }
+      const r = await joinWithInvite(inviteCode.trim(), username.trim(), password);
+      if (!r?.ok) { setPassword(""); setConfirmPassword(""); setError(joinNetFailed && r?.reason === "invalid" ? `${joinError(r)} ${JOIN_MAYBE_CREATED}` : joinError(r)); return; }
+      const claimed = claimBrowser({ id: r.account_id, role: "member", username: r.username });
+      rememberJoinedNote(r.username);
+      setPassword(""); setConfirmPassword(""); setInviteCode(""); setSavedCode(false);
+      setJoined({ backupCode: r.backup_code, claimed, session: { token: r.token, expires_at: r.expires_at, username: r.username } });
+    } catch {
+      setJoinNetFailed(true);
+      setError(`${OFFLINE} ${JOIN_MAYBE_CREATED}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleBackupCode(e) {
     e.preventDefault();
-    if (!backupCode.trim() || loading) return;
+    if (!username.trim() || !backupCode.trim() || loading) return;
     const resetting = mode === "reset";
     if (resetting && newPassword.length < 8) { setError("New password must be at least 8 characters"); return; }
     if (resetting && newPassword !== confirmPassword) { setError("New passwords don't match"); return; }
     setLoading(true); setError(""); setInfo("");
     try {
-      const r = await unlockWithBackupCode(backupCode.trim(), resetting ? newPassword : null);
+      const r = await unlockWithBackupCode(backupCode.trim(), resetting ? newPassword : null, username.trim());
       if (r.ok) {
         switchMode("signin");
         setInfo(r.password_changed
@@ -239,7 +310,8 @@ function LoginScreen({ onSignedIn, notice = "" }) {
 
   const labelStyle = { display: "block", fontSize: 11, color: "#94a3b8", fontFamily: font, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 };
   const canSubmit = !loading && (mode === "signin" ? (username.trim() && password)
-    : mode === "reset" ? (backupCode.trim() && newPassword && confirmPassword) : backupCode.trim());
+    : mode === "join" ? (inviteCode.trim() && username.trim() && password && confirmPassword)
+    : mode === "reset" ? (username.trim() && backupCode.trim() && newPassword && confirmPassword) : (username.trim() && backupCode.trim()));
   const buttonStyle = {
     width: "100%", padding: "14px", border: "none", borderRadius: 12,
     fontFamily: font, fontSize: 14, fontWeight: 700, letterSpacing: 0.5,
@@ -251,12 +323,17 @@ function LoginScreen({ onSignedIn, notice = "" }) {
     marginTop: 4, minHeight: 44,
   };
   const linkStyle = { background: "transparent", border: "none", color: "#818cf8", fontFamily: font, fontSize: 12, cursor: "pointer", padding: "10px 4px", minHeight: 44 };
-  const subtitle = mode === "signin" ? "PARALLEL AI GENERATION COCKPIT" : mode === "reset" ? "RESET PASSWORD WITH BACKUP CODE" : "UNLOCK WITH BACKUP CODE";
-  const submitLabel = loading ? "CHECKING…" : mode === "signin" ? "SIGN IN" : mode === "reset" ? "RESET PASSWORD" : "UNLOCK";
+  const subtitle = joined ? "YOUR ACCOUNT IS READY" : mode === "signin" ? "PARALLEL AI GENERATION COCKPIT" : mode === "join" ? "JOIN WITH AN INVITE" : mode === "reset" ? "RESET PASSWORD WITH BACKUP CODE" : "UNLOCK WITH BACKUP CODE";
+  const submitLabel = loading ? "CHECKING…" : mode === "signin" ? "SIGN IN" : mode === "join" ? "CREATE ACCOUNT" : mode === "reset" ? "RESET PASSWORD" : "UNLOCK";
+  const canContinue = !!(savedCode && joined?.claimed);
+  const continueStyle = { ...buttonStyle, cursor: canContinue ? "pointer" : "not-allowed",
+    background: canContinue ? "linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa)" : "rgba(30,41,59,0.3)",
+    boxShadow: canContinue ? "0 4px 20px rgba(99,102,241,0.35)" : "none" };
 
   return (
-    <div style={{ width: "100%", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, boxSizing: "border-box" }}>
-      <form onSubmit={mode === "signin" ? handleSignIn : handleBackupCode} style={{
+    <div style={{ width: "100%", height: "100vh", overflowY: "auto", display: "flex", padding: 20, boxSizing: "border-box" }}>
+      <form onSubmit={joined ? (e => e.preventDefault()) : mode === "signin" ? handleSignIn : mode === "join" ? handleJoin : handleBackupCode} style={{
+        margin: "auto",
         background: "rgba(8,12,25,0.6)",
         border: "1px solid rgba(99,102,241,0.2)",
         borderRadius: 18,
@@ -275,8 +352,50 @@ function LoginScreen({ onSignedIn, notice = "" }) {
           <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontFamily: font, letterSpacing: 0.5 }}>{subtitle}</div>
         </div>
 
+        {joined ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <div style={labelStyle}>Your backup code (shown once)</div>
+              <div style={{ fontFamily: font, fontSize: 18, letterSpacing: 1, wordBreak: "break-all", userSelect: "all", padding: "12px 14px", border: "1px solid rgba(99,102,241,0.4)", borderRadius: 10, background: "rgba(15,23,42,0.6)", color: "#f1f5f9" }}>{joined.backupCode}</div>
+              <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 8, lineHeight: 1.5 }}>It unlocks your account if you forget your password or get locked out. Write it down or keep it in a password manager: it is not shown again.</div>
+            </div>
+            <button type="button" style={linkStyle} onClick={() => {
+              if (!navigator.clipboard?.writeText) { setInfo(""); setError(COPY_BY_HAND); return; }
+              navigator.clipboard.writeText(joined.backupCode).then(() => { setError(""); setInfo("Copied."); }, () => { setInfo(""); setError(COPY_BY_HAND); });
+            }}>Copy code</button>
+            {info && <div role="status" style={{ fontSize: 12, color: "#22c55e", fontFamily: font }}>✓ {info}</div>}
+            {error && <div role="alert" style={{ fontSize: 12, color: "#ef4444", fontFamily: font }}>✗ {error}</div>}
+            {!joined.claimed && <div role="alert" style={{ fontSize: 12, color: "#ef4444", fontFamily: font, lineHeight: 1.5 }}>✗ {browserAccountMessage({ reason: "claim-failed" })}</div>}
+            <label style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 13, minHeight: 44, cursor: "pointer" }}>
+              <input type="checkbox" checked={savedCode} onChange={e => setSavedCode(e.target.checked)} style={{ width: 20, height: 20 }} />
+              I saved my backup code
+            </label>
+            <button type="button" disabled={!savedCode || !joined.claimed} style={continueStyle} onClick={() => { const s = joined.session; forgetJoinedNote(); setJoined(null); clearSecrets(); onSignedIn(s); }}>CONTINUE</button>
+          </div>
+        ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {mode === "signin" ? (<>
+          {mode === "join" ? (<>
+            <div>
+              <label htmlFor="join-code" style={labelStyle}>Invite code</label>
+              <input id="join-code" type="text" value={inviteCode} onChange={e => { setInviteCode(e.target.value); setError(""); }}
+                autoFocus autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+            </div>
+            <div>
+              <label htmlFor="join-username" style={labelStyle}>Choose a username</label>
+              <input id="join-username" type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
+                autoComplete="username" autoCapitalize="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+            </div>
+            <div>
+              <label htmlFor="join-password" style={labelStyle}>Choose a password (8+ characters)</label>
+              <input id="join-password" type="password" value={password} onChange={e => { setPassword(e.target.value); setError(""); }}
+                autoComplete="new-password" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+            </div>
+            <div>
+              <label htmlFor="join-confirm" style={labelStyle}>Confirm password</label>
+              <input id="join-confirm" type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setError(""); }}
+                autoComplete="new-password" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+            </div>
+          </>) : mode === "signin" ? (<>
             <div>
               <label htmlFor="login-username" style={labelStyle}>Username</label>
               <input id="login-username" type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
@@ -288,7 +407,7 @@ function LoginScreen({ onSignedIn, notice = "" }) {
                 autoComplete="current-password" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
           </>) : (<>
-            {mode === "reset" && (
+            {(mode === "reset" || mode === "unlock") && (
               <div>
                 <label htmlFor="login-reset-username" style={labelStyle}>Username</label>
                 <input id="login-reset-username" type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
@@ -332,12 +451,13 @@ function LoginScreen({ onSignedIn, notice = "" }) {
           {mode === "signin" && (
             <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: font, textAlign: "center", lineHeight: 1.5 }}>{SIGNIN_HINT}</div>
           )}
-          {mode === "signin" ? (
+          {mode === "signin" ? (<>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <button type="button" style={linkStyle} onClick={() => switchMode("reset")}>Forgot password?</button>
               <button type="button" style={linkStyle} onClick={() => switchMode("unlock")}>Locked out?</button>
             </div>
-          ) : mode === "unlock" ? (
+            <button type="button" style={linkStyle} onClick={() => switchMode("join")}>Have an invite? Join</button>
+          </>) : mode === "unlock" ? (
             // Locked out because the password is forgotten: the reset path must be one tap away from here.
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <button type="button" style={linkStyle} onClick={() => switchMode("signin")}>← Sign in</button>
@@ -347,6 +467,7 @@ function LoginScreen({ onSignedIn, notice = "" }) {
             <button type="button" style={linkStyle} onClick={() => switchMode("signin")}>← Back to sign in</button>
           )}
         </div>
+        )}
 
         <div style={{ textAlign: "center", marginTop: 16, fontSize: 10, color: "#64748b", fontFamily: font, letterSpacing: 0.5 }}>
           Cloud sync enabled · Works across all devices
@@ -591,6 +712,8 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
       // The server moved every row to the new name and issued a token for it; reload so all
       // scope-bound state (realtime filter, favorites key, queues) starts over under the new scope.
       setSession({ token: r.token, expires_at: r.expires_at, username: r.username });
+      const rec = readBrowserAccount();
+      if (rec?.id && rec.id === tokenAccountId(r.token)) claimBrowser({ ...rec, username: r.username });   // review r6 #13
       resetDeviceIdCache();
       setStep("done");
       onSaved?.("Username changed — reloading");
@@ -643,9 +766,10 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
     if (!code) { setError("Enter your backup code"); return; }
     if (newPassword.length < 8) { setError("New password must be at least 8 characters"); return; }
     if (newPassword !== confirmPassword) { setError("New passwords don't match"); return; }
+    if (!creds?.username) { setError("Couldn't load your account name. Close Account and open it again."); return; }
     setBusy(true); setError("");
     try {
-      const r = await unlockWithBackupCode(code, newPassword);
+      const r = await unlockWithBackupCode(code, newPassword, creds.username);
       if (!r?.ok) { setResetCode(""); setShowResetCode(false); setError(backupCodeError(r)); return; }
       setResetCode(""); setNewPassword(""); setConfirmPassword("");
       onPasswordReset?.();
@@ -1416,8 +1540,74 @@ function localModelFavoritesKey(scope = getDeviceId()) {
 
 export default function ProximaApp() {
   // Signed in = an unexpired server-issued session token (see lib/session.js).
-  const [isAuthed, setIsAuthed] = useState(() => !!getSession());
+  // Second account S5 (src/lib/accountGuard.js; review r6 #1): a session restored at load is used at once only when this
+  // browser's record names its account. With no record yet, the server is asked whose session it is and the guard decides
+  // BEFORE anything loads or syncs (isAuthed stays false meanwhile); a failed check never falls back to trusting it.
+  const [bootFit] = useState(() => {
+    const decision = bootSessionDecision(getSession(), readBrowserAccount());
+    if (decision === "refuse") clearSession();
+    return decision;
+  });
+  const [isAuthed, setIsAuthed] = useState(bootFit === "fit");
+  const isAuthedRef = useRef(isAuthed);
+  isAuthedRef.current = isAuthed;
+  const [accountCheck, setAccountCheck] = useState(bootFit === "check" ? "checking" : null);   // "checking" | "failed" | null
+  const [sessionRefusal, setSessionRefusal] = useState(() => (bootFit === "refuse"
+    ? browserAccountMessage(readBrowserAccount()?.unreadable ? { reason: "unreadable-record" } : { reason: "other-account", other: readBrowserAccount()?.username })
+    : ""));
   const [sessionNotice, setSessionNotice] = useState("");
+  const [joinLink, setJoinLink] = useState(() => { const j = takeJoinHash(); return bootFit === "none" || bootFit === "refuse" ? j : null; });
+  useEffect(() => {
+    // An invite link opened in this tab later; signed in, it is only removed from the address.
+    const onHash = () => { const j = takeJoinHash(); if (j && !isAuthedRef.current) setJoinLink(j); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  // Review r7 (security #1/#2): another tab signing in or out, or claiming this browser for another account: a tab whose
+  // session no longer fits the record reloads (the load decision runs again) instead of sending one account's work under
+  // the other's session.
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key !== "proximaai-session" && e.key !== BROWSER_ACCOUNT_KEY) return;
+      if (isAuthedRef.current && !sessionFitsBrowser(getSession()?.token, readBrowserAccount())) window.location.reload();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [isAuthed]);
+  function refuseSession(message) { clearSession(); setAccountCheck(null); setSessionRefusal(message); }
+  useEffect(() => {
+    if (accountCheck !== "checking") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Review r7 #6: a time limit (a stalled connection would otherwise hold this screen for minutes); a token the
+        // server rejected (sessionRpc dropped it) or that names no account (get_my_account's only ok:false, 'forbidden')
+        // ends in sign-in with the reason; any other answer stays retryable.
+        const a = await Promise.race([getMyAccount(), new Promise((_, fail) => setTimeout(() => fail(new Error("timeout")), 15000))]);
+        if (cancelled) return;
+        if (!getSession()) { setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
+        if (a?.reason === "forbidden") { clearSession(); setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
+        if (!a?.ok) { setAccountCheck("failed"); return; }
+        const verdict = browserAccountDecision({ stored: readBrowserAccount(), hasLocalData: await hasLocalData(), account: { id: a.id, role: a.role, username: a.username } });
+        if (cancelled) return;
+        if (!verdict.ok) { refuseSession(browserAccountMessage(verdict)); return; }
+        if (verdict.claim && !claimBrowser({ id: a.id, role: a.role, username: a.username })) { refuseSession(browserAccountMessage({ reason: "claim-failed" })); return; }
+        setAccountCheck(null);
+        setIsAuthed(true);
+      } catch {
+        if (cancelled) return;
+        if (!getSession()) { setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
+        setAccountCheck("failed");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [accountCheck]);
+  useEffect(() => {
+    if (accountCheck !== "failed") return;
+    const back = () => setAccountCheck("checking");
+    window.addEventListener("online", back);
+    return () => window.removeEventListener("online", back);
+  }, [accountCheck]);
   const [page, setPage] = useState("cockpit");
   // The WaveSpeed key lives on the server. keyStatus comes from a balance check through the proxy:
   // "ok" | "missing" (none saved) | "invalid" (WaveSpeed rejected it) | "unknown" (not checked / network).
@@ -1926,7 +2116,7 @@ export default function ProximaApp() {
   // runs once, `getDeviceId()` returns `user:<real-username>` so data + backups are
   // correctly scoped and visible across devices.
   useEffect(() => {
-    if (!isSupabaseConfigured()) return;
+    if (!isAuthed || !isSupabaseConfigured()) return;
     let cancelled = false;
     (async () => {
       try {
@@ -1946,6 +2136,8 @@ export default function ProximaApp() {
     setSession(session);
     resetDeviceIdCache();
     setSessionNotice("");
+    setSessionRefusal("");
+    setJoinLink(null);
     setIsAuthed(true);
   }
 
@@ -3557,6 +3749,7 @@ export default function ProximaApp() {
   useEffect(() => {
     const publish = () => {
       publishFormPaths([...pathsInUse([draftFormRef.current])]);
+      if (!isAuthedRef.current) return;   // review r7 #8: no cloud write before the account is confirmed (or when signed out)
       const local = Date.now(), now = formStamp(serverNow()), mine = [...liveFormPaths(readFormPublications(), local)];
       if (isSupabaseConfigured() && formPublishDue(cloudFormPubRef.current, mine, now)) {
         sendFormRow(mine, localFormPaths).then((sent) => { cloudFormPubRef.current = sent; }).catch(() => {});
@@ -3572,6 +3765,7 @@ export default function ProximaApp() {
     const bye = (e) => {
       if (e.persisted) return;
       forgetFormPaths();
+      if (!isAuthedRef.current) return;
       const local = Date.now(), now = formStamp(serverNow()), mine = [...liveFormPaths(readFormPublications(), local)];
       if (isSupabaseConfigured() && cloudFormPubRef.current && !sameFormSet(cloudFormPubRef.current.paths, mine)) {
         setPageExiting(true);
@@ -3580,7 +3774,7 @@ export default function ProximaApp() {
       publishUnsent({ exiting: true });   // task B15 (review round 28 #2): rows queued since the last tick, with keepalive
     };
     // Task B15 (review round 28 #2): Android freezes a hidden tab; its rows not uploaded yet are published as it hides.
-    const hidden = () => { if (document.visibilityState === "hidden") publishUnsent(); };
+    const hidden = () => { if (document.visibilityState === "hidden" && isAuthedRef.current) publishUnsent(); };
     window.addEventListener("pagehide", bye);
     document.addEventListener("visibilitychange", hidden);
     return () => { clearInterval(id); window.removeEventListener("pagehide", bye); document.removeEventListener("visibilitychange", hidden); };
@@ -4435,6 +4629,32 @@ export default function ProximaApp() {
   const needsAudio = selectedConfigs.some(m => m.requiresAudio);
   const sourceIsVideo = genType === "v2v";
 
+  // Second account S5 (review r6 #1): no record yet: the account is checked before anything loads.
+  if (accountCheck) {
+    return (
+      <>
+        <style>{css}</style>
+        <BackgroundLayer type={background} accent={(THEMES[theme] || THEMES.default).accent} />
+        <div className="proxima-app">
+          <div style={{ width: "100%", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, boxSizing: "border-box" }}>
+            <div role="status" style={{ width: "100%", maxWidth: 400, padding: "28px 24px", borderRadius: 18, background: "rgba(8,12,25,0.6)", border: "1px solid rgba(99,102,241,0.2)", fontFamily: font, color: "#e2e8f0", textAlign: "center", fontSize: 13 }}>
+              {accountCheck === "checking" ? (<>
+                <div style={{ marginBottom: 16 }}>Checking your account…</div>
+                <button type="button" className="api-test-btn" style={{ minHeight: 44, margin: 0, width: "100%" }} onClick={() => { clearSession(); setAccountCheck(null); }}>Sign out</button>
+              </>) : (<>
+                <div style={{ marginBottom: 16, lineHeight: 1.5 }}>Couldn't confirm your account. Check your connection and retry.</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <button type="button" className="api-test-btn" style={{ minHeight: 44, margin: 0 }} onClick={() => setAccountCheck("checking")}>Retry</button>
+                  <button type="button" className="api-test-btn" style={{ minHeight: 44, margin: 0 }} onClick={() => { clearSession(); setAccountCheck(null); }}>Sign out</button>
+                </div>
+              </>)}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   // Show login screen if not authenticated
   if (!isAuthed) {
     return (
@@ -4442,7 +4662,7 @@ export default function ProximaApp() {
         <style>{css}</style>
         <BackgroundLayer type={background} accent={(THEMES[theme] || THEMES.default).accent} />
         <div className="proxima-app">
-          <LoginScreen onSignedIn={handleSignedIn} notice={sessionNotice} />
+          <LoginScreen onSignedIn={handleSignedIn} notice={sessionNotice} refusal={sessionRefusal} joinLink={joinLink} />
         </div>
         <UpdateBanner />
       </>
@@ -5612,6 +5832,8 @@ export default function ProximaApp() {
                     return waiting > 0 && <div style={{ marginTop: 8, fontSize: 12, color: "var(--amber)", fontFamily: font }}>{waiting} kie.ai generation{waiting > 1 ? "s are" : " is"} waiting for a kie.ai key.</div>;
                   })()}
                 </div>
+
+                {readBrowserAccount()?.role === "owner" && <InviteSection font={font} />}
 
                 <div className="setting-group">
                   <div className="setting-label">Default Settings</div>
