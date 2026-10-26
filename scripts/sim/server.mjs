@@ -18,7 +18,7 @@
 //     flipped to by_restore, the marker set at the END, the replaced rows scrubbed (20261023100000:1157-1258);
 //   - the "no tombstone for a rowless id" gap AS IT IS TODAY: delete_queued_rows tombstones a rowless task id only if a
 //     live History item holds it (or a tombstone names it); a rowless History id gets nothing.
-// SERVER RULE (setServerRule, run.mjs --server): "v1" (default) = the live rules above; "v2" = migration
+// SERVER RULE (setServerRule, run.mjs --server; default "v4", the live rules): "v1" = the rules above; "v2" = migration
 // 20261023500000_tombstone_rowless_scoped: delete_queued_rows and _clear_kind tombstone EVERY named id without a row
 // (task and History kind; "do nothing" when a tombstone exists), and _clear_kind turns a by_restore tombstone of a named
 // task id into a user one, as delete_queued_rows does. Its scope rules (tombstones per account) need no model here: the
@@ -42,7 +42,7 @@
 // to perform for an id (the rowless gap included: a delete call answered "deleted" for a named id), every id a restore
 // brought back, and every id a restore removed.
 
-let RULE = process.env.SIM_SERVER || "v3";   // v3 is live since 2026-10-23 22:31:54 UTC (20261024100000)
+let RULE = process.env.SIM_SERVER || "v4";   // v4 is live since 2026-10-26 00:02:00 UTC (20261025900000)
 export const SERVER_RULES = ["v1", "v2", "v3", "v4"];
 export function setServerRule(r) {
   if (!SERVER_RULES.includes(r)) throw new Error(`unknown server rule ${r} (${SERVER_RULES.join("|")})`);
