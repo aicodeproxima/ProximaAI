@@ -5,7 +5,7 @@
 -- only) a test owner, both with known passwords. Calls run as anon with the request headers a browser would send.
 do $t$
 declare
-  out text := ''; ok boolean; j json; j2 json; j3 json;
+  out text := ''; ok boolean; j json; j2 json; j3 json; n int; n2 int; thr text;
   m uuid; o uuid;
   m_name constant text := '__sg_m_' || txid_current();
   o_name constant text := '__sg_o_' || txid_current();
@@ -23,24 +23,33 @@ begin
   exception when others then out := out || format('FAIL seed %s %s; ', sqlstate, left(sqlerrm, 80)); end;
 
   -- G1. A member from an older build (no marker) with the right password: update_required, no session, and nothing counted
-  --     or reset (r7 tests #7: three such tries lock nothing, and a pending failure stays as it was); the same member from a
-  --     guard build: signed in as a member (its failure count reset).
+  --     or reset (r7 tests #7: three such tries lock nothing, and a pending failure stays as it was; r8 #11: nothing counted
+  --     against the network throttle either, which would also block the owner on the same network); the same member from
+  --     a guard build: signed in as a member (its failure count reset). The throttle is switched on for this case only.
   begin
     update proxima_auth.users set login_failed = 1 where id = m;
+    thr := (select signin_throttle from proxima_auth.auth_config where id);
+    update proxima_auth.auth_config set signin_throttle = 'on' where id;
+    n := coalesce((select failures from proxima_auth.signin_throttle where ip_key = encode(extensions.hmac(host('198.51.100.41'::inet),
+           (select throttle_key from proxima_auth.auth_config where id), 'sha256'), 'hex')), 0);
     set local role anon;
     perform set_config('request.headers', old_build, true);
     j := public.verify_admin(m_name, pw);
     j3 := public.verify_admin(m_name, pw);
     j3 := public.verify_admin(m_name, pw);
     reset role;
-    ok := (select login_failed = 1 and login_locked_at is null from proxima_auth.users where id = m);
+    n2 := coalesce((select failures from proxima_auth.signin_throttle where ip_key = encode(extensions.hmac(host('198.51.100.41'::inet),
+            (select throttle_key from proxima_auth.auth_config where id), 'sha256'), 'hex')), 0);
+    update proxima_auth.auth_config set signin_throttle = thr where id;
+    ok := (select login_failed = 1 and login_locked_at is null from proxima_auth.users where id = m) and n2 = n;
+    if n2 <> n then out := out || format('FAIL G1 throttle counted %s -> %s; ', n, n2); end if;
     set local role anon;
     perform set_config('request.headers', new_build, true);
     j2 := public.verify_admin(m_name, pw);
     reset role;
     ok := ok and (select login_failed = 0 from proxima_auth.users where id = m);
     ok := ok and j->>'reason' = 'update_required' and j3->>'reason' = 'update_required' and j->>'token' is null and (j2->>'ok')::boolean and j2->>'role' = 'member';
-    out := out || case when ok then 'ok G1 member-needs-guard-build; ' else format('FAIL G1 %s %s; ', j, left(j2::text, 120)) end;
+    out := out || case when ok then 'ok G1 member-needs-guard-build; ' else format('FAIL G1 %s ok=%s role=%s; ', j, j2->>'ok', j2->>'role') end;   -- never the token
   exception when others then
     begin reset role; exception when others then null; end;
     out := out || format('FAIL G1 %s %s; ', sqlstate, left(sqlerrm, 80));
@@ -69,7 +78,7 @@ begin
     j2 := public.verify_admin(o_name, pw);
     reset role;
     ok := (j->>'ok')::boolean and j->>'role' = 'owner' and (j2->>'ok')::boolean;
-    out := out || case when ok then 'ok G3 owner-any-build; ' else format('FAIL G3 %s %s; ', left(j::text, 120), left(j2::text, 120)) end;
+    out := out || case when ok then 'ok G3 owner-any-build; ' else format('FAIL G3 ok=%s/%s role=%s/%s reason=%s/%s; ', j->>'ok', j2->>'ok', j->>'role', j2->>'role', j->>'reason', j2->>'reason') end;   -- never the token
   exception when others then
     begin reset role; exception when others then null; end;
     out := out || format('FAIL G3 %s %s; ', sqlstate, left(sqlerrm, 80));
