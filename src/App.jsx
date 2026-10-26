@@ -1573,8 +1573,9 @@ export default function ProximaApp() {
   const [sessionNotice, setSessionNotice] = useState("");
   const [joinLink, setJoinLink] = useState(() => { const j = takeJoinHash(); return bootFit === "none" || bootFit === "refuse" ? j : null; });
   useEffect(() => {
-    // An invite link opened in this tab later; signed in, it is only removed from the address.
-    const onHash = () => { const j = takeJoinHash(); if (j && !isAuthedRef.current) setJoinLink(j); };
+    // An invite link opened in this tab later; with a session (signed in, or the account check running) it is only removed
+    // from the address (review r8 #7: as at load).
+    const onHash = () => { const j = takeJoinHash(); if (j && !getSession()) setJoinLink(j); };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -1614,6 +1615,7 @@ export default function ProximaApp() {
         if (!verdict.ok) { refuseSession(browserAccountMessage(verdict)); return; }
         if (verdict.claim && !claimBrowser({ id: a.id, role: a.role, username: a.username })) { refuseSession(browserAccountMessage({ reason: "claim-failed" })); return; }
         setAccountCheck(null);
+        setJoinLink(null);
         bindPageAccount(tokenAccountId(getSession()?.token));
         setIsAuthed(true);
       } catch { if (!cancelled) setAccountCheck("failed"); }

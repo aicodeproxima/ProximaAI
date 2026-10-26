@@ -187,7 +187,10 @@ await test("an invite link is taken at app level, at load and on a hash change, 
   const f = between(app, "function takeJoinHash() {", "\n}\n");
   assert.match(f, /const m = \/\^#join\(\?:=\(\[\^&\]\*\)\)\?\(\?:&\.\*\)\?\$\/i\.exec\(window\.location\.hash \|\| ""\);\s*if \(!m\) return null;\s*window\.history\.replaceState\(null, "", window\.location\.pathname \+ window\.location\.search\);/);
   assert.match(app, /const \[joinLink, setJoinLink\] = useState\(\(\) => \{ const j = takeJoinHash\(\);/);
-  assert.match(app, /const onHash = \(\) => \{ const j = takeJoinHash\(\); if \(j && !isAuthedRef\.current\) setJoinLink\(j\); \};\s*window\.addEventListener\("hashchange", onHash\);/);
+  // r8 #7: kept only with no session (as at load): not while the account check runs or after it
+  assert.match(app, /const onHash = \(\) => \{ const j = takeJoinHash\(\); if \(j && !getSession\(\)\) setJoinLink\(j\); \};\s*window\.addEventListener\("hashchange", onHash\);/);
+  const ok = between(app, "if (verdict.claim && !claimBrowser(", "}, [accountCheck]);");
+  assert.ok(ok.indexOf("setJoinLink(null);") > 0 && ok.indexOf("setJoinLink(null);") < ok.indexOf("setIsAuthed(true)"), "the check's success drops a kept link");
   assert.match(app, /<LoginScreen onSignedIn=\{handleSignedIn\} notice=\{sessionNotice\} refusal=\{sessionRefusal\} joinLink=\{joinLink\} \/>/);
   assert.ok(!/window\.location\.hash/.test(between(app, "function LoginScreen(", "const labelStyle = ")), "LoginScreen no longer reads the hash itself");
   assert.match(app, /onClick=\{\(\) => switchMode\("join"\)\}>Have an invite\? Join/);
