@@ -43,5 +43,12 @@ await test("the top bar shows it next to the WaveSpeed balance; hidden while the
   assert.match(app, /import \{[^}]*\bkieBalanceLabel\b[^}]*\} from "\.\/lib\/kie\.js";/);
 });
 
+// Measured live at 384 px: "kie 782 cr · $3.91" wrapped onto two lines in the 46 px top bar.
+await test("a balance pill stays on one line and does not shrink (384 px top bar)", () => {
+  const css = (app.match(/^\.balance-pill \{[^\n]*$/m) || [""])[0];   // one line; it holds "${font}", so not up to the first "}"
+  assert.match(css, /white-space: nowrap;/);
+  assert.match(css, /flex-shrink: 0;/);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);
