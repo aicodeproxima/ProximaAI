@@ -548,6 +548,18 @@ export class Page {
           for (const [at, list] of byAt) { S.queueDeleteIntents(kind, list, at); this.sim.trace(`  ${this.label} re-deletes ${kind} [${list}] @${at} (F1)`); }
         }
       }
+      // task B19: the restored copies are taken BEFORE the stale step (its rewrite uploads this tab's copy of an entry)
+      if (guard.fresh) {
+        const queuedLogs = new Set(S.getFailedSyncs().filter(f => f.kind === "history").map(f => f.id));
+        const take = new Map(B.restoredVersions(this.ref.logs, remote.history, queuedLogs).map(l => [l.id, l]));
+        if (take.size) {
+          for (const l of take.values()) { this.savedLogIds.add(l.id); this.b.addHistoryEntry(l); }
+          this.ref.logs = this.ref.logs.map(l => take.get(l.id) || l);
+          this.setLogs(prev => prev.map(l => take.get(l.id) || l));
+        }
+        S.markRestoreSeen(guard.restoreAt);
+        this.restorePending = false;   // B18 verification round 2: handled (App.jsx also bumps restoreSettled; finishLogs not modelled)
+      }
       const logsBeforeDrops = this.ref.logs;   // task B13b: the History these removals start from
       const staleTasks = new Set(taskDel.stale(this.ref.tasks)), staleLogs = new Set(logDel.stale(this.ref.logs));
       const staleTaskRows = this.ref.tasks.filter(t => staleTasks.has(t.id));
@@ -570,16 +582,6 @@ export class Page {
       const failed = S.getFailedSyncs();
       const pendingTasks = new Set([...failed.filter(f => f.kind === "task").map(f => f.id), ...this.taskSyncQueue.map(t => t.id)]);
       const pendingLogs = new Set(failed.filter(f => f.kind === "history").map(f => f.id));
-      if (guard.fresh) {
-        const take = new Map(B.restoredVersions(this.ref.logs, remote.history, pendingLogs).map(l => [l.id, l]));
-        if (take.size) {
-          for (const l of take.values()) { this.savedLogIds.add(l.id); this.b.addHistoryEntry(l); }
-          this.ref.logs = this.ref.logs.map(l => take.get(l.id) || l);
-          this.setLogs(prev => prev.map(l => take.get(l.id) || l));
-        }
-        S.markRestoreSeen(guard.restoreAt);
-        this.restorePending = false;   // B18 verification round 2: handled (App.jsx also bumps restoreSettled; finishLogs not modelled)
-      }
       // 2238-2259 (task B12b, F3): trimmed History copies re-taken from the cloud once their delete settled.
       if (remote.historyOk) {
         const due = S.historyResyncDue().filter(r => !this.resyncApplied.has(r.key));

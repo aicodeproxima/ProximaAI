@@ -2306,6 +2306,22 @@ export default function ProximaApp() {
           for (const [at, list] of byAt) queueDeleteIntents(kind, list, at);
         }
       }
+      // The cloud's copy of every shared entry wins (as at startup); the ref is updated at once, because steps below in
+      // this pass (dropLogItemsFor, finishLogs input) read it. Task B19 (B18 verification round 3, correctness #1): this
+      // comes BEFORE the stale step below, which rewrites and uploads this tab's entries (dropLogItemsFor -> persistLog): from
+      // a pre-restore copy, that upload replaced the restored entry, and the queued upload then kept restoredVersions off it.
+      if (guard.fresh) {
+        const queuedLogs = new Set(getFailedSyncs().filter(f => f.kind === "history").map(f => f.id));
+        const take = new Map(restoredVersions(logsRef.current, remote.history, queuedLogs).map(l => [l.id, l]));
+        if (take.size) {
+          for (const l of take.values()) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
+          logsRef.current = logsRef.current.map(l => take.get(l.id) || l);
+          setLogs(prev => prev.map(l => take.get(l.id) || l));
+        }
+        markRestoreSeen(guard.restoreAt);
+        restorePendingRef.current = false;
+        setRestoreSettled(n => n + 1);
+      }
       // Delete means delete in every tab: this tab's copy of a row whose delete was confirmed and that the cloud lacks goes
       // (state and IndexedDB). Its WaveSpeed copy and files were handled by the tab that deleted it, from ITS view: task
       // B13b re-plans them below against this tab's (elsewherePurge).
@@ -2337,19 +2353,6 @@ export default function ProximaApp() {
       const failed = getFailedSyncs();
       const pendingTasks = new Set([...failed.filter(f => f.kind === "task").map(f => f.id), ...taskSyncQueueRef.current.map(t => t.id)]);
       const pendingLogs = new Set(failed.filter(f => f.kind === "history").map(f => f.id));
-      // The cloud's copy of every shared entry wins (as at startup); the ref is updated at once, because steps below in
-      // this pass (dropLogItemsFor, finishLogs input) read it.
-      if (guard.fresh) {
-        const take = new Map(restoredVersions(logsRef.current, remote.history, pendingLogs).map(l => [l.id, l]));
-        if (take.size) {
-          for (const l of take.values()) { savedLogIds.current.add(l.id); addHistoryEntry(l); }
-          logsRef.current = logsRef.current.map(l => take.get(l.id) || l);
-          setLogs(prev => prev.map(l => take.get(l.id) || l));
-        }
-        markRestoreSeen(guard.restoreAt);
-        restorePendingRef.current = false;
-        setRestoreSettled(n => n + 1);
-      }
       // Task B12b (simulator F3): the History entries a delete trimmed here take the cloud's copy once that delete settled
       // (storage.js historyResyncDue), whether it was confirmed (the cloud's copy is stripped the same way: no change) or
       // voided after this tab had handled the restore (the cloud's entry kept the items; the trimmed copy stayed here for
