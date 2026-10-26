@@ -31,6 +31,7 @@ import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, historyRemo
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations, restoreStrippedLogs } from "./lib/batchLog.js";
 import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, lostKieSubmits, KIE_LOST_ERROR, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
+import { liveElapsedMs, progressPercent } from "./lib/taskTime.js";
 
 // Archived files nothing will own any more (a held archive whose clear was confirmed, review round 15 S5) go through
 // the durable file-delete queue, as a purge's do (stagePurge); a path a kept generation uses is never deleted.
@@ -1361,8 +1362,7 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 `;
 
 // ─── HELPERS ───
-// Loading bar fills over a fixed 1 minute for every model, regardless of its output time
-const PROGRESS_BAR_MS = 60000;
+// Loading bar fills over a fixed 1 minute for every model, regardless of its output time (PROGRESS_BAR_MS, src/lib/taskTime.js)
 
 function genId() { return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
 function formatTime(ms) {
@@ -1390,6 +1390,26 @@ function formatTimestamp(ts) {
 }
 
 // ─── API SERVICE ───
+
+// The running time and the 1-minute bar of a pending or running generation. Each ticks itself once a second, so the
+// memoized card around it is not re-rendered, and counts from the start time (src/lib/taskTime.js): it runs on every tab
+// and device that shows the generation, not only on the page polling it (owner 2026-10-26).
+function RunningClock({ task }) {
+  const [, tick] = useReducer(x => x + 1, 0);
+  useEffect(() => {
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <span className="pulse">⏱ {formatTime(Math.round(liveElapsedMs(task)))}</span>;
+}
+function RunningBar({ task }) {
+  const [, tick] = useReducer(x => x + 1, 0);
+  useEffect(() => {
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <div className="task-progress"><div className="task-progress-fill" style={{ width: `${progressPercent(liveElapsedMs(task))}%` }} /></div>;
+}
 
 // ─── CockpitTaskCard ───
 // Memoized so each card only re-renders when its OWN task changes.
@@ -1448,7 +1468,7 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
       <div className="task-timer">
         {task.status === "completed" ? `✓ ${formatTime(task.wallClockMs)}` :
          task.status === "failed" ? `✗ ${task.error}` :
-         <span className="pulse">⏱ {formatTime(task.wallClockMs)}</span>}
+         <RunningClock task={task} />}
         {task.status === "completed" && <span style={{ marginLeft: 8, color: "var(--amber)" }}>{formatCost(task.price)}</span>}
         {task.startTime && (
           <span style={{ marginLeft: 8, color: "var(--text-muted)", fontSize: 11 }}>
@@ -1459,11 +1479,7 @@ const CockpitTaskCard = memo(function CockpitTaskCard({
 
       {(task.status === "pending" || task.status === "processing") && (
         <>
-          <div className="task-progress">
-            <div className="task-progress-fill" style={{
-              width: `${Math.min(95, (task.wallClockMs / PROGRESS_BAR_MS) * 100)}%`
-            }} />
-          </div>
+          <RunningBar task={task} />
           <button className="result-action-btn" style={{ marginTop: 6, fontSize: 10 }} onClick={() => onCancel(task.id)}>✕ Cancel</button>
         </>
       )}
@@ -5539,8 +5555,8 @@ export default function ProximaApp() {
                             <span className={`task-status ${task.status}`}>{task.status.toUpperCase()}</span>
                           </div>
                           <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "4px 0" }}>{task.prompt?.slice(0, 80)}</div>
-                          <div className="task-timer">{formatTime(task.wallClockMs || (Date.now() - task.startTime))}</div>
-                          <div className="task-progress"><div className="task-progress-fill" style={{ width: `${Math.min(95, ((Date.now() - task.startTime) / PROGRESS_BAR_MS) * 100)}%` }} /></div>
+                          <div className="task-timer"><RunningClock task={task} /></div>
+                          <RunningBar task={task} />
                           <div style={{ marginTop: 8 }}>
                             <button className="result-action-btn" onClick={() => cancelTask(task.id)}>✕ Cancel</button>
                           </div>
