@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Sim, rng } from "./sim/sim.mjs";
 import { setServerRule } from "./sim/server.mjs";
+import { assertStripKeepsStrings } from "./lib/strip-comments.mjs";
 
 let n = 0, failed = 0;
 const test = async (name, fn) => {
@@ -95,7 +96,7 @@ await test("E's upload queued after the restore: A1's own copy is kept (not the 
 // the stale step and its first rewrite, and it reads its own queued-upload set.
 await test("wiring: App.jsx takes the restored copies before the stale step", () => {
   const src = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/gm, "$1");
+  const code = assertStripKeepsStrings(src);   // scripts/lib/strip-comments.mjs (review r8 #13)
   const i = code.indexOf("const reconcileWithCloud = useCallback("), rec = code.slice(i, code.indexOf("}, []);\n", i));
   const fresh = rec.indexOf("if (guard.fresh) {"), stale = rec.indexOf("const logsBeforeDrops = logsRef.current;"), drop = rec.indexOf("dropLogItemsFor(staleGone)");
   assert.ok(i >= 0 && fresh > 0 && stale > fresh && drop > stale, `order: fresh ${fresh} < stale ${stale} < drop ${drop}`);

@@ -6,12 +6,13 @@
 // first: before the change both tests fail. Run: node scripts/test-b18-round30-8.mjs
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { assertStripKeepsStrings } from "./lib/strip-comments.mjs";
 
 const src = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const sb = readFileSync(new URL("../src/lib/supabase.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 // B18 verification round 2 (tests #4): the shapes that matter are matched with comments stripped (block comments, then line
 // comments not preceded by ':' or a quote, so URLs stay), so a commented-out line cannot satisfy them.
-const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/gm, "$1");
+const code = assertStripKeepsStrings(src);   // scripts/lib/strip-comments.mjs (review r8 #13)
 const recCode = (() => {
   const i = code.indexOf("const reconcileWithCloud = useCallback("), j = code.indexOf("}, []);\n", i);
   assert.ok(i >= 0 && j > i, "reconcileWithCloud found in the comment-stripped source");

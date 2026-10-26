@@ -4,8 +4,9 @@
 // Written first: before the change every test fails. Run: node scripts/test-join-client.mjs
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { assertStripKeepsStrings } from "./lib/strip-comments.mjs";
 
-const strip = (s) => s.replace(/\r\n/g, "\n").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/gm, "$1");
+const strip = (s) => assertStripKeepsStrings(s);   // scripts/lib/strip-comments.mjs (review r8 #13)
 const app = strip(readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8"));
 const sb = strip(readFileSync(new URL("../src/lib/supabase.js", import.meta.url), "utf8"));
 let T = {};
