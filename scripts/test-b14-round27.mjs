@@ -114,9 +114,11 @@ await test("#5 wiring: form-inputs carries the forms only; the unsent row is its
   assert.equal((eff.match(/mine = \[\.\.\.liveFormPaths\(readFormPublications\(\), local\)\];/g) || []).length, 2, "publish() and bye(): forms only");   // S3 verification #9: local holds, this browser's clock
   // Task B15 (review round 28 #4/#2) rewrote these anchors: the :unsent write moved into the module-level publishUnsent.
   assert.match(eff, /publishUnsent\(\);/);
-  const fn = between("async function publishUnsentOnce({ exiting = false } = {}) {", "\n}\n")   /* task B16: the chained body */;
-  assert.match(fn, /const items = \[\.\.\.un\.paths, \.\.\.un\.ids\.map\(i => `id:\$\{i\}`\), \.\.\.un\.predictions\.map\(p => `p:\$\{p\}`\)\];/);
-  assert.match(fn, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths, ids: un\.ids, predictions: un\.predictions \}\)/);
+  // Task B17: the set and its value are built by src/lib/unsentPublish.js (tested there); App.jsx wires it.
+  const mod = readFileSync(new URL("../src/lib/unsentPublish.js", import.meta.url), "utf8");
+  assert.match(mod, /const items = \[\.\.\.un\.paths, \.\.\.un\.ids\.map\(i => `id:\$\{i\}`\), \.\.\.un\.predictions\.map\(p => `p:\$\{p\}`\)\];/);
+  assert.match(mod, /await send\(\{ at, paths: un\.paths, ids: un\.ids, predictions: un\.predictions \}\);/);
+  assert.match(between("const unsentPublisher = createUnsentPublisher({", "function publishUnsent("), /send: \(value\) => syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, value\),/);
 });
 await test("#7 wiring: the WaveSpeed flush holds a prediction any browser's unsent rows name; unreadable: nothing is sent", () => {
   const fl = between("const flushWsDeletes = useCallback(async () => {", "const checked = new Set(due);");

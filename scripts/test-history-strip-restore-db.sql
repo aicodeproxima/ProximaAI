@@ -166,8 +166,12 @@ begin
     out := out || case when st in ('28000', '42501') and not exists (select 1 from sync_tombstones where id = p || '_F2')
                        then format('ok R10b other-account refused (%s); ', st) else format('FAIL R10b other-account %s tomb=%s; ', st, exists (select 1 from sync_tombstones where id = p || '_F2')) end;
     -- d) migration review #2/#3: the SECURITY DEFINER path (upsert_queued_history; no row policy runs inside it) with the
-    --    owner's valid p_session_token but no header, then another account's header: an error, no row, no tombstone
-    --    (before, the guard returned an empty row there, which the definer then inserted).
+    --    owner's valid p_session_token but no header, then another account's header. Before 20261025910000: an error, no
+    --    row, no tombstone (before that, the guard returned an empty row there, which the definer then inserted). From
+    --    20261025910000 (B17 review #4): the RPC writes in the scope its own token proves (its statements run as the function's
+    --    owner, which the browser-scope guard trusts), whatever the header: the emptied entry is not stored and gets a restore's History tombstone in the OWNER's scope only.
+    declare v_rpc boolean := exists (select 1 from pg_trigger where tgname = 'history_0_scope_guard');   -- 20261025910000
+    begin
     for i in 1..2 loop
       st := 'none';
       begin
@@ -177,11 +181,17 @@ begin
           (extract(epoch from clock_timestamp()) * 1000)::bigint + 60000);
       exception when others then st := sqlstate; end;
       execute 'reset role';
-      out := out || case when st in ('28000', '42501') and not exists (select 1 from history where id = p || '_F4' || i)
-                           and not exists (select 1 from sync_tombstones where id = p || '_F4' || i)
-                         then format('ok R10d definer-rpc %s refused (%s); ', i, st)
-                         else format('FAIL R10d definer-rpc %s %s row=%s tomb=%s; ', i, st, exists (select 1 from history where id = p || '_F4' || i), exists (select 1 from sync_tombstones where id = p || '_F4' || i)) end;
+      out := out || case
+        when not v_rpc and st in ('28000', '42501') and not exists (select 1 from history where id = p || '_F4' || i)
+             and not exists (select 1 from sync_tombstones where id = p || '_F4' || i)
+          then format('ok R10d definer-rpc %s refused (%s); ', i, st)
+        when v_rpc and st = 'none' and not exists (select 1 from history where id = p || '_F4' || i)
+             and exists (select 1 from sync_tombstones where id = p || '_F4' || i and kind = 'history' and by_restore and device_id = s)
+             and not exists (select 1 from sync_tombstones where id = p || '_F4' || i and device_id <> s)
+          then format('ok R10d definer-rpc %s own-scope tombstone; ', i)
+        else format('FAIL R10d definer-rpc %s %s row=%s tomb=%s; ', i, st, exists (select 1 from history where id = p || '_F4' || i), exists (select 1 from sync_tombstones where id = p || '_F4' || i)) end;
     end loop;
+    end;
     -- c) the owner's own session: not inserted, a restore's History tombstone in its own scope
     st := 'none';
     begin

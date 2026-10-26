@@ -24,7 +24,9 @@
 // task id into a user one, as delete_queued_rows does. Its scope rules (tombstones per account) need no model here: the
 // sim has one account. "v3" = v2 + migration 20261024100000_history_strip_restore_removed (K2): a History write (not a
 // restore) also strips an item whose generation a restore removed (a by_restore task tombstone) when the stored entry
-// does not hold it; a new entry left empty only by such items gets a restore's History tombstone.
+// does not hold it; a new entry left empty only by such items gets a restore's History tombstone. "v4" = v3 + migration
+// 20261025900000_form_inputs_newest_wins (task B17): a form-inputs row (setFormHold) keeps the newest `at`; an older write
+// arriving later is refused with PT409 and the stored stamp (unless the stored `at` is more than 5 minutes ahead).
 // Not modelled: RLS/scopes/rename, favorites/settings rows (only the marker), tasks_keep_finished (every task here is
 // completed), form holds (pull_form_holds answers none), id-less legacy History items, ws_deleted_predictions.
 // FILES AND WAVESPEED (task B12c): the bucket `generations` (path -> { owners, deleted }) and WaveSpeed's predictions
@@ -40,8 +42,8 @@
 // to perform for an id (the rowless gap included: a delete call answered "deleted" for a named id), every id a restore
 // brought back, and every id a restore removed.
 
-let RULE = process.env.SIM_SERVER || "v2";   // v2 is live since 2026-10-23 21:30:50 UTC (20261023500000)
-export const SERVER_RULES = ["v1", "v2", "v3"];
+let RULE = process.env.SIM_SERVER || "v3";   // v3 is live since 2026-10-23 22:31:54 UTC (20261024100000)
+export const SERVER_RULES = ["v1", "v2", "v3", "v4"];
 export function setServerRule(r) {
   if (!SERVER_RULES.includes(r)) throw new Error(`unknown server rule ${r} (${SERVER_RULES.join("|")})`);
   RULE = r;
@@ -54,7 +56,15 @@ const itemIdsOf = (e) => (Array.isArray(e?.tasks) ? e.tasks.map(i => i?.id).filt
 export class FakeServer {
   // Task B13c: the forms' holds each browser publishes (App.jsx publish effect, syncSetting form-inputs:<browser>) and
   // every browser reads (supabase.js pullFormHolds: all of this account's, its own included).
-  setFormHold(browser, value) { this.formPubs.set(browser, JSON.parse(JSON.stringify(value))); return { ok: true }; }
+  setFormHold(browser, value) {
+    const prev = this.formPubs.get(browser);
+    if ((RULE === "v4") && typeof prev?.at === "number" && typeof value?.at === "number" && value.at < prev.at
+        && prev.at <= this.now() + 300000) {   // v4 (20261025900000): the stored, newer set stays; the writer is told
+      const e = new Error("stale form publication"); e.code = "PT409"; e.details = String(prev.at); throw e;
+    }
+    this.formPubs.set(browser, JSON.parse(JSON.stringify(value)));
+    return { ok: true };
+  }
   pullFormHolds() { return [...this.formPubs.values()].map(v => JSON.parse(JSON.stringify(v))); }
   constructor(clock) {
     this.clock = clock;
@@ -213,7 +223,7 @@ export class FakeServer {
     const have = this.history.get(id);
     const held = new Set(itemIdsOf(have));
     // v3 (20261024100000, K2): + an item a restore removed that the stored entry does not hold
-    const strip = (i) => !!i?.id && (this.userTomb(i.id) || (RULE === "v3" && this.restoreTomb(i.id) && !held.has(i.id)));
+    const strip = (i) => !!i?.id && (this.userTomb(i.id) || ((RULE === "v3" || RULE === "v4") && this.restoreTomb(i.id) && !held.has(i.id)));
     if (!this.restoring && items.some(strip)) {
       const anyUser = items.some(i => i?.id && this.userTomb(i.id));
       items = items.filter(i => !strip(i));

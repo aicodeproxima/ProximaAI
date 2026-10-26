@@ -36,6 +36,7 @@ const W = await import(libUrl("wsDelete.js"));
 const F = await import(libUrl("fileDelete.js"));
 const { clearSettlement } = await import(libUrl("clearOutcome.js"));
 const { isInFlight } = await import(libUrl("taskResume.js"));
+const { createUnsentPublisher } = await import(libUrl("unsentPublish.js"));
 
 const ids = (xs) => (xs || []).map(x => x.id);
 const HISTORY_PULL_LIMIT = 1000;   // App.jsx 40
@@ -68,8 +69,20 @@ export class Page {
     // Task B13c: the Generate form, modelled as holding the input of the last batch this page generated (a new input is
     // picked for each batch; a new page starts with an empty form), and the last cloud publication (cloudFormPubRef).
     this.formInput = null; this.cloudFormPub = null;
-    this.unsentPub = null;   // task B15 (round 28 #4/#2): App.jsx's module-level unsentPub (per page)
-    this.unsentChain = Promise.resolve();   // task B16 (round 29 #1): its write chain
+    // task B17 (round 30 #1/#2): App.jsx's module-level publisher, the real module (per page here). The browser id and the
+    // set are read when publish() starts, under this page's globals (the server callback runs later, under another's).
+    this.unsentPublisher = createUnsentPublisher({
+      configured: () => true,
+      compute: () => this.S.unsentGenerations(),
+      now: () => this.S.formStamp(C.serverNow()),
+      due: F.formPublishDue,
+      send: (value) => {
+        const bid = this.S.browserId();
+        return this.call("syncSetting", `form-inputs:${bid}:unsent [${[...value.paths, ...value.ids.map(i => "id:" + i)]}]`, () => this.srv.setFormHold(`${bid}:unsent`, value));
+      },
+      staleAt: (e) => (e?.code === "PT409" ? Number(e.details) : NaN),   // App.jsx formStaleAt
+      advance: (at) => this.S.advanceFormStamp(at),
+    });
     this.macros = [];   // continuations waiting for a render (IndexedDB awaits)
   }
 
@@ -289,23 +302,7 @@ export class Page {
     return send;
   }
   // task B15 (round 28 #4/#2): App.jsx publishUnsent / publishUnsentBefore (module level there; per page here)
-  publishUnsent(opts = {}) {   // task B16 (round 29 #1): one write at a time (the pagehide one at once)
-    if (opts.exiting) return this.publishUnsentOnce();
-    const p = this.unsentChain.then(() => this.publishUnsentOnce());
-    this.unsentChain = p.catch(() => {});
-    return p;
-  }
-  async publishUnsentOnce() {
-    const S = this.S, now = Date.now(), un = S.unsentGenerations();
-    const items = [...un.paths, ...un.ids.map(i => `id:${i}`), ...un.predictions.map(p => `p:${p}`)];
-    if (!F.formPublishDue(this.unsentPub, items, now)) return true;
-    const bid = S.browserId();   // read now: the server callback runs later, under another page's globals
-    try {
-      await this.call("syncSetting", `form-inputs:${bid}:unsent [${items}]`, () => this.srv.setFormHold(`${bid}:unsent`, { at: now, paths: un.paths, ids: un.ids, predictions: un.predictions }));
-      this.unsentPub = { at: now, paths: items };
-      return true;
-    } catch { return false; }
-  }
+  publishUnsent(opts = {}) { return this.unsentPublisher.publish(opts); }   // task B17: every publication at once
   async publishUnsentBefore(entries) {
     if (this.S.unsentRowsIn(entries).length && !(await this.publishUnsent())) throw new Error("network");
   }
@@ -943,7 +940,7 @@ export class Page {
         // task B14 (round 27 #7): nor one that rows not uploaded yet name (any browser's :unsent row, this browser's queue)
         const pubs = await this.pullFormHolds();
         if (pubs === null) return;
-        const unsent = F.liveUnsent([...pubs, { at: Date.now(), ...S.unsentGenerations() }], Date.now());
+        const unsent = F.liveUnsent([...pubs, { at: C.serverNow(), ...S.unsentGenerations() }], C.serverNow());
         for (const p of due) if (unsent.predictions.has(p) || (queue[p]?.tid && unsent.ids.has(String(queue[p].tid)))) held.push(p);
         if (held.length) S.writeWsDeletes(W.holdHeldIds(S.readWsDeletes(), held, Date.now()));
       }
@@ -968,12 +965,24 @@ export class Page {
   async publishForms() {
     const S = this.S;
     S.publishFormPaths([...P.pathsInUse([{ sourceImageUrl: this.formInput }])]);
-    const now = Date.now(), mine = [...F.liveFormPaths(S.readFormPublications(), now)];
+    const local = Date.now(), now = S.formStamp(C.serverNow()), mine = [...F.liveFormPaths(S.readFormPublications(), local)];
     const bid = S.browserId();   // read now: the server callback runs later, under another page's globals
     // both writes start together, as in App.jsx publish() (neither waits for the other)
+    // App.jsx sendFormRow: once more above the stored stamp after a stale refusal (B17 review #1/#5)
+    const sendRow = async () => {
+      try {
+        await this.call("syncSetting", `form-inputs:${bid} [${mine}]`, () => this.srv.setFormHold(bid, { at: now, paths: mine }));
+        return now;
+      } catch (e) {
+        if (e?.code !== "PT409") throw e;
+        S.advanceFormStamp(Number(e.details));
+        const again = S.formStamp(C.serverNow()), fresh = [...F.liveFormPaths(S.readFormPublications(), Date.now())];   // computed again
+        await this.call("syncSetting", `form-inputs:${bid} [${fresh}]`, () => this.srv.setFormHold(bid, { at: again, paths: fresh }));
+        return { at: again, paths: fresh };
+      }
+    };
     const forms = F.formPublishDue(this.cloudFormPub, mine, now)
-      ? this.call("syncSetting", `form-inputs:${bid} [${mine}]`, () => this.srv.setFormHold(bid, { at: now, paths: mine }))
-        .then(() => { this.cloudFormPub = { at: now, paths: mine }; }).catch(() => {})
+      ? sendRow().then((sent) => { this.cloudFormPub = typeof sent === "number" ? { at: sent, paths: mine } : sent; }).catch(() => {})
       : Promise.resolve();
     await Promise.all([forms, this.publishUnsent()]);
   }
@@ -990,7 +999,7 @@ export class Page {
       for (const p of S.heldDeleteRefs().paths) owned.add(p);
       const cloudHolds = await this.pullFormHolds();
       const forms = new Set([...P.pathsInUse([{ sourceImageUrl: this.formInput }]), ...F.liveFormPaths(S.readFormPublications(), Date.now()),
-        ...F.liveFormPaths(cloudHolds || [], Date.now()), ...S.unsentUploadPaths()]);   // task B13c
+        ...F.liveFormPaths(cloudHolds || [], C.serverNow()), ...S.unsentUploadPaths()]);   // task B13c
       const candidates = due.filter(p => !owned.has(p) && !forms.has(p));
       const remote = candidates.length ? await this.pathsInUseRemote(candidates) : new Set();
       for (const p of due) {

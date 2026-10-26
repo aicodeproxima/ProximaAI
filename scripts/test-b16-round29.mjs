@@ -57,11 +57,15 @@ await test("#3/#4: the History gate counts a row held in a stash as not uploaded
   assert.deepEqual(S.unsentRowsIn([{ id: "M", tasks: [{ id: "x" }] }]), ["x"]);
 });
 
-await test("#1 wiring: publishUnsent chains its writes (one at a time, each computing its set after the previous settled)", () => {
-  const pub = between("let unsentPub = null", "async function publishUnsentBefore(entries) {");
-  assert.match(pub, /let unsentChain = Promise\.resolve\(\);/);
-  assert.match(pub, /function publishUnsent\(opts = \{\}\) \{\s*if \(opts\.exiting\) return publishUnsentOnce\(opts\);[^\n]*\n\s*const p = unsentChain\.then\(\(\) => publishUnsentOnce\(opts\)\);\s*unsentChain = p\.catch\(\(\) => \{\}\);\s*return p;\s*\}/);
-  assert.match(pub, /async function publishUnsentOnce\(\{ exiting = false \} = \{\}\) \{/);
+// Task B17 (review round 30 #1/#2) replaced round 29's chain: every publication goes out at once and the server keeps the
+// newest set (20261025900000); the behaviour is tested on the module (scripts/test-b17-publisher.mjs), the wiring here.
+await test("#1 wiring (B17): publishUnsent is the shared publisher, with no chain left", () => {
+  const pub = between("const unsentPublisher = createUnsentPublisher({", "async function publishUnsentBefore(entries) {");
+  assert.match(pub, /now: \(\) => formStamp\(serverNow\(\)\),/);
+  assert.match(pub, /send: \(value\) => syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, value\),/);
+  assert.match(pub, /onExit: \(\) => setPageExiting\(true\),/);
+  assert.match(pub, /function publishUnsent\(opts = \{\}\) \{ return unsentPublisher\.publish\(opts\); \}/);
+  assert.ok(!/unsentChain|publishUnsentOnce/.test(src), "no chain");
 });
 
 await test("#2 wiring: the give-back writes the kept generations this tab already shows too (its own copy), before the drop", () => {

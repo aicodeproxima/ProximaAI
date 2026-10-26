@@ -606,11 +606,26 @@ export function unsentUploadPaths() {
 }
 // The task and History uploads this browser has not sent yet: the failed-sync queue, and (task B16, review round 29
 // #3/#4) the ones a pending clear took into its stash, which a restore that voids that clear puts back and sends.
+// Task B17 (review round 30 #3): only what can still be sent. A row or entry whose delete is FINAL never uploads (addFailedSync
+// and uploadable refuse it), and neither does the item of a final generation inside an entry (withoutDeleting strips it),
+// so neither is counted: a stashed entry still naming a generation deleted after the clear held its files and WaveSpeed
+// result on every device until the hold lapsed (48 h), and then the result was never deleted. Pending, in-flight and
+// superseded deletes still count: a void or a restore may send those rows.
 function unsentUploads() {
   const isUpload = (f) => (f?.kind === "task" || f?.kind === "history") && f.data && typeof f.data === "object";
   let stashed = [];
   try { stashed = readClearStashes().flatMap(s => (Array.isArray(s?.uploads) ? s.uploads : [])); } catch {}
-  return [...getFailedSyncs().filter(isUpload), ...stashed.filter(isUpload)];
+  const goneTasks = confirmStates("task-delete").final, goneLogs = confirmStates("history-delete").final;
+  const out = [];
+  for (const f of [...getFailedSyncs().filter(isUpload), ...stashed.filter(isUpload)]) {
+    if (f.kind === "task") { if (!goneTasks.has(f.data.id ?? f.id)) out.push(f); continue; }
+    if (goneLogs.has(f.data.id ?? f.id)) continue;
+    const items = Array.isArray(f.data.tasks) ? f.data.tasks : [];
+    const left = items.filter(i => !(i?.id && goneTasks.has(i.id)));
+    if (left.length === items.length) out.push(f);
+    else if (left.length) out.push({ ...f, data: { ...f.data, tasks: left } });
+  }
+  return out;
 }
 // Task B14 (review round 27 #5/#7): what this browser's queued, not yet uploaded rows hold, published in its own settings row
 // (App.jsx: form-inputs:<browser>:unsent, a key no previous build writes): their paths, the ids of the generations they
@@ -656,15 +671,25 @@ export function cacheProviderKeys(account, providers) {
 // The `at` of this browser's cloud form publications (form-inputs:<browser> and its :unsent row; S3 second verification
 // A): the server-aligned clock, made monotonic across this browser's tabs through a mark they share. Each tab estimates
 // the server's clock on its own, up to about a second apart, and the server keeps the newest `at` of a row
-// (20261025600000), so a newer set stamped lower would be skipped. A mark more than 5 minutes ahead of the clock is
+// (20261025900000), so a newer set stamped lower would be skipped. A mark more than 5 minutes ahead of the clock is
 // ignored (a clock once set far forward must not keep every later stamp in the future, where holds never lapse).
+// A floor learned from the server (advanceFormStamp: the stamp a stale-stamp refusal names, B17 review #1/#5) is honoured
+// whatever this browser's estimate says: the server accepted that stamp against its own clock, so it is never far ahead.
 const FORM_STAMP_KEY = "proximaai-form-stamp";
+const FORM_FLOOR_KEY = "proximaai-form-stamp-floor";
 export function formStamp(now) {
-  let last = 0;
+  let last = 0, floor = 0;
   try { last = Number(localStorage.getItem(FORM_STAMP_KEY)) || 0; } catch {}
-  const at = last > now + 300000 ? Math.floor(now) : Math.max(Math.floor(now), last + 1);
+  try { floor = Number(localStorage.getItem(FORM_FLOOR_KEY)) || 0; } catch {}
+  const base = Math.max(Math.floor(now), floor + 1);   // the server's floor counts as "now" for the 5-minute bound
+  const at = last > base + 300000 ? base : Math.max(base, last + 1);
   try { localStorage.setItem(FORM_STAMP_KEY, String(at)); } catch {}
   return at;
+}
+export function advanceFormStamp(at) {
+  const v = Math.floor(Number(at));
+  if (!Number.isFinite(v)) return;
+  try { if (v > (Number(localStorage.getItem(FORM_FLOOR_KEY)) || 0)) localStorage.setItem(FORM_FLOOR_KEY, String(v)); } catch {}
 }
 // One id per browser, shared by its tabs: the key of this browser's cloud form publication (review wf_ec400a67-988 #6).
 export function browserId() {

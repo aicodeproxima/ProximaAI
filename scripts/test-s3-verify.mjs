@@ -97,10 +97,10 @@ await test("#3 wiring: a kie.ai key kie.ai rejects shows in Settings, and saving
   assert.match(src, /if \(typed\) \{ await saveWavespeedKey\(typed\); setKeyInput\(""\); refreshProviderKeys\(\); pollUntracked\(\); \}/);
 });
 
-// Cloud publications (read by other devices, ordered by the server: 20261025600000) are stamped and judged on the
+// Cloud publications (read by other devices, ordered by the server: 20261025900000) are stamped and judged on the
 // server-aligned clock; this browser's own local publications stay on its own clock (written and read here only).
 await test("#9 wiring: cloud form publications use the server-aligned clock (serverNow); local ones this browser's", () => {
-  assert.match(src, /const now = formStamp\(serverNow\(\)\), un = unsentGenerations\(\);/, "the :unsent publication (monotonic per browser, A)");
+  assert.match(src, /now: \(\) => formStamp\(serverNow\(\)\),/, "the :unsent publication (monotonic per browser, A; B17's publisher)");
   assert.equal((src.match(/const local = Date\.now\(\), now = formStamp\(serverNow\(\)\), mine = \[\.\.\.liveFormPaths\(readFormPublications\(\), local\)\];/g) || []).length, 2,
     "the form publication (tick and page exit): local holds on this clock, the cloud write on the server's");
   assert.match(src, /liveFormPaths\(readFormPublications\(\), Date\.now\(\)\),\s*\.\.\.liveFormPaths\(cloudHolds \|\| \[\], serverNow\(\)\)/);
@@ -142,7 +142,7 @@ await test("v4 C wiring: a rejected kie.ai key is shown in the header, cleared b
 
 // S3 second verification A (#1/#5): the form publications' stamps are ordered across this browser's tabs. Each tab's
 // server-clock estimate differs by up to about a second, so a newer set could carry the smaller `at`, and the server
-// (20261025600000: newest `at` wins) would skip it. formStamp is monotonic through localStorage, shared by the tabs.
+// (20261025900000: newest `at` wins) would skip it. formStamp is monotonic through localStorage, shared by the tabs.
 await test("A: formStamp never goes backwards, whatever each tab's clock estimate says, and stays near it", () => {
   assert.equal(typeof S.formStamp, "function");
   const a = S.formStamp(10_000);           // tab A, estimate +400 ms

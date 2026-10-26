@@ -75,9 +75,12 @@ await test("wiring: the cloud publication carries the queued uploads' paths (in 
   // Task B15 (review round 28 #4/#2) rewrote the anchors: one module-level publishUnsent, called by the effect.
   const eff = between("// This tab's Generate form inputs, published for every tab's file flush", "const mediaDuration = url =>");
   assert.match(eff, /publishUnsent\(\);/);
-  const fn = between("async function publishUnsentOnce({ exiting = false } = {}) {", "\n}\n")   /* task B16: the chained body */;
-  assert.match(fn, /const now = formStamp\(serverNow\(\)\), un = unsentGenerations\(\);/);   // S3 verification #9: the cloud row on the server's clock
-  assert.match(fn, /syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, \{ at: now, paths: un\.paths,/);
+  // Task B17: the publisher module computes and sends the set (scripts/test-b17-publisher.mjs); App.jsx wires it, stamped
+  // on the server-aligned clock, monotonic per browser (S3 verification #9 / A).
+  const fn = between("const unsentPublisher = createUnsentPublisher({", "function publishUnsent(");
+  assert.match(fn, /compute: unsentGenerations,/);
+  assert.match(fn, /now: \(\) => formStamp\(serverNow\(\)\),/);
+  assert.match(fn, /send: \(value\) => syncSetting\(`form-inputs:\$\{browserId\(\)\}:unsent`, value\),/);
   assert.equal(S.unsentGenerations().paths.length, 0, "an empty queue publishes no paths");
   S.addFailedSync({ kind: "task", id: "t2", data: { id: "t2", sourceImageUrl: url("uploads/s/in.png") } });
   assert.deepEqual(S.unsentGenerations().paths, ["uploads/s/in.png"]);

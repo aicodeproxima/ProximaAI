@@ -345,12 +345,13 @@ begin
     foreach kd in array array['task', 'history'] loop
       -- (a) anon, no session, naming H.
       v := pg_temp._tr_try('anon', null, kd, p || '_m1' || kd, sh, true);
-      if v is distinct from 'P0001 TRPROBE f' then bad := bad || format('a-%s-probe[%s],', kd, left(v, 40)); end if;
+      -- 20261025910000: for History the strip trigger's scope guard refuses first (28000), before the probe: no lock either
+      if v is distinct from 'P0001 TRPROBE f' and not (kd = 'history' and left(v, 5) = '28000') then bad := bad || format('a-%s-probe[%s],', kd, left(v, 40)); end if;
       v := pg_temp._tr_try('anon', null, kd, p || '_m1' || kd, sh, false);
       if left(v, 5) is distinct from '28000' then bad := bad || format('a-%s-not-refused[%s],', kd, left(v, 40)); end if;
       -- (b) anon with account A's session, naming I's scope.
       v := pg_temp._tr_try('anon', ta, kd, p || '_m2' || kd, si, true);
-      if v is distinct from 'P0001 TRPROBE f' then bad := bad || format('b-%s-probe[%s],', kd, left(v, 40)); end if;
+      if v is distinct from 'P0001 TRPROBE f' and not (kd = 'history' and left(v, 5) = '42501') then bad := bad || format('b-%s-probe[%s],', kd, left(v, 40)); end if;
       v := pg_temp._tr_try('anon', ta, kd, p || '_m2' || kd, si, false);
       if left(v, 5) is distinct from '42501' then bad := bad || format('b-%s-not-refused[%s],', kd, left(v, 40)); end if;
       if pg_temp._tr_lock_held(kd, sh, 'ShareLock') or pg_temp._tr_lock_held(kd, si, 'ShareLock') then bad := bad || kd || '-forged-lock-held,'; end if;

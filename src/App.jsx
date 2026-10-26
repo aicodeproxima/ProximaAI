@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useReducer, useMemo, memo } from "react";
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { CATALOG, visibleModels, editModelFor } from "./config/catalog.js";
+import { createUnsentPublisher } from "./lib/unsentPublish.js";
 import { isKieModelId, isKieGeneration, isKiePollUrl, KIE_CREDIT_USD } from "./lib/kie.js";
 import { buildPayload, chosenResolution, getEffectiveImageBatchCount, getImageBatchLimit, planImageBatchRequests } from "./lib/payloadBuilder.js";
 import { requestCost } from "./lib/pricing.js";
@@ -12,7 +13,7 @@ import { getSession, setSession, clearSession, onSessionExpired } from "./lib/se
 import useUpdateAvailable from "./lib/updateCheck.js";
 import VersionInfo from "./lib/VersionInfo.jsx";
 import { downscaleImage } from "./lib/imageUpload.js";
-import { getSetting, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
+import { getSetting, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, advanceFormStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
@@ -77,33 +78,41 @@ async function sendTask(task) {
 }
 // Task B15 (review round 28 #4/#2): this browser's rows not uploaded yet, published in settings
 // form-inputs:<browser>:unsent (a key no previous build writes; the server treats every form-inputs:% row as a form hold),
-// with the last CONFIRMED publication kept here, shared by the publish effect and the History senders. Resolves true once
-// the cloud holds the current set (written now, or unchanged since the last confirmed write and not due), false when the
-// write failed. `exiting`: the pagehide publication (keepalive).
-let unsentPub = null;
-// Task B16 (review round 29 #1): one write at a time, each computing its set only once the previous one settled, so
-// unsentPub always names what the server applied last (two overlapping writes could land in the other order and leave
-// the cloud row without a generation unsentPub says it names). The pagehide write goes at once: the page may be gone
-// before a queued one runs.
-let unsentChain = Promise.resolve();
-function publishUnsent(opts = {}) {
-  if (opts.exiting) return publishUnsentOnce(opts);   // keepalive, now
-  const p = unsentChain.then(() => publishUnsentOnce(opts));
-  unsentChain = p.catch(() => {});
-  return p;
-}
-async function publishUnsentOnce({ exiting = false } = {}) {
-  if (!isSupabaseConfigured()) return true;
-  const now = formStamp(serverNow()), un = unsentGenerations();   // cloud row, ordered by the server (20261025600000)
-  const items = [...un.paths, ...un.ids.map(i => `id:${i}`), ...un.predictions.map(p => `p:${p}`)];
-  if (!formPublishDue(unsentPub, items, now)) return true;
-  if (exiting) setPageExiting(true);
+// shared by the publish effect and the History senders. Resolves true once the cloud holds the current set, false when the
+// write failed. `exiting`: the pagehide publication (keepalive). Task B17 (review round 30 #1/#2): src/lib/unsentPublish.js
+// sends every publication at once (round 29's chain held a frozen page's later rows back until it thawed); the server keeps
+// the newest set (20261025900000), stamped monotonic per browser on the server-aligned clock (storage.js formStamp).
+const unsentPublisher = createUnsentPublisher({
+  configured: isSupabaseConfigured,
+  compute: unsentGenerations,
+  now: () => formStamp(serverNow()),
+  due: formPublishDue,
+  send: (value) => syncSetting(`form-inputs:${browserId()}:unsent`, value),
+  onExit: () => setPageExiting(true),
+  staleAt: formStaleAt,
+  advance: advanceFormStamp,
+});
+function publishUnsent(opts = {}) { return unsentPublisher.publish(opts); }
+// The stored stamp a stale-stamp refusal names (20261025900000: PT409, the stored `at` as detail), else NaN.
+function formStaleAt(e) { return e?.code === "PT409" ? Number(e.details) : NaN; }
+// The form row (form-inputs:<browser>): sent like the :unsent row, once more above the stored stamp after a stale refusal,
+// with the set computed again (the stored, newer row may come from another tab that saw more; resending the set computed
+// before it would erase that newer hold: B17 verification). Resolves {at, paths} as sent.
+async function sendFormRow(paths, recompute) {
+  const at = formStamp(serverNow());
   try {
-    await syncSetting(`form-inputs:${browserId()}:unsent`, { at: now, paths: un.paths, ids: un.ids, predictions: un.predictions });
-    unsentPub = { at: now, paths: items };
-    return true;
-  } catch { return false; }
+    await syncSetting("form-inputs:" + browserId(), { at, paths });
+    return { at, paths };
+  } catch (e) {
+    const stored = formStaleAt(e);
+    if (!Number.isFinite(stored)) throw e;
+    advanceFormStamp(stored);
+    const again = formStamp(serverNow()), fresh = recompute();
+    await syncSetting("form-inputs:" + browserId(), { at: again, paths: fresh });
+    return { at: again, paths: fresh };
+  }
 }
+const localFormPaths = () => [...liveFormPaths(readFormPublications(), Date.now())];
 // Before a History upload: an entry naming a generation whose own row is still queued here goes out only once a confirmed
 // publication names that generation (a phone frozen right after Generate: its entry reached the cloud, its row did not,
 // and another device deleted the WaveSpeed result of a generation that then landed). The write failed: the upload throws
@@ -3507,8 +3516,7 @@ export default function ProximaApp() {
       publishFormPaths([...pathsInUse([draftFormRef.current])]);
       const local = Date.now(), now = formStamp(serverNow()), mine = [...liveFormPaths(readFormPublications(), local)];
       if (isSupabaseConfigured() && formPublishDue(cloudFormPubRef.current, mine, now)) {
-        syncSetting("form-inputs:" + browserId(), { at: now, paths: mine })
-          .then(() => { cloudFormPubRef.current = { at: now, paths: mine }; }).catch(() => {});
+        sendFormRow(mine, localFormPaths).then((sent) => { cloudFormPubRef.current = sent; }).catch(() => {});
       }
       // Task B14 (review round 27 #5/#7): this browser's rows not uploaded yet, in their own row (task B15: one module-level
       // publishUnsent, shared with the History senders, which publish first when an entry needs it).
@@ -3524,7 +3532,7 @@ export default function ProximaApp() {
       const local = Date.now(), now = formStamp(serverNow()), mine = [...liveFormPaths(readFormPublications(), local)];
       if (isSupabaseConfigured() && cloudFormPubRef.current && !sameFormSet(cloudFormPubRef.current.paths, mine)) {
         setPageExiting(true);
-        syncSetting("form-inputs:" + browserId(), { at: now, paths: mine }).catch(() => {});
+        sendFormRow(mine, localFormPaths).catch(() => {});
       }
       publishUnsent({ exiting: true });   // task B15 (review round 28 #2): rows queued since the last tick, with keepalive
     };
