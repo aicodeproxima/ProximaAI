@@ -22,10 +22,11 @@ declare
   code1 text; code2 text; code3 text; code4 text; code5 text;
   bad constant json := json_build_object('ok', false, 'reason', 'invalid');
 begin
-  -- I0. The gate (plan K7): the members switch is off as applied, and its column default is false (review r5 tests #1).
+  -- I0. The gate (plan K7): the members switch defaults to off (review r5 tests #1). It was off as applied; the owner
+  -- switched it on 2026-10-26 06:18:51 UTC, so only the column default is asserted now (a fresh install, or a rollback
+  -- and re-apply, starts closed).
   begin
-    execute 'select members_open from proxima_auth.auth_config where id' into ok;
-    ok := ok is false and (select pg_get_expr(d.adbin, d.adrelid) from pg_attrdef d join pg_attribute a on a.attrelid = d.adrelid and a.attnum = d.adnum
+    ok := (select pg_get_expr(d.adbin, d.adrelid) from pg_attrdef d join pg_attribute a on a.attrelid = d.adrelid and a.attnum = d.adnum
                             where d.adrelid = 'proxima_auth.auth_config'::regclass and a.attname = 'members_open') = 'false';
     out := out || case when ok then 'ok I0 switch-off-by-default; ' else 'FAIL I0 switch-off-by-default; ' end;
   exception when others then out := out || format('FAIL I0 %s %s; ', sqlstate, left(sqlerrm, 80)); end;
@@ -251,7 +252,8 @@ begin
       exit when not coalesce((j->>'ok')::boolean, false);
     end loop;
     reset role;
-    execute 'select count(*) from proxima_auth.invites where used_at is null and revoked_at is null and expires_at > now()' into n;
+    -- the cap is per creator (create_invite counts created_by); the owner's real invites are not this test's
+    execute 'select count(*) from proxima_auth.invites where created_by = $1 and used_at is null and revoked_at is null and expires_at > now()' into n using o;
     ok := j->>'reason' = 'too_many' and n = 5;
     out := out || case when ok then 'ok I10 cap; ' else format('FAIL I10 cap %s n=%s; ', j, n) end;
   exception when others then
