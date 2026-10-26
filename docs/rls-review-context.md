@@ -85,6 +85,14 @@ not Supabase Auth.
   queued (drained later it would reach what is deleted while on; if it cannot run, the switch stays off: try again in a
   minute); pre-* and pre-restore safety backups and the restore's scrub follow the caller's switch. get/set_auto_backups
   answer every signed-in account about its own switch (before: the owner only, members 42501).
+- Backups hold their account row (P4, RLS session) — 20261025820000_backups_hold_account_row.sql (applied 2026-10-26
+  06:10:55 UTC; review rounds lk1 and 11-21, 3 critics each): the 2-day backup and snapshots take FOR KEY SHARE on the
+  account row before their INSERT and write under the scope it has then, so a rename can no longer leave a backup under
+  the old name (invisible, never scrubbed); a snapshot also checks its session again. Only a rename of that account
+  waits while a backup is open (sign-in, unlock, re-auth and key saves take FOR NO KEY UPDATE since 20261025920000): one
+  snapshot, about 65 ms at the snapshot limits; a 2-day run, up to about 3.3 s at 50 max-size accounts. The planned
+  account deletion (P5: an UPDATE of users.deleted_at) does not wait for FOR KEY SHARE: it must lock the account row FOR
+  UPDATE before deleting backups, as a rename does, or a backup still being written survives it (round 14).
 - Gate: scripts/test-mu-matrix.sql (owner A vs seeded members, as anon with minted tokens: rows, files, folders,
   topics, tombstones, id squatting, id keys, every browser-callable data, backup and key function, Automatic
   backups per account; 80/0 live after 20261025800000) and scripts/test-mu-catalog.sql (13/0).
@@ -136,13 +144,17 @@ not Supabase Auth.
 - Owner-run maintenance with the service role (scripts/tools/supabase-admin.mjs) bypasses the policies by design.
 
 ## Tests
-JS: scripts/test-session-header.mjs, test-sync-ping.mjs, test-storage-remove.mjs, test-remote-clears.mjs (npm test).
+JS: scripts/test-session-header.mjs, test-sync-ping.mjs, test-storage-remove.mjs, test-remote-clears.mjs and the static
+test-mu-p4-ab-guards.mjs (20261025800000/820000's lock limits, guards and record deletes) (npm test).
 SQL, each rolls back (run alone against live; to test an unapplied migration, prepend its text in the same call):
+scripts/test-backup-account-lock-db.sql (20261025820000: a rename staged inside a 2-day run, both orders of a
+snapshot and a rename, and the lock-before-INSERT order read from the bodies with comments stripped);
 scripts/test-rls-{phase0,tables,storage,triggers,plan,rpcs,rename}.sql; P4 gate: scripts/test-mu-matrix.sql (two accounts:
 rows, files, folders, topics, tombstones; failing-first before the walls 26/19) with scripts/test-mu-catalog.sql, and the
 P4 rollback proof scripts/test-mu-p4-rollback.sql + scripts/fixtures/p4s-final.sql (both orders in its header);
 20261025800000's rollback proof scripts/test-mu-p4-ab-rollback.sql with scripts/fixtures/p4s-ab-*.sql (each
 p4s-ab-guard-* fixture but the end marker -noop must refuse);
+20261025820000's: scripts/test-backup-account-lock-rollback.sql with scripts/fixtures/p4s-lk-*.sql;
 P1 M2: scripts/test-mu-scope-topic.sql (38
 checks: both token formats, two accounts' rows, the topic; failing-first with M1 alone 22/14) and
 test-mu-scope-topic-rollback.sql (13), with scripts/fixtures/mu-owner-{unlock,rename}.sql moving the owner between M1

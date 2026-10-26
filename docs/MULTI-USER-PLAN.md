@@ -219,6 +219,8 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   onConflict "device_id,id"), step (c) 24 h after it (key swap; checklist in docs/rls-review-context.md "Open (P4)"),
   webhook per account and cron fairness. 20261025800000 per-account Automatic backups applied
   2026-10-26 06:07:28 UTC (review rounds 8-21, 3 critics each): gate 80/0 live.
+- 20261025820000 (backups hold their account row against a rename, an older race found in 800000's review) applied
+  2026-10-26 06:10:55 UTC (review rounds lk1 and 11-21, 3 critics each).
 - Policies:
   - `USING (device_id = scope)` for every command on all six tables;
   - the storage policies check the account's folders;
