@@ -93,7 +93,9 @@ await test("K2: restoreStrippedLogs drops restore-removed items the cloud's copy
 });
 await test("K2 wiring: the reconcile applies it once the cloud's History and the tombstones were read", () => {
   const rec = between("const reconcileWithCloud = useCallback(", "}, []);\n\n  useEffect(");
-  assert.match(rec, /const stripped = remote\.historyOk \? restoreStrippedLogs\(logsRef\.current, remote\.history \|\| \[\], ids\?\.taskRestoreRemoved \?\? null\) : \[\];/);
+  // Task B18 (round 30 #8): computed as candidates, applied only when the restore marker did not move during the reads
+  // (scripts/test-b18-round30-8.mjs).
+  assert.match(rec, /const stripCandidates = remote\.historyOk \? restoreStrippedLogs\(logsRef\.current, remote\.history \|\| \[\], ids\?\.taskRestoreRemoved \?\? null\) : \[\];/);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

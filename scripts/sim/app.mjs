@@ -447,6 +447,7 @@ export class Page {
     let restoreKnown = false;
     try {
       this.bootstrapInProgress = true;
+      const restoreKnownAt = S.knownRestoreAt();   // task B18 review: known before the reads
       const remote = await this.pullAllRemoteData();
       if (!this.alive || !remote) { this.bootstrapInProgress = false; return; }
       const guard = S.restoreGuard(remote.settings);
@@ -472,7 +473,10 @@ export class Page {
           return [...newOnes, ...prev].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
         });
       }
-      if (guard.fresh && remote.historyOk) {
+      // task B18 review (b18 #1): only a restore known before the reads; else the first reconcile pass handles it
+      const restoreReady = guard.fresh && remote.historyOk && guard.restoreAt <= restoreKnownAt;
+      this.restorePending = guard.fresh && !restoreReady;
+      if (restoreReady) {
         const pendingLogs = new Set(S.getFailedSyncs().filter(f => f.kind === "history").map(f => f.id));
         this.setLogs(prev => {
           const take = new Map(B.restoredVersions(prev, remote.history, pendingLogs).map(l => [l.id, l]));
@@ -516,8 +520,18 @@ export class Page {
       for (const id of guard.voided.task) this.deletingIds.delete(id);
       for (const id of guard.voided.history) this.deletingLogIds.delete(id);
       if (guard.restoreAt > 0) this.applyClearStashes(at => at < guard.restoreAt);
-      this.restorePending = guard.fresh && (!remote.historyOk || !cids);
-      if (this.restorePending) return;
+      // task B18 review (b18 #1): also while the restore is newer than what was known before the reads; B18 verification
+      // round 2 (correctness #1): pending for the whole of a fresh pass, cleared once it is handled (markRestoreSeen below)
+      const restoreAfterReads = guard.fresh && guard.restoreAt > restoreKnownAt;
+      this.restorePending = guard.fresh;
+      if (guard.fresh && (!remote.historyOk || !cids || restoreAfterReads)) {
+        // App.jsx re-runs the pass after a second; here once the page settles (the next macro)
+        if (restoreAfterReads && remote.historyOk && cids) {
+          this.sim.trace(`  ${this.label} pass waits: restore ${guard.restoreAt} is newer than the ${restoreKnownAt} known before its reads`);
+          this.macros.push(() => { this.sim.trace(`  ${this.label} re-runs after a wait`); this.reconcile(); });
+        }
+        return;
+      }
       this.pruneDeleting();
       const cloudItemIds = remote.historyOk ? (remote.history || []).flatMap(l => (Array.isArray(l?.tasks) ? l.tasks : [])).map(i => i?.id).filter(Boolean) : null;
       const restoreRemoved = cids?.taskRestoreRemoved instanceof Set ? cids.taskRestoreRemoved : null;
@@ -564,6 +578,7 @@ export class Page {
           this.setLogs(prev => prev.map(l => take.get(l.id) || l));
         }
         S.markRestoreSeen(guard.restoreAt);
+        this.restorePending = false;   // B18 verification round 2: handled (App.jsx also bumps restoreSettled; finishLogs not modelled)
       }
       // 2238-2259 (task B12b, F3): trimmed History copies re-taken from the cloud once their delete settled.
       if (remote.historyOk) {
@@ -633,7 +648,14 @@ export class Page {
       const goneItems = R.tombstonedItems(this.ref.logs, cids?.taskTombstones ?? null, cids?.taskRestoreRemoved ?? null, new Set(ids(this.ref.tasks)));
       if (goneItems.length) this.dropLogItemsFor(goneItems.map(id => ({ id })));
       // task B16 (K2 client side): restore-removed items the cloud's copy of their entry lacks leave this copy too
-      const stripped = remote.historyOk ? B.restoreStrippedLogs(this.ref.logs, remote.history || [], cids?.taskRestoreRemoved ?? null) : [];
+      // task B18 (round 30 #8): App.jsx re-reads the restore marker before stripping and waits for the next pass if it moved
+      const stripCandidates = remote.historyOk ? B.restoreStrippedLogs(this.ref.logs, remote.history || [], cids?.taskRestoreRemoved ?? null) : [];
+      let markerNow = null;
+      if (stripCandidates.length && guard.restoreAt <= restoreKnownAt) {   // task B18 review (b18 #1)
+        try { markerNow = await this.call("pull restore marker", "", () => Number(this.srv.pullSettings().last_restore_at) || 0); } catch { markerNow = null; }
+      }
+      const markerSame = !stripCandidates.length || (guard.restoreAt <= restoreKnownAt && markerNow === guard.restoreAt);
+      const stripped = markerSame && stripCandidates.length ? B.restoreStrippedLogs(this.ref.logs, remote.history || [], cids?.taskRestoreRemoved ?? null) : [];
       if (stripped.length) {
         const byId = new Map(stripped.map(l => [l.id, l]));
         this.ref.logs = this.ref.logs.map(l => byId.get(l.id) || l);
@@ -682,9 +704,20 @@ export class Page {
       // 2389-2407 (review round 24 #1/#3/#5, task B12b round 25 #3/#10): the held files / WaveSpeed deletes decided by this
       // pass's reads, this tab's state and what every tab shares (IndexedDB: storedEvidenceIds over this browser's store).
       if (cids) {
-        const keptTaskIds = new Set([...this.ref.tasks.filter(t => !rmTasks.has(t.id)).map(t => t.id), ...this.taskSyncQueue.map(t => t.id)]);
+        // owner ruling 2026-10-23 (IndexedDB copies below) and task B18 verification (regression #1): a copy of an id the cloud
+        // tombstones or this pass removes is not kept, the debounced queue's included
+        const tombT = cids.taskTombstones instanceof Set ? cids.taskTombstones : new Set(), tombH = cids.historyTombstones instanceof Set ? cids.historyTombstones : new Set();
+        const keptTaskIds = new Set([...this.ref.tasks.filter(t => !rmTasks.has(t.id)).map(t => t.id),
+          ...this.taskSyncQueue.filter(t => !rmTasks.has(t.id) && !tombT.has(t.id)).map(t => t.id)]);
         const keptLogs = this.ref.logs.filter(l => !rmLogs.has(l.id));
-        for (const l of keptLogs) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) if (i?.id) keptTaskIds.add(i.id);
+        // B18 verification round 2 (regression #1): nor a History item of a generation the restore removed (the cloud's copy counts)
+        for (const l of keptLogs) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) if (i?.id && !(tombT.has(i.id) && restoreRemoved?.has(i.id))) keptTaskIds.add(i.id);
+        {   // round 3 (tests #4): a trace of what the filters left out, for the tests' positive controls
+          const skipped = keptLogs.flatMap(l => (Array.isArray(l?.tasks) ? l.tasks : [])).map(i => i?.id).filter(id => id && tombT.has(id) && restoreRemoved?.has(id));
+          if (skipped.length) this.sim.trace(`  ${this.label} evidence skips restore-removed History items [${skipped}]`);
+          const queued = this.taskSyncQueue.map(t => t.id).filter(id => rmTasks.has(id) || tombT.has(id));
+          if (queued.length) this.sim.trace(`  ${this.label} evidence skips queued copies [${queued}]`);
+        }
         const keptLogIds = new Set(ids(keptLogs));
         let shared = null;
         const earlyKept = S.hasHeldPurges() ? S.storedKeptIds() : null;   // task B15 (round 28 #5): read before IndexedDB
@@ -693,8 +726,6 @@ export class Page {
           shared = await S.storedEvidenceIds({ tasks: async () => b.allStoredTasks(), history: async () => b.allStoredHistory() });
           await this.idb();   // the IndexedDB read completes in a later task
         }
-        // owner ruling 2026-10-23: IndexedDB copies of ids the cloud tombstones or this pass removes are leftovers
-        const tombT = cids.taskTombstones instanceof Set ? cids.taskTombstones : new Set(), tombH = cids.historyTombstones instanceof Set ? cids.historyTombstones : new Set();
         if (shared) {
           for (const id of shared.task) if (!tombT.has(id) && !rmTasks.has(id)) keptTaskIds.add(id);
           for (const id of shared.history) if (!tombH.has(id) && !rmLogs.has(id)) keptLogIds.add(id);
@@ -705,7 +736,8 @@ export class Page {
         }
         // task B13a (G): the restore's own removals are not present; task B13b (D): the ids the cloud says were deleted.
         const userTaskTombstones = cids.taskTombstones instanceof Set && restoreRemoved ? [...cids.taskTombstones].filter(id => !restoreRemoved.has(id)) : [];
-        const evidence = { restoreKnownAt,
+        // B18 verification round 3 (regression #1): the pass that handles a restore decides no held purge (the next one does)
+        const evidence = { restoreKnownAt: guard.fresh ? -1 : restoreKnownAt,
           task: { present: [...(cids.tasks || []), ...(cloudItemIds || [])], local: keptTaskIds, deleted: userTaskTombstones, tombstoned: [...tombT],
             complete: cids.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared },
           history: { present: [...(cids.history || [])], local: keptLogIds, deleted: cids.historyTombstones instanceof Set ? [...cids.historyTombstones] : [], tombstoned: [...tombH],

@@ -434,6 +434,22 @@ export async function pullSettings() {
   } catch (err) { warnOnce("pullSettings", err); return null; }
 }
 
+// Task B18 (review round 30 #8): the restore marker alone (settings last_restore_at, epoch ms; 0 = none), read again after a
+// reconcile pass's parallel History and tombstone reads. null when unreadable.
+export async function pullRestoreAt() {
+  if (!supabase) return 0;
+  try {
+    const { data, error } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("device_id", getDeviceId())
+      .eq("key", "last_restore_at")
+      .maybeSingle();
+    if (error) throw error;
+    return Number(data?.value) || 0;
+  } catch (err) { warnOnce("pullRestoreAt", err); return null; }
+}
+
 // ─── Favorites Sync ───
 
 export async function syncFavorite(fav) {

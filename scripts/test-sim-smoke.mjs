@@ -3,7 +3,9 @@
 // asserts only that the simulator runs and exercises what it is for (deletes, clears, restores, voided calls, uploads, and
 // since task B12c the file and WaveSpeed deletes its held purges release, checked by invariants I6 / I7);
 // the invariant violations it finds are REPORTED, not asserted (known findings: scripts/sim/run.mjs shrinks and explains
-// them). It also lists App.jsx regions whose mirrors may be stale (scripts/sim/drift.mjs).
+// them). It also FAILS when an App.jsx region's mirror may be stale (scripts/sim/drift.mjs; since the B18 verification
+// round 2: an App.jsx edit there without the matching scripts/sim/app.mjs change passed every test). After updating the
+// mirror, refresh the fingerprints (drift.mjs EXPECTED).
 // Long mode: node scripts/sim/run.mjs --minutes 10 --steps 200 --net all
 // Run: node scripts/test-sim-smoke.mjs
 import assert from "node:assert/strict";
@@ -28,3 +30,4 @@ for (const [k, { n, seed }] of sigs) console.log(`finding (${n}x, first seed ${s
 if (drift.length) console.log(`WARNING mirror drift, re-read App.jsx and update scripts/sim/app.mjs: ${drift.join("; ")}`);
 const found = [...sigs.values()].reduce((a, b) => a + b.n, 0);
 console.log(`sim smoke: ${runs} runs x ${STEPS} ops in ${ms} ms (deletes ${totals.deletes}, clears ${totals.clears}, restores ${totals.restores}, voided ${totals.voided}, file deletes ${totals.fileDeletes}, WaveSpeed deletes ${totals.wsDeletes}); ${found} finding(s) in ${sigs.size} signature(s) reported, not asserted${drift.length ? "; MIRROR DRIFT" : ""}`);
+assert.deepEqual(drift, [], "App.jsx regions whose simulator mirror (scripts/sim/app.mjs) was not updated");

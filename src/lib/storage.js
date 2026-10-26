@@ -1039,11 +1039,15 @@ const writeConfirmQueued = (qs) => {
 // voidDeleteIntents). Records queued before it are superseded.
 const RESTORE_KNOWN_KEY = "proximaai-restore-known";
 const storedRestoreKnown = () => { try { return Number(localStorage.getItem(RESTORE_KNOWN_KEY)) || 0; } catch { return 0; } };
-export function knownRestoreAt() { return Math.max(storedRestoreKnown(), seenRestore(), handledRestore); }
+// Task B18 review (b18 #1): a value the storage refused is kept in this page's memory, so that tab still knows it (a
+// reconcile pass waits while the marker it reads is newer than this; it must not wait for good).
+let refusedRestore = 0;
+export function knownRestoreAt() { return Math.max(storedRestoreKnown(), seenRestore(), handledRestore, refusedRestore); }
 export function noteRestoreKnown(ts) {
   const t = Number(ts);
   if (!(t > 0) || !Number.isFinite(t)) return;
-  try { if (t > storedRestoreKnown()) localStorage.setItem(RESTORE_KNOWN_KEY, String(t)); } catch {}
+  try { if (t > storedRestoreKnown()) localStorage.setItem(RESTORE_KNOWN_KEY, String(t)); }
+  catch { if (t > refusedRestore) refusedRestore = t; }
 }
 
 // ─── Task B9 (review round 22 #2): delete calls in flight, shared by the browser's tabs ───

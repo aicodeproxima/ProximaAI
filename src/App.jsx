@@ -18,7 +18,7 @@ import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { clearSettlement } from "./lib/clearOutcome.js";
 import { SNAPSHOT_SLACK_MS, serverNow } from "./lib/serverClock.js";
-import { initSupabase, isSupabaseConfigured, pullSettings, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry as rawSyncHistoryEntry, syncTask as rawSyncTask, syncTasksBatch as rawSyncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch as rawSyncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, serverTimeRemote, deleteHistoryRemote, upsertQueuedHistory as rawUpsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, myProviderKeys, saveProviderKey, clearProviderKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds, taskRowsPresentRemote } from "./lib/supabase.js";
+import { initSupabase, isSupabaseConfigured, pullSettings, pullRestoreAt, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry as rawSyncHistoryEntry, syncTask as rawSyncTask, syncTasksBatch as rawSyncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch as rawSyncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, serverTimeRemote, deleteHistoryRemote, upsertQueuedHistory as rawUpsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, myProviderKeys, saveProviderKey, clearProviderKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds, taskRowsPresentRemote } from "./lib/supabase.js";
 import { planDeleteStage, ownedPaths, publicUrlOf, pathsInUse, relinkHold, elsewherePurge, entriesWithout } from "./lib/purge.js";
 import { queueFileDeletes, dueFileDeletes, settleFileDelete, headOutcome, headStatus, pendingOf, heldOf, purgeNote, historyLeft, fileFlushReady, classifyPath, liveFormPaths, formPublishDue, sameFormSet, liveUnsent } from "./lib/fileDelete.js";
 import { THEMES, BACKGROUNDS } from "./lib/themes.js";
@@ -2067,6 +2067,7 @@ export default function ProximaApp() {
           const queue = taskSyncQueueRef.current.splice(0);
           if (queue.length > 0) { try { await sendTasks(queue); } catch { for (const t of queue) addFailedSync({ kind: "task", id: t.id, data: t }); } }
         }
+        const restoreKnownAt = knownRestoreAt();   // task B18 review: what this browser knew before the reads
         const remote = await pullAllRemoteData();
         if (cancelled || !remote) { bootstrapInProgress.current = false; return; }
 
@@ -2117,7 +2118,12 @@ export default function ProximaApp() {
         }
         // A restore this device had not handled yet: the cloud's copy of every entry both sides hold wins (restoreGuard,
         // review round 3). Marked handled only once History answered, so a failed read retries on the next pass.
-        if (guard.fresh && remote.historyOk) {
+        // Task B18 review (b18 #1): and only for a restore this browser knew before the reads: a newer one may have
+        // committed after History was read. Then the first reconcile pass (started below) handles it, and nothing
+        // rewrites an entry meanwhile (restorePendingRef).
+        const restoreReady = guard.fresh && remote.historyOk && guard.restoreAt <= restoreKnownAt;
+        restorePendingRef.current = guard.fresh && !restoreReady;
+        if (restoreReady) {
           const pendingLogs = new Set(getFailedSyncs().filter(f => f.kind === "history").map(f => f.id));
           setLogs(prev => {
             const take = new Map(restoredVersions(prev, remote.history, pendingLogs).map(l => [l.id, l]));
@@ -2217,6 +2223,9 @@ export default function ProximaApp() {
   // True while a restore this tab has not handled waits for History to answer (reconcile): nothing rewrites an entry
   // from a pre-restore copy meanwhile (review round 4).
   const restorePendingRef = useRef(false);
+  // Task B18 verification (regression #2): bumped once a pass handled a restore, so the finishLogs effect (gated on the ref
+  // above, which is not state) runs again even when that pass changed nothing else.
+  const [restoreSettled, setRestoreSettled] = useState(0);
   const inputBackfillDone = useRef(false);   // the once-per-load input-URL backfill (reconcile)
   const resyncAppliedRef = useRef(new Set());   // task B12b: the History re-sync records this tab applied (reconcile)
   // True only once the cloud really answered this session (not by the 2-minute fallback below): the file queue
@@ -2255,8 +2264,18 @@ export default function ProximaApp() {
       // A restore this tab had not handled yet (review rounds 4 and 5): until History and the cloud ids both answer,
       // this pass decides nothing, so no step below rewrites an entry from a pre-restore copy and the restore is not
       // marked handled before its rows can be released; finishLogs waits too (restorePendingRef).
-      restorePendingRef.current = guard.fresh && (!remote.historyOk || !ids);
-      if (restorePendingRef.current) return;
+      // Task B18 review (b18 #1): the same while the restore is newer than what this browser knew before the reads (it may
+      // have committed after History was read and before settings was): the next pass, whose reads all follow it, runs
+      // in a second instead of waiting for the 20-second timer.
+      const restoreAfterReads = guard.fresh && guard.restoreAt > restoreKnownAt;
+      // Task B18 verification round 2 (correctness #1): finishLogs waits for the whole of a pass that handles a restore
+      // (cleared right after markRestoreSeen below): a render during this pass's awaits would otherwise upload an entry's
+      // pre-restore copy, and restoredVersions then leaves that entry (queued) as it is.
+      restorePendingRef.current = guard.fresh;
+      if (guard.fresh && (!remote.historyOk || !ids || restoreAfterReads)) {
+        if (restoreAfterReads && remote.historyOk && ids) setTimeout(() => reconcileWithCloud(), 1000);
+        return;
+      }
       // Task B7a (round 20 #8): this tab's "being deleted" ids follow the shared queue and its own running calls.
       pruneDeleting();
       // Task B7a (round 20 #1, #3, #5): the SHARED delete state decides this pass, not this tab's sets alone (another tab
@@ -2328,6 +2347,8 @@ export default function ProximaApp() {
           setLogs(prev => prev.map(l => take.get(l.id) || l));
         }
         markRestoreSeen(guard.restoreAt);
+        restorePendingRef.current = false;
+        setRestoreSettled(n => n + 1);
       }
       // Task B12b (simulator F3): the History entries a delete trimmed here take the cloud's copy once that delete settled
       // (storage.js historyResyncDue), whether it was confirmed (the cloud's copy is stripped the same way: no change) or
@@ -2442,7 +2463,16 @@ export default function ProximaApp() {
       if (goneItems.length) dropLogItemsFor(goneItems.map(id => ({ id })));
       // Task B16 (migration 20261024100000, K2): items of generations a restore removed that the cloud's copy of their entry
       // lacks (the server stripped them from a late upload) leave this tab's copy too; the cloud already holds that shape.
-      const stripped = remote.historyOk ? restoreStrippedLogs(logsRef.current, remote.history || [], ids?.taskRestoreRemoved ?? null) : [];
+      // Task B18 (review round 30 #8): History and the tombstones are read in parallel. A restore that committed between those
+      // reads shows its removals in the tombstones while History is from before it: the strip would drop, for good, an item
+      // the restore brought back History-only. So when there is something to strip, the marker is read again first; if it
+      // moved since this pass's settings read, the strip waits for the next pass (which reads History after that restore).
+      // Computed again after the await, from this tab's copies as they are then.
+      const stripCandidates = remote.historyOk ? restoreStrippedLogs(logsRef.current, remote.history || [], ids?.taskRestoreRemoved ?? null) : [];
+      // Task B18 review (b18 #1): and only for a marker this browser knew before the reads (History then follows it).
+      const markerSame = !stripCandidates.length || (guard.restoreAt <= restoreKnownAt && (await pullRestoreAt()) === guard.restoreAt);
+      const stripped = markerSame && stripCandidates.length
+        ? restoreStrippedLogs(logsRef.current, remote.history || [], ids?.taskRestoreRemoved ?? null) : [];
       if (stripped.length) {
         const byId = new Map(stripped.map(l => [l.id, l]));
         logsRef.current = logsRef.current.map(l => byId.get(l.id) || l);
@@ -2530,19 +2560,25 @@ export default function ProximaApp() {
       // files; there a wrong "deleted" would hide a History-only comeback at the cap, which that step does not ask the
       // server about.
       if (ids) {
-        const keptTaskIds = new Set([...tasksRef.current.filter(t => !rmTasks.has(t.id)).map(t => t.id), ...taskSyncQueueRef.current.map(t => t.id)]);
+        // Owner ruling 2026-10-23: a copy stored in IndexedDB of an id the cloud tombstones (a user's delete or the restore's
+        // own removal) or that this pass removes is a leftover the next load removes, not a generation this browser keeps
+        // (a cancelled clear's put-back may have stored one the restore then removed).
+        const tombT = ids.taskTombstones instanceof Set ? ids.taskTombstones : new Set(), tombH = ids.historyTombstones instanceof Set ? ids.historyTombstones : new Set();
+        // Task B18 verification (regression #1): the same for this tab's debounced upload queue. Its copy of an id this pass
+        // removes or the cloud tombstones never lands (the server refuses it), so it does not keep that generation's files.
+        const keptTaskIds = new Set([...tasksRef.current.filter(t => !rmTasks.has(t.id)).map(t => t.id),
+          ...taskSyncQueueRef.current.filter(t => !rmTasks.has(t.id) && !tombT.has(t.id)).map(t => t.id)]);
         const keptLogs = logsRef.current.filter(l => !rmLogs.has(l.id));
-        for (const l of keptLogs) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) if (i?.id) keptTaskIds.add(i.id);
+        // Task B18 verification round 2 (regression #1): nor does this tab's History item of a generation the restore removed
+        // (a by_restore tombstone): the server strips it from any upload when the stored entry lacks it (K2), and a stored
+        // entry that holds it (a History-only comeback) counts through the cloud's items (cloudItemIds, generations_live).
+        for (const l of keptLogs) for (const i of Array.isArray(l?.tasks) ? l.tasks : []) if (i?.id && !(tombT.has(i.id) && restoreRemoved?.has(i.id))) keptTaskIds.add(i.id);
         const keptLogIds = new Set(keptLogs.map(l => l.id));
         // Task B15 (review round 28 #5): this browser's stash and queue traces, read BEFORE IndexedDB too: a give-back that
         // drops its stash after this read wrote IndexedDB in a transaction created before it (saveTasksNow), so the
         // IndexedDB read below sees it; one that dropped it before this read is in IndexedDB already.
         const earlyKept = hasHeldPurges() ? storedKeptIds() : null;
         const shared = hasHeldPurges() ? await storedEvidenceIds() : null;
-        // Owner ruling 2026-10-23: a copy stored in IndexedDB of an id the cloud tombstones (a user's delete or the restore's
-        // own removal) or that this pass removes is a leftover the next load removes, not a generation this browser keeps
-        // (a cancelled clear's put-back may have stored one the restore then removed).
-        const tombT = ids.taskTombstones instanceof Set ? ids.taskTombstones : new Set(), tombH = ids.historyTombstones instanceof Set ? ids.historyTombstones : new Set();
         if (shared) {
           for (const id of shared.task) if (!tombT.has(id) && !rmTasks.has(id)) keptTaskIds.add(id);
           for (const id of shared.history) if (!tombH.has(id) && !rmLogs.has(id)) keptLogIds.add(id);
@@ -2555,7 +2591,11 @@ export default function ProximaApp() {
         // left out; History tombstones). An undecided owner another browser deleted is decided "gone" from them, without
         // waiting for a restore's evidence (storage.js heldPurgeRule), when nothing here or in the cloud keeps it.
         const userTaskTombstones = ids.taskTombstones instanceof Set && restoreRemoved ? [...ids.taskTombstones].filter(id => !restoreRemoved.has(id)) : [];
-        const evidence = { restoreKnownAt,
+        // Task B18 verification round 3 (regression #1): the pass that handles a restore decides no held purge (-1: neither
+        // "usable" nor "current" in storage.js heldPurgeRule); the next one does. With the 1-second re-run, the handling pass
+        // would otherwise decide as soon as it learned the restore, before another device's queued upload of a generation
+        // the restore removed History-only could land.
+        const evidence = { restoreKnownAt: guard.fresh ? -1 : restoreKnownAt,
           task: { present: [...(ids.tasks || []), ...(cloudItemIds || [])], local: keptTaskIds, deleted: userTaskTombstones, tombstoned: [...tombT],
             complete: ids.tasks instanceof Set && !!cloudItemIds && !!restoreRemoved && !!shared },
           history: { present: [...(ids.history || [])], local: keptLogIds, deleted: ids.historyTombstones instanceof Set ? [...ids.historyTombstones] : [], tombstoned: [...tombH],
@@ -2692,7 +2732,7 @@ export default function ProximaApp() {
     const byId = new Map(done.map(l => [l.id, l]));
     setLogs(prev => prev.map(l => byId.get(l.id) || l));
     for (const l of done) persistLog(l);
-  }, [tasks, logs, persistLog, historySyncReady]);
+  }, [tasks, logs, persistLog, historySyncReady, restoreSettled]);
 
   // Track active count
   useEffect(() => {

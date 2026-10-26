@@ -324,7 +324,7 @@ await test("G: the restore removed the generation (by_restore tombstone, no row,
     history: { present: [], local: new Set(), complete: true } };
   A.releaseHeldPurges(Date.now(), ev);
   assert.deepEqual([filesQueued(), wsQueued()], [["s/A2.png", "uploads/s/A2-src.png"], ["pred-A2"]]);
-  const site = between("const evidence = { restoreKnownAt,", "history: { present:");
+  const site = between("const evidence = { restoreKnownAt", "history: { present:");   // B18 round 3: `restoreKnownAt: guard.fresh ? -1 : …`
   assert.match(site, /task: \{ present: \[\.\.\.\(ids\.tasks \|\| \[\]\), \.\.\.\(cloudItemIds \|\| \[\]\)\], local: keptTaskIds,/);
   assert.doesNotMatch(site, /present: \[[^\]]*restoreRemoved/, "a by_restore tombstone is not present");
   // The superseded-confirm step keeps them (it decides blocking only).
