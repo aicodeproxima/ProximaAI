@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useReducer, useMemo, memo } f
 import { MODELS, TYPE_LABELS, TYPE_ICONS, PROVIDER_COLORS } from "./config/models.js";
 import { CATALOG, visibleModels, editModelFor } from "./config/catalog.js";
 import { createUnsentPublisher } from "./lib/unsentPublish.js";
-import { isKieModelId, isKieGeneration, isKiePollUrl, KIE_CREDIT_USD } from "./lib/kie.js";
+import { isKieModelId, isKieGeneration, isKiePollUrl, KIE_CREDIT_USD, kieBalanceLabel } from "./lib/kie.js";
 import { buildPayload, chosenResolution, getEffectiveImageBatchCount, getImageBatchLimit, planImageBatchRequests } from "./lib/payloadBuilder.js";
 import { requestCost } from "./lib/pricing.js";
 import { draftTask, unitQuote, taskUserSettings, effectivePerModelRes, labelPerModelRes, resolutionNotes, runLabels } from "./lib/taskDraft.js";
@@ -1685,7 +1685,21 @@ export default function ProximaApp() {
   const hasKieKey = !!providerKeys?.has("kie");
   const keyBlocked = (keyStatus === "missing" || keyStatus === "invalid") && !hasKieKey;
   const kieFingerprint = providerKeyList.find(k => k.provider === "kie")?.fingerprint || null;
+  // The kie.ai balance next to WaveSpeed's (owner 2026-10-26), refreshed at the same moments; asked only when the
+  // account has a kie.ai key (an account without one would get a "no key" answer on every refresh).
+  const [kieCredits, setKieCredits] = useState(null);
+  const hasKieKeyRef = useRef(hasKieKey);
+  hasKieKeyRef.current = hasKieKey;
+  const refreshKieCredits = useCallback(async () => {
+    if (!hasKieKeyRef.current) { setKieCredits(null); return null; }
+    const r = await checkKieBalance();
+    if (r.credits !== null) setKieCredits(r.credits);
+    else if (r.keyStatus === "missing" || r.keyStatus === "invalid") setKieCredits(null);
+    if (r.keyStatus === "invalid") setKieKeyStatus("invalid");
+    return r;
+  }, []);
   const refreshBalance = useCallback(async () => {
+    refreshKieCredits().catch(() => {});
     const r = await checkBalance();
     if (r.balance !== null) setBalance(r.balance);
     // A missing or rejected key has no balance: never leave the old key's amount next to the warning.
@@ -1694,6 +1708,10 @@ export default function ProximaApp() {
     return r;
   }, []);
   const [balance, setBalance] = useState(null);
+  useEffect(() => {
+    if (isAuthed && hasKieKey) refreshKieCredits().catch(() => {});
+    else setKieCredits(null);
+  }, [isAuthed, hasKieKey, refreshKieCredits]);
   const [genType, setGenType] = useState("image");
   const [selectedModels, setSelectedModels] = useState([]);
   const [favoriteModelsByType, setFavoriteModelsByType] = useState(() => emptyModelFavorites());
@@ -2191,6 +2209,7 @@ export default function ProximaApp() {
   function signOutLocal() {
     clearSession();
     bindPageAccount(null);
+    setKieCredits(null);
     resetDeviceIdCache();
     for (const id of Object.keys(pollRefs.current)) clearTimeout(pollRefs.current[id]);
     pollRefs.current = {};
@@ -4743,6 +4762,7 @@ export default function ProximaApp() {
             <div className="topbar-title">ProximaAI — {page === "cockpit" ? "GENERATION COCKPIT" : page === "gallery" ? "SAVED OUTPUTS" : page === "logs" ? "GENERATION LOG" : "SETTINGS"}</div>
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
               {balance !== null && !keyBlocked && <div className="balance-pill">${Number(balance).toFixed(2)}</div>}
+              {kieCredits !== null && kieKeyStatus !== "invalid" && <div className="balance-pill" title="kie.ai credits left">{kieBalanceLabel(kieCredits)}</div>}
               {keyBlocked && <span style={{ fontSize: 11, color: "var(--error)" }}>⚠ {keyStatus === "invalid" ? "API key rejected" : "No API Key"}</span>}
               {kieKeyStatus === "invalid" && <span style={{ fontSize: 11, color: "var(--error)" }}>⚠ kie.ai key rejected</span>}
             </div>

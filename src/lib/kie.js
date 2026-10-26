@@ -90,3 +90,10 @@ export function kiePollResult(json) {
 }
 
 export const kieCost = (credits) => Math.round(credits * KIE_CREDIT_USD * 1e6) / 1e6;
+
+// The top bar's kie.ai balance (owner 2026-10-26): credits and their dollar value at kie.ai's standard rate.
+export function kieBalanceLabel(credits) {
+  if (typeof credits !== "number" || !Number.isFinite(credits)) return "";
+  const cr = credits.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  return `kie ${cr} cr · $${(credits * KIE_CREDIT_USD).toFixed(2)}`;
+}
