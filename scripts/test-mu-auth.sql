@@ -41,21 +41,23 @@ declare
   -- key cases read whichever store this database has (S1/S2 review, regression #1). Dynamic SQL: the table may not exist.
   v_p5 boolean := to_regclass('proxima_auth.provider_keys') is not null; v_a_key boolean;
   ok boolean; v_m4 boolean; v_m3 boolean; v_pfx text; v_otok text;
-  ip_t constant text := '{"x-forwarded-for":"203.0.113.7","cf-connecting-ip":"203.0.113.7"}';
-  ip_u constant text := '{"x-forwarded-for":"198.51.100.9","cf-connecting-ip":"198.51.100.9"}';
-  ip_v constant text := '{"x-forwarded-for":"192.0.2.44","cf-connecting-ip":"192.0.2.44"}';
-  ip_w constant text := '{"x-forwarded-for":"192.0.2.45","cf-connecting-ip":"192.0.2.45"}';
-  ip_x constant text := '{"x-forwarded-for":"192.0.2.46","cf-connecting-ip":"192.0.2.46"}';
-  ip_y constant text := '{"x-forwarded-for":"192.0.2.47","cf-connecting-ip":"192.0.2.47"}';
-  ip_g constant text := '{"x-forwarded-for":"192.0.2.48","cf-connecting-ip":"192.0.2.48"}';
-  ip_z constant text := '{"x-forwarded-for":"192.0.2.50","cf-connecting-ip":"192.0.2.50"}';
-  ip_z2 constant text := '{"x-forwarded-for":"192.0.2.51","cf-connecting-ip":"192.0.2.51"}';
-  ip_bad constant text := '{"x-forwarded-for":"not-an-ip","cf-connecting-ip":"not-an-ip"}';
-  ip6_1 constant text := '{"cf-connecting-ip":"2001:db8:0:0::1"}';
-  ip6_2 constant text := '{"cf-connecting-ip":"2001:db8:0:0::2"}';
-  ip6_3 constant text := '{"cf-connecting-ip":"2001:db8:0:0::3"}';
-  ip6_4 constant text := '{"cf-connecting-ip":"2001:db8:0:0::4"}';
-  ip6_o constant text := '{"cf-connecting-ip":"2001:db8:0:1::1"}';
+  -- 20261026600000: a member signs in only from a client that marks its requests 'proxima-guard/1' (src/lib/session.js);
+  -- every request here is the current client's (the old-build refusal is scripts/test-member-signin-guard-db.sql).
+  ip_t constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"203.0.113.7","cf-connecting-ip":"203.0.113.7"}';
+  ip_u constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"198.51.100.9","cf-connecting-ip":"198.51.100.9"}';
+  ip_v constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"192.0.2.44","cf-connecting-ip":"192.0.2.44"}';
+  ip_w constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"192.0.2.45","cf-connecting-ip":"192.0.2.45"}';
+  ip_x constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"192.0.2.46","cf-connecting-ip":"192.0.2.46"}';
+  ip_y constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"192.0.2.47","cf-connecting-ip":"192.0.2.47"}';
+  ip_g constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"192.0.2.48","cf-connecting-ip":"192.0.2.48"}';
+  ip_z constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"192.0.2.50","cf-connecting-ip":"192.0.2.50"}';
+  ip_z2 constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"192.0.2.51","cf-connecting-ip":"192.0.2.51"}';
+  ip_bad constant text := '{"x-client-info":"proxima-guard/1","x-forwarded-for":"not-an-ip","cf-connecting-ip":"not-an-ip"}';
+  ip6_1 constant text := '{"x-client-info":"proxima-guard/1","cf-connecting-ip":"2001:db8:0:0::1"}';
+  ip6_2 constant text := '{"x-client-info":"proxima-guard/1","cf-connecting-ip":"2001:db8:0:0::2"}';
+  ip6_3 constant text := '{"x-client-info":"proxima-guard/1","cf-connecting-ip":"2001:db8:0:0::3"}';
+  ip6_4 constant text := '{"x-client-info":"proxima-guard/1","cf-connecting-ip":"2001:db8:0:0::4"}';
+  ip6_o constant text := '{"x-client-info":"proxima-guard/1","cf-connecting-ip":"2001:db8:0:1::1"}';
 begin
   -- 0. Seed four member accounts (D disabled; C has no backup code) and their rows (as postgres, like every suite), and
   --    snapshot the real owner row. A missing table fails here and in every case below: the expected result before P1.
@@ -248,7 +250,7 @@ begin
     insert into proxima_auth.users (id, username, role, scope, password_hash, backup_code_hash, sessions_valid_after)
     values (e, '__mu_e', 'member', 'user:__mu_e', extensions.crypt('mu-pass-E-0005', extensions.gen_salt('bf', 12)),
             extensions.crypt('mu-backup-code-E-000005', extensions.gen_salt('bf', 12)), 0);
-    perform set_config('request.headers', '{"x-forwarded-for":"192.0.2.52","cf-connecting-ip":"192.0.2.52"}', true);
+    perform set_config('request.headers', '{"x-client-info":"proxima-guard/1","x-forwarded-for":"192.0.2.52","cf-connecting-ip":"192.0.2.52"}', true);
     set local role anon;
     t0 := clock_timestamp(); r := verify_admin('__mu_e', null);                 el[1] := extract(epoch from clock_timestamp() - t0); bodies[1] := r::jsonb;
     t0 := clock_timestamp(); r := verify_admin('__mu_e', '');                   el[2] := extract(epoch from clock_timestamp() - t0); bodies[2] := r::jsonb;
