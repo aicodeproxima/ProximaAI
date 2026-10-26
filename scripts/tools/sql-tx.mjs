@@ -174,6 +174,19 @@ async function runSbQuery(args) {
 
 export const USAGE = "usage: node scripts/tools/sql-tx.mjs [migration.sql ...] --test <test.sql>";
 
+// Tokens, codes and keys are never printed (owner rule). A failing case may print an RPC's raw reply (a session token,
+// an invite or backup code: fixtures of a rolled-back transaction, but still secrets); every line main() prints goes
+// through this. JSON values under secret-looking keys, both token shapes, Supabase/WaveSpeed keys and JWTs are masked.
+const SECRET_KEYS = /("(?:token|backup_code|code|password|new_password|secret|key|api_key)"\s*:\s*)"[^"]*"/gi;
+export function maskSecrets(text) {
+  return String(text)
+    .replace(SECRET_KEYS, '$1"<hidden>"')
+    .replace(/\b[\w:-]+\.\d{9,11}\.[0-9a-f]{16,}\b/gi, "<token>")
+    .replace(/\bsb_secret_[A-Za-z0-9_-]+/g, "sb_secret_<hidden>")
+    .replace(/\bwsk_[A-Za-z0-9_]+/g, "wsk_<hidden>")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "<jwt>");
+}
+
 // Throws on a flag other than --test, a missing or repeated --test, or a --test with no file after it.
 export function parseArgs(argv) {
   const migrations = [];
@@ -193,34 +206,36 @@ export function parseArgs(argv) {
 }
 
 async function main(argv) {
+  const say = (s) => console.log(maskSecrets(String(s)));
+  const sayErr = (s) => console.error(maskSecrets(String(s)));
   let args;
-  try { args = parseArgs(argv); } catch (e) { console.error(`${e.message}\n${USAGE}`); return 2; }
+  try { args = parseArgs(argv); } catch (e) { sayErr(`${e.message}\n${USAGE}`); return 2; }
   const { migrations, test } = args;
   const files = [];
   for (const f of [...migrations, test]) {
     try { files.push({ name: f, sql: fs.readFileSync(f, "utf8") }); }
-    catch (e) { console.error(`cannot read ${f}: ${e.message}`); return 2; }
+    catch (e) { sayErr(`cannot read ${f}: ${e.message}`); return 2; }
   }
   const refusal = checkFiles(files);
-  if (refusal) { console.error(refusal); return 2; }
+  if (refusal) { sayErr(refusal); return 2; }
   const tmp = path.join(os.tmpdir(), `sql-tx-${process.pid}-${Date.now()}.sql`);
   fs.writeFileSync(tmp, buildScript(files));
   let r;
   try { r = await runSbQuery(["--write", "-f", tmp]); } finally { try { fs.unlinkSync(tmp); } catch { /* gone */ } }
   if (r.status === 0) {
-    console.log("FAIL - the transaction did not raise (the guard should always abort it)");
-    console.log(r.stdout.trim());
+    say("FAIL - the transaction did not raise (the guard should always abort it)");
+    say(r.stdout.trim());
     return 1;
   }
   const p = parseResult(r.stderr || r.stdout);
   if (p.kind === "result") {
-    for (const c of p.cases) console.log(`${c.ok ? "ok  " : "FAIL"} - ${c.text.replace(/^(ok|PASS|FAIL)\s*/, "")}`);
-    if (p.truncated) console.log("NOTE - sb-query cut the error text at 2000 chars; later cases are missing");
-    console.log(`${p.pass} ok, ${p.fail} FAIL${p.truncated ? " (truncated)" : ""} -- ${test}`);
+    for (const c of p.cases) say(`${c.ok ? "ok  " : "FAIL"} - ${c.text.replace(/^(ok|PASS|FAIL)\s*/, "")}`);
+    if (p.truncated) say("NOTE - sb-query cut the error text at 2000 chars; later cases are missing");
+    say(`${p.pass} ok, ${p.fail} FAIL${p.truncated ? " (truncated)" : ""} -- ${test}`);
     return p.fail === 0 && !p.truncated ? 0 : 1;
   }
-  if (p.kind === "rollback") { console.log(`FAIL - ${test} raised no RESULT (stopped at the SQLTX_ROLLBACK guard)`); return 1; }
-  console.log(`FAIL - error before RESULT:\n${p.message}`);
+  if (p.kind === "rollback") { say(`FAIL - ${test} raised no RESULT (stopped at the SQLTX_ROLLBACK guard)`); return 1; }
+  say(`FAIL - error before RESULT:\n${p.message}`);
   return 1;
 }
 

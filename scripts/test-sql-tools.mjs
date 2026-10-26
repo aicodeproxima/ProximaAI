@@ -1,7 +1,8 @@
 // Tests for the pure parts of scripts/tools/sql-tx.mjs and scripts/tools/apply-migration.mjs (no network).
 // Run: node scripts/test-sql-tools.mjs
 import assert from "node:assert/strict";
-const { buildScript, parseResult, GUARD } = await import("./tools/sql-tx.mjs");
+const { buildScript, parseResult, GUARD, maskSecrets } = await import("./tools/sql-tx.mjs");
+import { readFileSync } from "node:fs";
 const { parseName, buildApplyScript } = await import("./tools/apply-migration.mjs");
 
 let n = 0, failed = 0;
@@ -333,6 +334,29 @@ test("planApply: files of one batch sharing a version or a name are refused, nam
   } catch (e) { failed++; console.log("FAIL - supabase-admin sql(): a long error text reaches the caller whole\n   ", e.message.split("\n")[0]); }
   finally { globalThis.fetch = realFetch; delete process.env.SUPABASE_ACCESS_TOKEN; }
 }
+
+// A failing case may print an RPC's raw reply: a session token, an invite or backup code, a key. Fixtures in a rolled-back
+// transaction, but never printed (owner rule): every line sql-tx prints goes through maskSecrets.
+test("maskSecrets: tokens, codes and keys never reach the output; everything else stays", () => {
+  const tok = "u:eebc6906-ab3a-4c1f-9ef9-a94071871ca4.1793038454.a444b80f46980dc17f907766c56c278cc6efc564";
+  const line = `FAIL I3 join {"ok" : true, "token" : "${tok}", "backup_code" : "abcd-efgh-ijkl-mnop", "username" : "neo"} n=1`;
+  const m = maskSecrets(line);
+  for (const secret of [tok, "a444b80f46980dc17f907766c56c278cc6efc564", "abcd-efgh-ijkl-mnop"]) assert.ok(!m.includes(secret), `masked: ${secret.slice(0, 12)}`);
+  assert.ok(m.includes('"username" : "neo"') && m.includes("n=1") && m.startsWith("FAIL I3 join"), "the rest is kept");
+  assert.ok(!maskSecrets('{"ok": true, "code": "K7QM-2XRP-9WTA-HC4D"}').includes("K7QM"), "invite code");
+  assert.ok(!maskSecrets('"password":"hunter22x"').includes("hunter22x"));
+  assert.ok(!maskSecrets("admin.1793038454.0123456789abcdef0123").includes("0123456789abcdef0123"), "older token shape");
+  for (const k of ["sb_secret_AbCdEf0123456789xyz", "wsk_live_0123456789abcdef", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJlMTIz"]) assert.ok(!maskSecrets(`key ${k} end`).includes(k.slice(-10)), k.slice(0, 8));
+  assert.equal(maskSecrets("ok G1 member-needs-guard-build; 26 ok, 0 FAIL"), "ok G1 member-needs-guard-build; 26 ok, 0 FAIL");
+});
+
+test("sql-tx prints only through maskSecrets", () => {
+  const src = readFileSync(new URL("./tools/sql-tx.mjs", import.meta.url), "utf8");
+  const main = src.slice(src.indexOf("async function main("));
+  assert.ok(main.length > 100, "main found");
+  assert.ok(!/console\.(log|error)\(/.test(main.replace(/const say = [^\n]*\n/, "").replace(/const sayErr = [^\n]*\n/, "")), "no bare console output in main");
+  assert.match(main, /const say = \(s\) => console\.log\(maskSecrets\(String\(s\)\)\);/);
+});
 
 console.log(`\n${n} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
