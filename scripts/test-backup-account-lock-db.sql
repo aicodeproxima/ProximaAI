@@ -4,8 +4,10 @@
 --   1. the bodies' statements, read with comments and string literals (also E'') removed and whitespace collapsed, as
 --      contiguous sequences (a copy in a dead branch or a string cannot pass; a body holding any $ fails): the run's
 --      locked read of the account row (scope plus the switch / disabled / deleted re-check) right before its INSERT,
---      and no other assignment of the scope it writes; the snapshot's skip check -> lock -> session check -> scope
---      compare -> its first read; rename_my_account's own lock before its first data write (no opposite-order wait);
+--      and no other assignment of the scope it writes (in _auto_backup_one since 20261027200000; the run passes it
+--      the account id only); the snapshot's skip check -> lock -> session check -> scope compare -> its INSERT, which
+--      reads the data (one statement since 20261027200000); rename_my_account's own lock before its first data write
+--      (no opposite-order wait);
 --   2. a rename staged inside a 2-day run, from a trigger on an earlier account's backup: the backup lands under the new
 --      name (20261025800000's body wrote the scope its loop query had read);
 --   3. an account switched off, one deleted and one disabled, staged the same way: none is backed up (the re-check
@@ -14,7 +16,7 @@
 --   5. a snapshot first, then a rename: the backup moves with the account.
 -- 2 and 3 fail on 20261025800000's body; 4 and 5 are regression checks. Run with 20261025800000 present: before 820000
 -- is applied, node scripts/tools/sql-tx.mjs <820000> --test <this file> (prepend 800000 too while it is not applied);
--- afterwards this file alone. Fixtures: accounts '__lk_<txid>*' with cost-4 passwords, tasks 'lk-*'; tokens are minted
+-- afterwards this file alone. Since 20261027200000 check 1 reads its bodies: before it is applied, prepend it. Fixtures: accounts '__lk_<txid>*' with cost-4 passwords, tasks 'lk-*'; tokens are minted
 -- here and never printed. Everything rolls back.
 do $t$
 declare
@@ -22,7 +24,7 @@ declare
   w_id uuid := gen_random_uuid(); x_id uuid := gen_random_uuid(); y_id uuid := gen_random_uuid(); z_id uuid := gen_random_uuid();
   rw_id uuid := gen_random_uuid(); rx_id uuid := gen_random_uuid(); ry_id uuid := gen_random_uuid(); rz_id uuid := gen_random_uuid();
   w text; x text; y text; z text; rw text; rx text; ry text; rz text; xt text; yt text; zt text; nz int;
-  j json; j2 json; n int; m int; k int; src text; a int; b int; c int; d int; e int; ans text;
+  j json; j2 json; n int; m int; k int; src text; a int; b int; c int; d int; e int; ans text; cab text; jobsrc text;
 begin
   w := 'user:' || p || 'w'; x := 'user:' || p || 'x'; y := 'user:' || p || 'y'; z := 'user:' || p || 'z';
   rw := 'user:' || p || 'rw'; rx := 'user:' || p || 'rx'; ry := 'user:' || p || 'ry'; rz := 'user:' || p || 'rz';
@@ -58,23 +60,31 @@ begin
              '--[^\n]*', ' ', 'g'), '/\*.*?\*/', ' ', 'g'), '\me''(?:[^''\\]|\\.|'''')*''', '''''', 'g'),
              '''(?:[^'']|'''')*''', '''''', 'g'), '\s+', ' ', 'g')
   $b$$n$;
-  src := pg_temp.lk_norm((select prosrc from pg_proc where oid = 'public.create_auto_backup()'::regprocedure));
-  a := position('loop begin select u.scope into v_scope from proxima_auth.users u where u.id = rec.id and u.auto_backups and u.disabled_at is null and u.deleted_at is null for key share; if v_scope is not null then insert into public.data_backups' in src);
+  -- 20261027200000: the run's locked read and INSERT are _auto_backup_one's (create_auto_backup and the cron procedure
+  -- _auto_backup_job call it per account).
+  src := pg_temp.lk_norm((select prosrc from pg_proc where oid = to_regprocedure('public._auto_backup_one(uuid)')));
+  a := position('begin select u.scope into v_scope from proxima_auth.users u where u.id = p_account and u.auto_backups and u.disabled_at is null and u.deleted_at is null for key share; if v_scope is null then return false; end if; insert into public.data_backups' in src);
   c := (select count(*) from regexp_matches(src, 'into\s+(strict\s+)?"?v_scope"?', 'g'));
   nz := (select count(*) from regexp_matches(src, 'v_scope"?\s*:?=', 'g'));
-  -- The loop row carries the account id only: every column is read through v_scope (review round 16).
-  e := (select count(*) from regexp_matches(regexp_replace(src, '\mrec\.id\M', '', 'g'), '\mrec\.', 'g'));
-  r := r || format('%s order: the 2-day backup reads the scope it writes from the account row under FOR KEY SHARE (switch, disabled, deleted re-checked) right before its INSERT, assigns it nowhere else, and reads no loop field but the id (%s reads, %s assignments, %s other loop fields)',
-                   case when a > 0 and c = 1 and nz = 0 and e = 0 and position('$' in src) = 0 then 'PASS' else 'FAIL' end, c, nz, e);
+  -- The runs hand _auto_backup_one the account id only: every column is read through v_scope (review round 16). The
+  -- create_auto_backup loop reads no loop field but the id; both runs' only call with an account is _auto_backup_one(id).
+  cab := pg_temp.lk_norm((select prosrc from pg_proc where oid = 'public.create_auto_backup()'::regprocedure));
+  jobsrc := pg_temp.lk_norm((select prosrc from pg_proc where oid = to_regprocedure('public._auto_backup_job()')));
+  e := (select count(*) from regexp_matches(regexp_replace(cab, '\mrec\.id\M', '', 'g'), '\mrec\.', 'g'))
+     + (select count(*) from regexp_matches(cab || ' ' || jobsrc, 'v_scope', 'g'));
+  d := (select count(*) from regexp_matches(cab, 'public\._auto_backup_one\(rec\.id\)', 'g'))
+     + (select count(*) from regexp_matches(jobsrc, 'public\._auto_backup_one\(v_id\)', 'g'));
+  r := r || format('%s order: the 2-day backup reads the scope it writes from the account row under FOR KEY SHARE (switch, disabled, deleted re-checked) right before its INSERT, assigns it nowhere else, and the runs pass it no loop field but the id (%s reads, %s assignments, %s other loop fields, %s calls by id)',
+                   case when a > 0 and c = 1 and nz = 0 and e = 0 and d = 2 and position('$' in src || cab || jobsrc) = 0 then 'PASS' else 'FAIL' end, c, nz, e, d);
   src := pg_temp.lk_norm((select prosrc from pg_proc where oid = 'public.snapshot_my_data_phase2(text,text,text)'::regprocedure));
   a := position('not public._auto_backups_on(v_username) then return json_build_object('''', true, '''', true); end if; ' ||
                 'perform 1 from proxima_auth.users u where u.scope = v_username for key share; ' ||
                 'perform public._verify_session_token(p_session_token); ' ||
                 'if (proxima_auth.current_account(p_session_token)).scope is distinct from v_username then raise exception ''''; end if; ' ||
-                'select coalesce(jsonb_agg(row_to_json(t)), ''''::jsonb) into v_tasks' in src);
-  b := position('insert into data_backups' in src);
-  r := r || format('%s order: a snapshot checks its pre-* switch, then holds the account row, checks its token, compares its scope, then reads (one sequence), and INSERTs after',
-                   case when a > 0 and a < b and position('$' in src) = 0 then 'PASS' else 'FAIL' end);
+                'insert into data_backups (' in src);
+  b := (select count(*) from regexp_matches(src, '\minsert into data_backups\M', 'g'));
+  r := r || format('%s order: a snapshot checks its pre-* switch, then holds the account row, checks its token, compares its scope, then INSERTs what it reads (one sequence, one INSERT)',
+                   case when a > 0 and b = 1 and position('$' in src) = 0 then 'PASS' else 'FAIL' end);
   src := pg_temp.lk_norm((select prosrc from pg_proc where oid = 'public.rename_my_account(text,text,text)'::regprocedure));
   a := position('from proxima_auth.users u where u.id = v_acc.id for update' in src); b := position('update tasks set device_id' in src);
   r := r || format('%s order: rename_my_account holds the account row before it moves any data row (no opposite-order wait)',

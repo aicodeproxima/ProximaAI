@@ -90,9 +90,10 @@ not Supabase Auth.
   account row before their INSERT and write under the scope it has then, so a rename can no longer leave a backup under
   the old name (invisible, never scrubbed); a snapshot also checks its session again. Only a rename of that account
   waits while a backup is open (sign-in, unlock, re-auth and key saves take FOR NO KEY UPDATE since 20261025920000): one
-  snapshot, about 65 ms at the snapshot limits; a 2-day run, up to about 3.3 s at 50 max-size accounts. The planned
-  account deletion (P5: an UPDATE of users.deleted_at) does not wait for FOR KEY SHARE: it must lock the account row FOR
-  UPDATE before deleting backups, as a rename does, or a backup still being written survives it (round 14).
+  snapshot, about 65 ms at the snapshot limits; in a 2-day run, that account's own backup since 20261027200000 (before
+  it, the rest of the run: up to about 3.3 s at 50 max-size accounts). The planned account deletion (P5: an UPDATE of
+  users.deleted_at) does not wait for FOR KEY SHARE: it must lock the account row FOR UPDATE before deleting backups, as
+  a rename does, or a backup still being written survives it (round 14).
 - Backup scrubs per account (P4, RLS session) — 20261026200000_mu_p4_backup_scrubs_per_account.sql (applied 2026-10-27
   04:28:43 UTC; review round 24, 3 critics): the switch-off scrub that trims backed-up History entries to their live
   items builds each backup's History in one statement (the loop was quadratic: 2.8 seconds for 3 backups of 1000
@@ -101,9 +102,17 @@ not Supabase Auth.
   transaction with a 2 s lock wait, so no account's drain holds another's locks; rename_my_account takes the new name's
   sign-in key before its account row (as join_with_invite does), allows the names join allows, answers a unique
   violation its checks cannot see with a counted username_taken, and moves the account's queued scrubs.
+- 2-day backup per account (P4, RLS session) — 20261027200000_mu_p4_backup_job_per_account.sql (applied 2026-10-27
+  08:43:38 UTC; review round 25, 3 critics): cron auto-backup-2day calls the procedure _auto_backup_job(), which commits
+  after each account with a 10 s lock wait; each account's backup is _auto_backup_one(id), 20261025820000's account-row
+  lock, re-check and INSERT unchanged, then that account keeps its 30 newest 2-day backups. So a rename waits only for
+  its own account's backup, and one account's lock wait no longer holds every other account's row. create_auto_backup()
+  still runs every account in one transaction (tests, manual runs). A snapshot reads all its parts and both counts in
+  its one INSERT, so they come from one moment. ws-webhook-sweep stays as it is (its statements are set-based; its slow
+  runs waited on test runs' table locks).
 - Gate: scripts/test-mu-matrix.sql (owner A vs seeded members, as anon with minted tokens: rows, files, folders,
   topics, tombstones, id squatting, id keys, every browser-callable data, backup and key function, Automatic
-  backups per account; 81/0 live after 20261026200000) and scripts/test-mu-catalog.sql (13/0), with
+  backups per account; 82/0 live after 20261027200000) and scripts/test-mu-catalog.sql (13/0), with
   scripts/test-mu-invite-walls-db.sql (a member cannot create, list or revoke the owner's invites).
 - Related: 08e2bb2 (deleteArchivedPath true only when Storage confirms), 1bd2e68 (clear*Remote → {ok, error}).
 
@@ -139,11 +148,12 @@ not Supabase Auth.
 
 ## Accepted — do not re-report
 - A switch-off of Automatic backups queues its scrub at once, but a drain that starts between that switch-off and the
-  commit of a backup of the same account still being written takes the queued row without seeing that backup, which
-  then keeps those copies (a window as long as the backup: about 65 ms for a snapshot, the rest of a 2-day run). The
-  same holds for a delete still committing when the switch goes off: its trigger read the switch as on, and a drain
-  in between cannot see its tombstones yet (a few ms; the global switch had the same race). Closing either would make
-  switch-offs wait on backups and deletes (review rounds 13-14).
+  commit of a backup of the same account still being written takes the queued row without seeing that backup, which then
+  keeps those copies (a window as long as the backup: about 65 ms for a snapshot; in a 2-day run, that account's own
+  backup since 20261027200000, the rest of the run before). The same holds for a delete still committing when the switch
+  goes off: its trigger read the switch as on, and a drain in between cannot see its tombstones yet (a few ms; the
+  global switch had the same race). Closing either would make switch-offs wait on backups and deletes (review rounds
+  13-14).
 - An expired-token holder keeps receiving content-free pings until the topic rotates (rename, password change, unlock,
   key rotation). Pings carry nothing.
 - A rename's own pings go to a topic of the new name with the old epoch (the epoch moves after the rows), which no
@@ -158,6 +168,8 @@ test-mu-p4-ab-guards.mjs (20261025800000/820000's lock limits, guards and record
 SQL, each rolls back (run alone against live; to test an unapplied migration, prepend its text in the same call):
 scripts/test-scrub-linear-db.sql, test-rename-name-rules-db.sql and test-backup-scrub-job-db.sql (20261026200000:
 the scrub byte-equal to the loop it replaced and linear, rename's name rules and sign-in key, the per-account drain);
+scripts/test-backup-job-db.sql (20261027200000: the 2-day job's COMMIT after each account, _auto_backup_one and its
+retention, what both replaced bodies wrote on the same data, the snapshot read in one statement);
 scripts/test-backup-account-lock-db.sql (20261025820000: a rename staged inside a 2-day run, both orders of a
 snapshot and a rename, and the lock-before-INSERT order read from the bodies with comments stripped);
 scripts/test-rls-{phase0,tables,storage,triggers,plan,rpcs,rename}.sql; P4 gate: scripts/test-mu-matrix.sql (two accounts:
@@ -168,6 +180,9 @@ p4s-ab-guard-* fixture but the end marker -noop must refuse);
 20261025820000's: scripts/test-backup-account-lock-rollback.sql with scripts/fixtures/p4s-lk-*.sql;
 20261026200000's: scripts/test-backup-scrubs-rollback.sql (migration, rollback, then this); after an apply,
 scripts/tools/drain-job-probe.mjs proves the cron job's CALL commits (a probe scrub drained by the next run);
+20261027200000's: scripts/test-backup-job-rollback.sql with scripts/fixtures/p4s-bj-*.sql (migration, the record
+fixture, rollback, then this); after an apply, scripts/tools/backup-job-probe.mjs calls the job once while no account
+is due (else the next scheduled run, at 03:00 UTC on odd days of the month, is the check);
 P1 M2: scripts/test-mu-scope-topic.sql (38
 checks: both token formats, two accounts' rows, the topic; failing-first with M1 alone 22/14) and
 test-mu-scope-topic-rollback.sql (13), with scripts/fixtures/mu-owner-{unlock,rename}.sql moving the owner between M1

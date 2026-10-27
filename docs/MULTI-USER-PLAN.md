@@ -70,6 +70,10 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
 11. **Unbounded cron loops.** backup-scrub-drain (every minute), ws-webhook-sweep (every 5 min) and auto-backup-2day
     loop over all data. They run as postgres with no statement timeout, so one account's backlog delays everyone.
     backup-scrub-drain: **FIXED 2026-10-27** (20261026200000: one account per transaction, 2 s lock wait, linear scrub).
+    auto-backup-2day: **FIXED 2026-10-27** (20261027200000: one account per transaction, 10 s lock wait). ws-webhook-sweep:
+    measured, left as it is: its statements are set-based and take about 0.1 s; its 21 runs over 1 s in 14 days (up to
+    17 s) all fell inside test-run windows (2026-10-25 20:50 to 10-26 05:20 UTC, and one of 1.2 s at 10-27 07:20),
+    waiting on those runs' table locks, which per-account commits would not avoid.
 
 ## 3. Design decisions (recommended)
 - **D1. Keep ProximaAI's own sign-in, made per account. No Supabase Auth now.**
@@ -224,6 +228,8 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   2026-10-26 06:10:55 UTC (review rounds lk1 and 11-21, 3 critics each).
 - 20261026200000 (backup scrubs per account; rename takes the name's sign-in key first) applied 2026-10-27 04:28:43 UTC
   (review round 24, 3 critics): gate 81/0 live.
+- 20261027200000 (the 2-day backup one account per transaction; a snapshot in one statement) applied 2026-10-27 08:43:38 UTC
+  (review round 25, 3 critics): gate 82/0 live.
 - Policies:
   - `USING (device_id = scope)` for every command on all six tables;
   - the storage policies check the account's folders;
@@ -256,6 +262,7 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   - auto_backups becomes per account (done 2026-10-26, 20261025800000; the 2-day backup now loops per account, and one
     account's error never stops the others' backups). Past about 60 switched-on accounts its one subtransaction per
     account overflows the 64-entry cache for the run's length: then a procedure that commits per account.
+  - the 2-day backup commits per account (done 2026-10-27, 20261027200000: procedure _auto_backup_job, 10 s lock wait).
 - Gate:
   - a two-account SQL matrix runs as anon with two minted tokens, A against B. It covers every table × every command,
     every storage operation and every browser-callable definer function;

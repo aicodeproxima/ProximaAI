@@ -7,7 +7,7 @@ Auto-loaded when any Claude session works in this repo.
 - Supabase backend: project `vhznmpxlcjbdzntmfvvy`
   - Tables: tasks, history, settings, favorites, presets, data_backups
   - Storage bucket: `generations` (manual per-task archive via ☁ button)
-  - pg_cron job `auto-backup-2day` runs every 2 days
+  - pg_cron job `auto-backup-2day` runs every 2 days, one account per transaction (`_auto_backup_job`)
 - Client-side triple-layer persistence: React state → IndexedDB → Supabase
 - Auth (since 2026-10-20): server-side sign-in via the `verify_admin` RPC (bcrypt in `proxima_auth.users` since P1 M1,
   2026-10-23; the old `app_secrets` admin_* rows are frozen by a trigger and kept only for M1's rollback), returning a
