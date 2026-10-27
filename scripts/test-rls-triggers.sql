@@ -114,9 +114,11 @@ begin
     r := r || format('%s T11 another scope''s row untouched by the scoped delete',
            case when exists (select 1 from public.history where id = p || '_horphan') then 'PASS' else 'FAIL' end);
     execute 'set local role anon';
-    -- T12 the client's keyset id read and its scope-filtered pulls see the live rows
-    select count(*) into n from public.tasks where device_id = s and id > '' ;
-    r := r || format('%s T12 scope read sees live rows (%s)', case when n >= 2 then 'PASS' else 'FAIL' end, n);
+    -- T12 the client's keyset id read and its scope-filtered pulls see the live rows: this test's own two probe rows (it
+    -- counted the owner's real rows too, with n >= 2, and failed once the owner deleted every generation, 2026-10-26)
+    insert into public.tasks (id, device_id) values (p || '_t12', s);
+    select count(*) into n from public.tasks where device_id = s and id > '' and left(id, length(p)) = p;
+    r := r || format('%s T12 scope read sees live rows (%s of its 2 probes)', case when n = 2 then 'PASS' else 'FAIL' end, n);
   exception when others then r := r || format('FAIL T5-T12 raised %s %s', sqlstate, sqlerrm);
   end;
   execute 'reset role';
