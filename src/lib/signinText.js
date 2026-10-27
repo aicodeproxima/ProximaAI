@@ -8,7 +8,10 @@
 export const SIGNIN_FAILED = "Wrong username or password";
 export const SIGNIN_HINT = "3 wrong passwords lock the account; your backup code unlocks it.";
 // Static (the same for every failure): says that waiting helps, never whether a pause is running (#7, design §5).
-export const BACKUP_CODE_FAILED = "Wrong backup code. 5 wrong codes pause unlocking for 15 minutes.";
+// Names the username too: the server answers an unknown name exactly like a wrong code (as SIGNIN_FAILED does).
+export const BACKUP_CODE_FAILED = "Wrong username or backup code. 5 wrong codes pause unlocking for 15 minutes.";
+// Settings → Account resets the signed-in account (its name is never typed there), so only the code can be wrong.
+export const BACKUP_CODE_FAILED_OWN = "Wrong backup code. 5 wrong codes pause unlocking for 15 minutes.";
 // Old server only (before M1): sign-in is locked after 3 wrong passwords; the screen switches to unlock mode.
 export const SIGNIN_LOCKED_OLD = "Sign-in is locked after 3 failed attempts. Unlock it with your backup code below, or tap “Forgot password?” to set a new one.";
 export const RENAME_RATE_LIMITED = "Too many name checks — try again in an hour";
@@ -46,12 +49,13 @@ export function backupLockedText(retryAfter) {
   return `Too many wrong backup codes — try again in ${min} min.`;
 }
 
-// unlock (backup code) answer -> one message. Only input checks the user can fix are named.
-export function backupCodeError(r) {
+// unlock (backup code) answer -> one message. Only input checks the user can fix are named. ownAccount: the signed-in
+// account's own reset in Settings, where no name was typed.
+export function backupCodeError(r, { ownAccount = false } = {}) {
   if (r?.reason === "throttled") return throttledText(r.retry_after);
   if (r?.reason === "backup_locked") return backupLockedText(r.retry_after);
   if (r?.reason === "weak_password") return "New password must be at least 8 characters";
-  return BACKUP_CODE_FAILED;
+  return ownAccount ? BACKUP_CODE_FAILED_OWN : BACKUP_CODE_FAILED;
 }
 
 // A name an account may take: join (20261026500000) and, since 20261026200000, rename refuse anything else.

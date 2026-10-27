@@ -63,7 +63,23 @@ test("backup code: one generic failure (old and new server)", () => {
     assert.equal(s, BACKUP_CODE_FAILED, JSON.stringify(r));
     assert.ok(!leaks(s));
   }
-  assert.equal(BACKUP_CODE_FAILED, "Wrong backup code. 5 wrong codes pause unlocking for 15 minutes.");
+  // The server answers an unknown name and a wrong code alike, so the words name both, as the sign-in failure does
+  // (2026-10-27: a member typed a name no account has and read "Wrong backup code" as their code being wrong).
+  assert.equal(BACKUP_CODE_FAILED, "Wrong username or backup code. 5 wrong codes pause unlocking for 15 minutes.");
+});
+const { readFileSync } = await import("node:fs");
+test("backup code in Settings: the signed-in account's own name is sent, so only the code can be wrong", () => {
+  for (const r of [{ ok: false, reason: "invalid" }, {}, null]) {
+    assert.equal(backupCodeError(r, { ownAccount: true }), T.BACKUP_CODE_FAILED_OWN, JSON.stringify(r));
+  }
+  assert.equal(T.BACKUP_CODE_FAILED_OWN, "Wrong backup code. 5 wrong codes pause unlocking for 15 minutes.");
+  assert.ok(!leaks(T.BACKUP_CODE_FAILED_OWN));
+  assert.equal(backupCodeError({ reason: "weak_password" }, { ownAccount: true }), "New password must be at least 8 characters");
+  const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  assert.match(app, /unlockWithBackupCode\(code, newPassword, creds\.username\);\s*if \(!r\?\.ok\) \{[^}]*setError\(backupCodeError\(r, \{ ownAccount: true \}\)\)/,
+    "Settings' reset passes ownAccount");
+  assert.match(app, /const r = await unlockWithBackupCode\(backupCode\.trim\(\)[^\n]*\n(?:[^\n]*\n){1,8}?\s*setError\(backupCodeError\(r\)\);/,
+    "the sign-in screen's unlock/reset keeps the words that name the username");
 });
 test("leaks: allows exactly the static pause sentence, still forbids state", () => {
   assert.ok(!leaks(BACKUP_CODE_FAILED));
@@ -106,7 +122,7 @@ test("rename: rate_limited -> one-hour text; throttled; taken; others unchanged"
   test("wiring: each unlockWithBackupCode answer goes through backupCodeError", () => {
     const calls = [...app.matchAll(/await unlockWithBackupCode\(/g)].map(m => m.index);
     assert.equal(calls.length, 2, "sign-in unlock/reset + AccountModal reset");
-    for (const i of calls) assert.match(app.slice(i, i + 900), /setError\(backupCodeError\(r\)\)/);
+    for (const i of calls) assert.match(app.slice(i, i + 900), /setError\(backupCodeError\(r(, \{ ownAccount: true \})?\)\)/);
   });
   test("wiring: sign-in switches to unlock mode on the old server's locked, then shows signInError", () => {
     assert.match(app, /if \(signInSwitchesToUnlock\(r\)\) switchMode\("unlock"\);\s*\n\s*setError\(signInError\(r\)\);/);

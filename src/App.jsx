@@ -772,7 +772,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
     setBusy(true); setError("");
     try {
       const r = await unlockWithBackupCode(code, newPassword, creds.username);
-      if (!r?.ok) { setResetCode(""); setShowResetCode(false); setError(backupCodeError(r)); return; }
+      if (!r?.ok) { setResetCode(""); setShowResetCode(false); setError(backupCodeError(r, { ownAccount: true })); return; }
       setResetCode(""); setNewPassword(""); setConfirmPassword("");
       onPasswordReset?.();
     } catch { setError("Can't reach the server — check your connection and try again."); }
