@@ -257,5 +257,14 @@ await test("Settings shows the owner's invite section (the server decides who ma
   assert.match(comp, /void: "void \(5 taken names\)"/);
 });
 
+// Since 20261026200000 a rename takes join's allow-list: the Account screen checks the same rule before it sends (a name
+// the server would refuse never costs a request), with the same words.
+await test("the rename form checks join's name rule before sending", () => {
+  const f = between(app, "async function submitNewUsername(e) {", "const r = await renameMyAccount(currentPassword, name);");
+  assert.match(f, /if \(!USERNAME_RULE\.test\(name\)\) \{ setError\(USERNAME_HINT\); return; \}/);
+  assert.ok(!/name\.length < 2/.test(f), "the old length-only check is gone");
+  assert.match(app, /import \{[^}]*\bUSERNAME_RULE\b[^}]*\bUSERNAME_HINT\b[^}]*\} from "\.\/lib\/signinText\.js";/);
+});
+
 console.log(`\n${n} passed, ${failed} failed`);
 if (failed) process.exit(1);

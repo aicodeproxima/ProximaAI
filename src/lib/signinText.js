@@ -54,11 +54,15 @@ export function backupCodeError(r) {
   return BACKUP_CODE_FAILED;
 }
 
+// A name an account may take: join (20261026500000) and, since 20261026200000, rename refuse anything else.
+export const USERNAME_RULE = /^[A-Za-z0-9_-]{2,64}$/;
+export const USERNAME_HINT = "Choose a name of 2 to 64 letters, digits, - or _ (no spaces or other characters).";
+
 // join_with_invite answer -> one message (supabase/migrations/20261026500000_mu_p5_invites.sql). Every code that doesn't
 // work (unknown, used, expired, revoked) reads the same, as the server answers.
 export function joinError(r) {
   if (r?.reason === "closed") return "Joining isn't open yet. Ask the person who invited you when to try again.";
-  if (r?.reason === "invalid_username") return "Choose a name of 2 to 64 letters, digits, - or _ (no spaces or other characters).";
+  if (r?.reason === "invalid_username") return USERNAME_HINT;
   if (r?.reason === "weak_password") return "Use a password of at least 8 characters.";
   if (r?.reason === "username_taken") return "That name is taken. Choose another one (after 5 taken names this invite stops working).";
   if (r?.reason === "throttled") return throttledText(r.retry_after);
@@ -98,7 +102,7 @@ export function accountError(r, fallback) {
   if (r?.reason === "throttled") return throttledText(r.retry_after);
   if (r?.reason === "username_taken") return "That username is taken";
   if (r?.reason === "weak_password") return "New password must be at least 8 characters";
-  if (r?.reason === "invalid_username") return "Username: 2–64 characters, no spaces, dots, colons or slashes";
+  if (r?.reason === "invalid_username") return USERNAME_HINT;   // rename: join's rule since 20261026200000
   if (r?.reason === "too_short") return "Backup code must be at least 12 characters";
   return fallback;
 }

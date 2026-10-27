@@ -4,7 +4,7 @@
 // Run: node scripts/test-signin-text.mjs
 import assert from "node:assert/strict";
 const T = await import("../src/lib/signinText.js");
-const { signInError, signInSwitchesToUnlock, backupCodeError, backupLockedText, accountError, throttledText, SIGNIN_FAILED, SIGNIN_HINT, BACKUP_CODE_FAILED, SIGNIN_LOCKED_OLD, RENAME_RATE_LIMITED } = T;
+const { signInError, signInSwitchesToUnlock, backupCodeError, backupLockedText, accountError, joinError, throttledText, SIGNIN_FAILED, SIGNIN_HINT, BACKUP_CODE_FAILED, SIGNIN_LOCKED_OLD, RENAME_RATE_LIMITED } = T;
 
 let n = 0, failed = 0;
 const test = (name, fn) => {
@@ -88,7 +88,9 @@ test("rename: rate_limited -> one-hour text; throttled; taken; others unchanged"
   assert.equal(accountError({ reason: "username_taken" }, "F"), "That username is taken");
   assert.match(accountError({ reason: "invalid" }, "F"), /Current password is wrong/);
   assert.match(accountError({ reason: "locked" }, "F"), /locked/);
-  assert.match(accountError({ reason: "invalid_username" }, "F"), /2–64 characters/);
+  // Since 20261026200000 a rename takes join's allow-list: both say the same rule (RLS follow-up, 2026-10-27)
+  assert.equal(accountError({ reason: "invalid_username" }, "F"), joinError({ reason: "invalid_username" }));
+  assert.match(accountError({ reason: "invalid_username" }, "F"), /2 to 64 letters, digits, - or _/);
   assert.match(accountError({ reason: "too_short" }, "F"), /12 characters/);
   assert.equal(accountError({ reason: "nope" }, "F"), "F");
   assert.equal(accountError(null, "F"), "F");

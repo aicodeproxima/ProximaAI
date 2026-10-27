@@ -15,7 +15,7 @@ import VersionInfo from "./lib/VersionInfo.jsx";
 import { downscaleImage } from "./lib/imageUpload.js";
 import { getSetting, hasLocalData, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, advanceFormStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
-import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
+import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, USERNAME_RULE, USERNAME_HINT, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
 import { readBrowserAccount, browserAccountDecision, claimBrowser, browserAccountMessage, freeForNewAccount, bootSessionDecision, tokenAccountId,
   pageMustLeave, accountCheckStep, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
 import InviteSection from "./components/InviteSection.jsx";
@@ -704,7 +704,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
   async function submitNewUsername(e) {
     e.preventDefault();
     const name = newUsername.trim();
-    if (name.length < 2) { setError("Username must be at least 2 characters"); return; }
+    if (!USERNAME_RULE.test(name)) { setError(USERNAME_HINT); return; }   // join's rule; the server refuses anything else
     if (!currentPassword) { setError("Enter your current password"); return; }
     setBusy(true); setError("");
     try {
