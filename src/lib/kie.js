@@ -65,10 +65,13 @@ export function kieSubmitResult(json) {
 }
 
 const STATES = { waiting: "created", queuing: "created", generating: "processing" };
+// The finished file(s): resultUrls on most models; Veo 3.1's page shows result_urls under data (2026-10-26), so every
+// documented spelling is read.
 function resultUrls(resultJson) {
   try {
     const r = typeof resultJson === "string" ? JSON.parse(resultJson) : resultJson;
-    return Array.isArray(r?.resultUrls) ? r.resultUrls.filter(u => typeof u === "string" && u) : [];
+    const list = [r?.resultUrls, r?.result_urls, r?.data?.resultUrls, r?.data?.result_urls].find(Array.isArray);
+    return list ? list.filter(u => typeof u === "string" && u) : [];
   } catch { return []; }
 }
 

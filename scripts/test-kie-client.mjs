@@ -23,9 +23,30 @@ const IMG2 = "https://x.supabase.co/storage/v1/object/public/generations/uploads
 const settingsFor = type => ({ prompt: "a red fox", ...(type === "i2i" || type === "i2v" ? { sourceImageUrl: IMG, sourceImageUrls: [IMG2] } : {}) });
 const inputAtDefaults = (type, m) => K.kieInput(m, buildPayload(m, settingsFor(type), type));
 
-await test("the catalog: 14 models, ids kie/…, unique, each naming a documented kie.ai model", () => {
+// The catalog by id (owner 2026-10-26: "Make sure we have all the top video and image models on Kie ai"; research
+// wf_a22c1d11-56c over kie.ai's market and price list). An entry dropped or renamed fails here.
+const EXPECTED = {
+  image: ["nano-banana-2/text-to-image", "nano-banana-pro/text-to-image", "seedream-5-lite/text-to-image", "gpt-image-2/text-to-image",
+    "nano-banana-2.1/text-to-image", "gpt-image-2.5-sunburst/text-to-image", "gpt-image-2.5-flare/text-to-image", "seedream-5-pro/text-to-image",
+    "seedream-5-flash/text-to-image", "flux-3-klein/text-to-image", "grok-imagine-image-2.0/text-to-image", "qwen-image-3.0-pro/text-to-image",
+    "wan-2.7-image-pro/text-to-image"],
+  i2i: ["nano-banana-2/edit", "nano-banana-pro/edit", "seedream-5-lite/edit", "gpt-image-2/edit",
+    "nano-banana-2.1/edit", "gpt-image-2.5-sunburst/edit", "gpt-image-2.5-flare/edit", "seedream-5-pro/edit", "seedream-5-flash/edit",
+    "flux-3-klein/edit", "grok-imagine-image-2.0/edit", "qwen-image-3.0-pro/edit", "wan-2.7-image-pro/edit"],
+  t2v: ["kling-3.0/text-to-video", "seedance-2/text-to-video", "wan-2.7/text-to-video",
+    "seedance-2.5/text-to-video", "veo-3.1-lite/text-to-video", "veo-3.1-fast/text-to-video", "veo-3.1/text-to-video",
+    "kling-4.0/text-to-video", "wan-3.0/text-to-video", "wan-3.0-prime/text-to-video", "gemini-omni-flash-1.1/text-to-video",
+    "pixverse-v6-max/text-to-video", "minimax-h3/text-to-video", "happyhorse-1.1/text-to-video"],
+  i2v: ["kling-3.0/image-to-video", "seedance-2/image-to-video", "wan-2.7/image-to-video",
+    "seedance-2.5/image-to-video", "veo-3.1-lite/image-to-video", "veo-3.1-fast/image-to-video", "veo-3.1/image-to-video",
+    "kling-4.0/image-to-video", "wan-3.0/image-to-video", "wan-3.0-prime/image-to-video", "gemini-omni-flash-1.1/image-to-video",
+    "grok-imagine-video-1.5/image-to-video", "pixverse-v6-max/image-to-video", "minimax-h3/image-to-video", "vidu-q4/image-to-video",
+    "happyhorse-1.1/image-to-video"],
+};
+await test("the catalog: exactly the expected models by type, ids kie/…, unique, each naming a documented kie.ai model", () => {
+  for (const [type, ids] of Object.entries(EXPECTED)) assert.deepEqual((C.KIE_MODELS?.[type] || []).map(m => m.id), ids.map(i => `kie/${i}`), type);
   const list = all();
-  assert.equal(list.length, 14);
+  assert.equal(list.length, 56);
   const ids = list.map(({ m }) => m.id);
   assert.equal(new Set(ids).size, ids.length, "unique ids");
   for (const { m } of list) {
@@ -46,12 +67,14 @@ await test("every field the app can send is in kie.ai's schema, and every option
       const p = m.params[slot];
       if (!p) continue;
       assert.ok(props[p.paramName], `${m.id}: ${slot} → ${p.paramName}`);
-      for (const o of p.options) assert.ok(props[p.paramName].enum.includes(o.value), `${m.id}: ${p.paramName}=${o.value}`);
+      for (const o of p.options) assert.ok(props[p.paramName].enum.map(String).includes(String(o.value)), `${m.id}: ${p.paramName}=${o.value}`);
       assert.ok(p.options.some(o => o.value === p.default), `${m.id}: ${slot} default`);
     }
     if (m.params.duration) for (const d of m.params.duration.options) {
       const pd = props.duration;
-      if (pd.enum) assert.ok(pd.enum.includes(String(d)), `${m.id}: duration ${d}`);
+      if (pd.enum) assert.ok(pd.enum.map(String).includes(String(d)), `${m.id}: duration ${d}`);
+      if (Number.isFinite(pd.minimum)) assert.ok(d >= pd.minimum, `${m.id}: duration ${d} >= ${pd.minimum}`);
+      if (Number.isFinite(pd.maximum)) assert.ok(d <= pd.maximum, `${m.id}: duration ${d} <= ${pd.maximum}`);
     }
   }
 });
@@ -69,7 +92,8 @@ await test("at default settings every model's input has kie.ai's required fields
       if (t === "integer" || t === "number") assert.equal(typeof v, "number", `${m.id}: ${k} number`);
       if (t === "boolean") assert.equal(typeof v, "boolean", `${m.id}: ${k} boolean`);
       if (t === "array") { assert.ok(Array.isArray(v), `${m.id}: ${k} array`); if (props[k].maxItems) assert.ok(v.length <= props[k].maxItems, `${m.id}: ${k} ≤ maxItems`); }
-      if (props[k].enum) assert.ok(props[k].enum.includes(String(v)), `${m.id}: ${k}=${v} allowed`);
+      if (props[k].enum) assert.ok(props[k].enum.map(String).includes(String(v)), `${m.id}: ${k}=${v} allowed`);
+      if (typeof v === "string" && props[k].maxLength) assert.ok(v.length <= props[k].maxLength, `${m.id}: ${k} length`);
     }
   }
 });
@@ -126,8 +150,10 @@ await test("kiePollResult maps kie.ai's states onto the app's (created / process
 
 await test("prices: the catalog price is kie.ai's credits at default settings × $0.005, and priceRequest prices the real input", () => {
   assert.equal(K.KIE_CREDIT_USD, 0.005);
+  // default settings: one source image for an edit or image-to-video model (two models charge per input image)
+  const oneImage = (type, m) => K.kieInput(m, buildPayload(m, { prompt: "a red fox", ...(type === "i2i" || type === "i2v" ? { sourceImageUrl: IMG } : {}) }, type));
   for (const { type, m } of all()) {
-    const credits = m.kie.credits(inputAtDefaults(type, m));
+    const credits = m.kie.credits(oneImage(type, m));
     assert.ok(credits > 0, m.id);
     assert.equal(m.price, Math.round(credits * K.KIE_CREDIT_USD * 1e6) / 1e6, m.id);
   }
@@ -295,6 +321,88 @@ await test("review #6: GPT Image 2 gets a ratio kie.ai accepts at the chosen siz
   assert.equal(K.kieInputProblem(kl, { prompt: "x".repeat(2500) }), null);
   const w = C.kieModelById("kie/wan-2.7/text-to-video");
   assert.match(K.kieInputProblem(w, { prompt: "p", negative_prompt: "n".repeat(501) }) || "", /500/);
+});
+
+// ─── The top models added 2026-10-26 (kie.ai's market; schemas in scripts/fixtures/kie-schemas.json) ───
+const inp = (id, extra = {}) => { const m = C.kieModelById(id); const type = Object.entries(C.KIE_MODELS).find(([, l]) => l.includes(m))[0];
+  return K.kieInput(m, buildPayload(m, { ...settingsFor(type), ...extra }, type)); };
+
+await test("a finished poll reads the result from resultUrls or result_urls, at the top or under data (Veo 3.1's page shows the latter)", () => {
+  const done = (resultJson) => K.kiePollResult({ code: 200, data: { state: "success", resultJson: JSON.stringify(resultJson), creditsConsumed: 30 } });
+  assert.deepEqual(done({ resultUrls: ["https://a/1.mp4"] }).data.outputs, ["https://a/1.mp4"]);
+  assert.deepEqual(done({ result_urls: ["https://a/2.mp4"] }).data.outputs, ["https://a/2.mp4"]);
+  assert.deepEqual(done({ data: { result_urls: ["https://a/3.mp4"] } }).data.outputs, ["https://a/3.mp4"]);
+  assert.deepEqual(done({ data: { resultUrls: ["https://a/4.mp4"] } }).data.outputs, ["https://a/4.mp4"]);
+  assert.equal(done({ other: 1 }).data.status, "failed", "no file is still a failure");
+});
+
+await test("kie.ai's fields with no default that it requires are always sent; per-request counts are pinned", () => {
+  assert.equal(inp("kie/seedream-5-pro/text-to-image").aspect_ratio, "1:1");
+  assert.equal(inp("kie/seedream-5-pro/text-to-image").quality, "basic");
+  assert.equal(inp("kie/seedream-5-flash/text-to-image").aspect_ratio, "1:1");
+  assert.equal(inp("kie/grok-imagine-image-2.0/text-to-image").aspect_ratio, "1:1");
+  assert.equal(inp("kie/grok-imagine-image-2.0/edit").aspect_ratio, "auto");
+  const px = inp("kie/pixverse-v6-max/text-to-video");
+  assert.ok(px.aspect_ratio && px.quality && Number.isInteger(px.duration), JSON.stringify(px));
+  const mm = inp("kie/minimax-h3/text-to-video");
+  assert.ok(mm.aspect_ratio && Number.isInteger(mm.duration), JSON.stringify(mm));
+  // Wan 2.7 Image Pro makes 4 images per request unless told: the app makes its own batches, one image each
+  assert.equal(inp("kie/wan-2.7-image-pro/text-to-image").n, 1);
+  assert.equal(inp("kie/wan-2.7-image-pro/edit").n, 1);
+});
+
+await test("Veo 3.1: each tier is its own model (model and generation type fixed), duration from kie.ai's 4/6/8", () => {
+  for (const [tier, value] of [["veo-3.1-lite", "veo3_lite"], ["veo-3.1-fast", "veo3_fast"], ["veo-3.1", "veo3"]]) {
+    const t = inp(`kie/${tier}/text-to-video`), i = inp(`kie/${tier}/image-to-video`);
+    assert.equal(t.model, value); assert.equal(i.model, value);
+    assert.equal(t.generation_type, "TEXT_2_VIDEO");
+    assert.equal(i.generation_type, "FIRST_AND_LAST_FRAMES_2_VIDEO");
+    assert.deepEqual(i.image_urls, [IMG, IMG2], "first and last frame");
+    assert.ok(!("image_urls" in t));
+  }
+  const lite = C.kieModelById("kie/veo-3.1-lite/text-to-video");
+  assert.equal(lite.kie.credits({ resolution: "720p", duration: 4 }), 30, "per video, any duration");
+  assert.equal(lite.kie.credits({ resolution: "4k", duration: 8 }), 150);
+  assert.equal(C.kieModelById("kie/veo-3.1/text-to-video").kie.credits({ resolution: "1080p" }), 255);
+});
+
+await test("image fields by model: one image as a string for Vidu Q4, a list of one for Grok Video/PixVerse/HappyHorse, frames for the rest", () => {
+  assert.equal(inp("kie/vidu-q4/image-to-video").image_url, IMG);
+  for (const id of ["kie/grok-imagine-video-1.5/image-to-video", "kie/pixverse-v6-max/image-to-video", "kie/happyhorse-1.1/image-to-video"]) assert.deepEqual(inp(id).image_urls, [IMG], id);
+  for (const id of ["kie/seedance-2.5/image-to-video", "kie/kling-4.0/image-to-video", "kie/wan-3.0/image-to-video", "kie/wan-3.0-prime/image-to-video",
+    "kie/gemini-omni-flash-1.1/image-to-video", "kie/minimax-h3/image-to-video"]) {
+    const i = inp(id);
+    assert.equal(i.first_frame_url, IMG, id); assert.equal(i.last_frame_url, IMG2, id);
+  }
+  assert.equal(typeof inp("kie/gemini-omni-flash-1.1/text-to-video").duration, "string", "kie.ai types Gemini Omni's duration as a string");
+  assert.equal(inp("kie/wan-3.0/text-to-video").resolution, "1080P", "Wan 3.0's sizes are upper-case");
+});
+
+await test("GPT Image 2.5: its 1K-only ratios fall back to auto at 2K and 4K", () => {
+  for (const id of ["kie/gpt-image-2.5-sunburst/text-to-image", "kie/gpt-image-2.5-flare/edit"]) {
+    const m = C.kieModelById(id);
+    assert.equal(K.kieInput(m, { prompt: "p", resolution: "2K", aspect_ratio: "27:16" }).aspect_ratio, "auto", id);
+    assert.equal(K.kieInput(m, { prompt: "p", resolution: "1K", aspect_ratio: "27:16" }).aspect_ratio, "27:16", id);
+    assert.equal(K.kieInput(m, { prompt: "p", resolution: "4K", aspect_ratio: "16:9" }).aspect_ratio, "16:9", id);
+  }
+});
+
+await test("credits follow kie.ai's price list (2026-10-26) on the options that change them", () => {
+  const c = (id, input) => C.kieModelById(id).kie.credits(input);
+  assert.equal(c("kie/nano-banana-2.1/text-to-image", { resolution: "4K" }), 9);
+  assert.equal(c("kie/seedream-5-pro/edit", { quality: "high", image_urls: [IMG, IMG2, IMG] }), 15, "14 + 0.5 per input image after the first");
+  assert.equal(c("kie/qwen-image-3.0-pro/edit", { resolution: "2K", image_urls: [IMG, IMG2] }), 13, "12 + 0.5 per input image");
+  assert.equal(c("kie/flux-3-klein/text-to-image", { resolution: "2K" }), 2.5);
+  assert.equal(c("kie/seedance-2.5/text-to-video", { resolution: "480p", duration: 4 }), 112);
+  assert.equal(c("kie/kling-4.0/text-to-video", { resolution: "1080p", duration: 10 }), 425);
+  assert.equal(c("kie/wan-3.0-prime/text-to-video", { resolution: "480P", duration: 2 }), 24.4);
+  assert.equal(c("kie/gemini-omni-flash-1.1/text-to-video", { resolution: "4k", duration: "10" }), 210);
+  assert.equal(c("kie/gemini-omni-flash-1.1/text-to-video", { resolution: "720p", duration: "4" }), 63);
+  assert.equal(c("kie/grok-imagine-video-1.5/image-to-video", { resolution: "720p", duration: 2 }), 9);
+  assert.equal(c("kie/pixverse-v6-max/text-to-video", { quality: "1080p", duration: 2, generate_audio_switch: true }), 44.8);
+  assert.equal(c("kie/minimax-h3/text-to-video", { resolution: "768P", duration: 4 }), 32);
+  assert.equal(c("kie/vidu-q4/image-to-video", { resolution: "540p", duration: 3 }), 21.6);
+  assert.equal(c("kie/happyhorse-1.1/image-to-video", { resolution: "720p", duration: 3 }), 67.5);
 });
 
 console.log(`\n${n} passed, ${failed} failed`);

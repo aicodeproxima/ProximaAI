@@ -1,5 +1,5 @@
 {
- "_source": "docs.kie.ai/market/* createTask request schemas, extracted 2026-10-25 (artifacts/kie/kie-extract.mjs); keyed by kie.ai model id",
+ "_source": "docs.kie.ai/market/* createTask request schemas, extracted 2026-10-25 (artifacts/kie/kie-extract.mjs); keyed by kie.ai model id; 31 more added 2026-10-26 from docs.kie.ai/market/* (research wf_a22c1d11-56c, kie-extract)",
  "nano-banana-2": {
   "required": [
    "prompt"
@@ -552,6 +552,1802 @@
    },
    "nsfw_checker": {
     "type": "boolean"
+   }
+  }
+ },
+ "nano-banana-2-1": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000
+   },
+   "image_input": {
+    "type": "array",
+    "maxItems": 10,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "auto",
+    "enum": [
+     "1:1",
+     "2:3",
+     "3:2",
+     "1:4",
+     "4:1",
+     "3:4",
+     "4:3",
+     "4:5",
+     "5:4",
+     "1:8",
+     "8:1",
+     "9:16",
+     "16:9",
+     "21:9",
+     "auto"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "default": "jpg",
+    "enum": [
+     "png",
+     "jpg"
+    ]
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/google/nanobanana-2-1",
+  "_mode": "t2i+edit (one id; edit = image_input)",
+  "_notes": [
+   "One model id for text-to-image and editing (image_input up to 10).",
+   "Same field names as nano-banana-2 (in app)."
+  ]
+ },
+ "gpt-image-2-5-sunburst-text-to-image": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000,
+    "minLength": 1
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "1:1",
+     "3:2",
+     "2:3",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "21:9",
+     "27:16",
+     "16:27",
+     "9:8",
+     "8:9"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "background": {
+    "type": "string",
+    "enum": [
+     "transparent",
+     "opaque",
+     "auto"
+    ]
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/gpt/gpt-image-2-5-sunburst-text-to-image",
+  "_mode": "t2i",
+  "_notes": [
+   "Page: 27:16, 16:27, 9:8, 8:9 support 1K only; background only at 1K.",
+   "No documented default for resolution/background (unconfirmed); send resolution explicitly.",
+   "aspect_ratio default auto (description)."
+  ]
+ },
+ "gpt-image-2-5-sunburst-image-to-image": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string"
+   },
+   "input_urls": {
+    "type": "array",
+    "maxItems": 16,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "1:1",
+     "3:2",
+     "2:3",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "21:9",
+     "27:16",
+     "16:27",
+     "9:8",
+     "8:9"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "background": {
+    "type": "string",
+    "enum": [
+     "transparent",
+     "opaque",
+     "auto"
+    ]
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/gpt/gpt-image-2-5-sunburst-image-to-image",
+  "_mode": "edit",
+  "_notes": [
+   "input_urls not in required (page lists only prompt).",
+   "prompt description says up to 20,000 chars but schema has no maxLength.",
+   "Same aspect/background rules as text-to-image."
+  ]
+ },
+ "gpt-image-2-5-flare-text-to-image": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000,
+    "minLength": 1
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "1:1",
+     "3:2",
+     "2:3",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "21:9",
+     "27:16",
+     "16:27",
+     "9:8",
+     "8:9"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "background": {
+    "type": "string",
+    "enum": [
+     "transparent",
+     "opaque",
+     "auto"
+    ]
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/gpt/gpt-image-2-5-flare-text-to-image",
+  "_mode": "t2i (optional: same price as Sunburst)",
+  "_notes": [
+   "Identical request to Sunburst (kie.ai/gpt-image-2-5)."
+  ]
+ },
+ "gpt-image-2-5-flare-image-to-image": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "1:1",
+     "3:2",
+     "2:3",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "21:9",
+     "27:16",
+     "16:27",
+     "9:8",
+     "8:9"
+    ]
+   },
+   "background": {
+    "type": "string",
+    "enum": [
+     "transparent",
+     "opaque",
+     "auto"
+    ]
+   },
+   "input_urls": {
+    "type": "array",
+    "maxItems": 16,
+    "items": "string"
+   },
+   "prompt": {
+    "type": "string"
+   },
+   "resolution": {
+    "type": "string",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/gpt/gpt-image-2-5-flare-image-to-image",
+  "_mode": "edit (optional)",
+  "_notes": [
+   "Identical request to Sunburst."
+  ]
+ },
+ "seedream/5-pro-text-to-image": {
+  "required": [
+   "prompt",
+   "aspect_ratio",
+   "quality"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 4
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "2:3",
+     "3:2",
+     "21:9"
+    ]
+   },
+   "quality": {
+    "type": "string",
+    "enum": [
+     "basic",
+     "high"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "default": "png",
+    "enum": [
+     "png",
+     "jpeg"
+    ]
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/seedream/5-pro-text-to-image",
+  "_mode": "t2i",
+  "_notes": [
+   "quality: basic = 1K, high = 2K (page).",
+   "aspect_ratio and quality are required with no default: send them always (kie.ensure).",
+   "prompt minLength 4."
+  ]
+ },
+ "seedream/5-pro-image-to-image": {
+  "required": [
+   "prompt",
+   "image_urls",
+   "aspect_ratio",
+   "quality"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 4
+   },
+   "image_urls": {
+    "type": "array",
+    "maxItems": 10,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "2:3",
+     "3:2",
+     "21:9"
+    ]
+   },
+   "quality": {
+    "type": "string",
+    "enum": [
+     "basic",
+     "high"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "default": "png",
+    "enum": [
+     "png",
+     "jpeg"
+    ]
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/seedream/5-pro-image-to-image",
+  "_mode": "edit",
+  "_notes": [
+   "image_urls max 10, jpeg/png/webp, 30MB.",
+   "aspect_ratio and quality required, no default."
+  ]
+ },
+ "seedream/5-flash-text-to-image": {
+  "required": [
+   "prompt",
+   "aspect_ratio"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 4
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "2:3",
+     "3:2",
+     "21:9"
+    ]
+   },
+   "size": {
+    "type": "string",
+    "default": "1K",
+    "enum": [
+     "1K",
+     "1.5K",
+     "2K"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "enum": [
+     "png",
+     "jpeg"
+    ]
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/seedream/5-flash-text-to-image",
+  "_mode": "t2i",
+  "_notes": [
+   "aspect_ratio required, no default.",
+   "output_format: page says 'Set this field explicitly' (no default)."
+  ]
+ },
+ "seedream/5-flash-image-to-image": {
+  "required": [
+   "prompt",
+   "image_urls",
+   "aspect_ratio"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 4
+   },
+   "image_urls": {
+    "type": "array",
+    "maxItems": 10,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "2:3",
+     "3:2",
+     "21:9"
+    ]
+   },
+   "size": {
+    "type": "string",
+    "default": "1K",
+    "enum": [
+     "1K",
+     "1.5K",
+     "2K"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "enum": [
+     "png",
+     "jpeg"
+    ]
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/seedream/5-flash-image-to-image",
+  "_mode": "edit",
+  "_notes": [
+   "image_urls max 10.",
+   "output_format has no default; set it explicitly."
+  ]
+ },
+ "flux-3/klein-text-to-image": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 1
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "1:1",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "3:2",
+     "2:3",
+     "16:9",
+     "9:16",
+     "21:9",
+     "9:21"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "width": {
+    "type": "integer",
+    "minimum": 256,
+    "maximum": 4096
+   },
+   "height": {
+    "type": "integer",
+    "minimum": 256,
+    "maximum": 4096
+   },
+   "output_format": {
+    "type": "string",
+    "default": "png",
+    "enum": [
+     "png",
+     "jpeg",
+     "webp"
+    ]
+   },
+   "num_images": {
+    "type": "integer",
+    "default": 1,
+    "minimum": 1,
+    "maximum": 4
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   },
+   "enhance_prompt": {
+    "type": "boolean",
+    "default": true,
+    "enum": [
+     true,
+     false
+    ]
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/flux3/klein-text-to-image",
+  "_mode": "t2i",
+  "_notes": [
+   "width+height (256-4096, ratio 1:2.5..2.5:1) override aspect_ratio and resolution; price for custom sizes unconfirmed.",
+   "enhance_prompt default true."
+  ]
+ },
+ "flux-3/klein-edit-image": {
+  "required": [
+   "prompt",
+   "image_urls"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 1
+   },
+   "image_urls": {
+    "type": "array",
+    "maxItems": 10,
+    "minItems": 1,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "auto",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "3:2",
+     "2:3",
+     "16:9",
+     "9:16",
+     "21:9",
+     "9:21",
+     "auto"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "width": {
+    "type": "integer",
+    "minimum": 256,
+    "maximum": 4096
+   },
+   "height": {
+    "type": "integer",
+    "minimum": 256,
+    "maximum": 4096
+   },
+   "output_format": {
+    "type": "string",
+    "default": "png",
+    "enum": [
+     "png",
+     "jpeg",
+     "webp"
+    ]
+   },
+   "num_images": {
+    "type": "integer",
+    "default": 1,
+    "minimum": 1,
+    "maximum": 4
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   },
+   "enhance_prompt": {
+    "type": "boolean",
+    "default": true,
+    "enum": [
+     true,
+     false
+    ]
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/flux3/klein-edit-image",
+  "_mode": "edit",
+  "_notes": [
+   "image_urls 1-10 required; aspect_ratio auto matches first input."
+  ]
+ },
+ "grok-imagine-image-2-0/text-to-image": {
+  "required": [
+   "prompt",
+   "aspect_ratio"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 8000
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "1:1",
+     "2:3",
+     "3:2",
+     "16:9",
+     "9:16"
+    ]
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/grok-imagine-image-2-0/text-to-image",
+  "_mode": "t2i",
+  "_notes": [
+   "aspect_ratio required, no default; 5 ratios only.",
+   "Page example returns 1 URL."
+  ]
+ },
+ "grok-imagine-image-2-0/image-edit": {
+  "required": [
+   "aspect_ratio",
+   "image_urls"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 8000
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "1:1",
+     "2:3",
+     "3:2",
+     "16:9",
+     "9:16",
+     "auto"
+    ]
+   },
+   "image_urls": {
+    "type": "array",
+    "maxItems": 5,
+    "items": "string"
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/grok-imagine-image-2-0/image-to-image",
+  "_mode": "edit",
+  "_notes": [
+   "Docs URL path is .../image-to-image but the model id is grok-imagine-image-2-0/image-edit.",
+   "required: aspect_ratio + image_urls (1-5); prompt optional.",
+   "Page example: creditsConsumed 4."
+  ]
+ },
+ "qwen3/pro-text-to-image": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 1
+   },
+   "resolution": {
+    "type": "string",
+    "enum": [
+     "1K",
+     "2K"
+    ]
+   },
+   "image_size": {
+    "type": "string",
+    "default": "16:9",
+    "enum": [
+     "1:1",
+     "3:2",
+     "2:3",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "21:9"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "enum": [
+     "png",
+     "jpeg"
+    ]
+   },
+   "prompt_extend": {
+    "type": "boolean",
+    "default": true
+   },
+   "negative_prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 0
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   },
+   "nsfw_checker": {
+    "type": "boolean",
+    "default": false
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/qwen3-pro/text-to-image",
+  "_mode": "t2i",
+  "_notes": [
+   "Aspect field is image_size (default 16:9), not aspect_ratio.",
+   "resolution has no schema default in t2i (example 1K); output_format: set explicitly.",
+   "prompt_extend default true; negative_prompt and seed supported."
+  ]
+ },
+ "qwen3/pro-image-to-image": {
+  "required": [
+   "image_urls",
+   "prompt"
+  ],
+  "props": {
+   "image_urls": {
+    "type": "array",
+    "maxItems": 3,
+    "minItems": 1,
+    "items": "string"
+   },
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 1
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K"
+    ]
+   },
+   "image_size": {
+    "type": "string",
+    "default": "16:9",
+    "enum": [
+     "1:1",
+     "3:2",
+     "2:3",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "21:9"
+    ]
+   },
+   "output_format": {
+    "type": "string",
+    "enum": [
+     "png",
+     "jpeg"
+    ]
+   },
+   "prompt_extend": {
+    "type": "boolean",
+    "default": true
+   },
+   "negative_prompt": {
+    "type": "string",
+    "maxLength": 5000,
+    "minLength": 0
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   },
+   "nsfw_checker": {
+    "type": "boolean",
+    "default": false
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/qwen3-pro/image-to-image",
+  "_mode": "edit",
+  "_notes": [
+   "image_urls 1-3, 10 MB each.",
+   "resolution default 1K, image_size default 16:9."
+  ]
+ },
+ "wan/2-7-image-pro": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000
+   },
+   "input_urls": {
+    "type": "array",
+    "maxItems": 9,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "1:1",
+     "16:9",
+     "4:3",
+     "21:9",
+     "3:4",
+     "9:16",
+     "8:1",
+     "1:8"
+    ]
+   },
+   "enable_sequential": {
+    "type": "boolean",
+    "default": false
+   },
+   "n": {
+    "type": "integer",
+    "default": 4,
+    "minimum": 1,
+    "maximum": 4,
+    "_from": "description text (1-12, default 12 when enable_sequential=true)"
+   },
+   "resolution": {
+    "type": "string",
+    "default": "2K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ]
+   },
+   "thinking_mode": {
+    "type": "boolean",
+    "default": false
+   },
+   "color_palette": {
+    "type": "array",
+    "maxItems": 10,
+    "minItems": 3,
+    "items": "object"
+   },
+   "bbox_list": {
+    "type": "array",
+    "items": "array"
+   },
+   "watermark": {
+    "type": "boolean",
+    "default": false
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  },
+  "_doc": "https://docs.kie.ai/market/wan/2-7-image-pro",
+  "_mode": "t2i+edit (one id; edit = input_urls)",
+  "_notes": [
+   "n: 1-4 (default 4) when enable_sequential=false, 1-12 (default 12) when true (description; not a schema field constraint) - send n: 1.",
+   "resolution default 2K; 4K only for text-to-image with sequential off.",
+   "thinking_mode only without input images."
+  ]
+ },
+ "bytedance/seedance-2-5": {
+  "required": [],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20480
+   },
+   "first_frame_url": {
+    "type": "string"
+   },
+   "last_frame_url": {
+    "type": "string"
+   },
+   "reference_image_urls": {
+    "type": "array",
+    "maxItems": 30,
+    "items": "string"
+   },
+   "reference_video_urls": {
+    "type": "array",
+    "maxItems": 10,
+    "items": "string"
+   },
+   "reference_audio_urls": {
+    "type": "array",
+    "maxItems": 10,
+    "items": "string"
+   },
+   "return_last_frame": {
+    "type": "boolean",
+    "default": false
+   },
+   "generate_audio": {
+    "type": "boolean",
+    "default": true
+   },
+   "resolution": {
+    "type": "string",
+    "default": "720p",
+    "enum": [
+     "480p",
+     "720p",
+     "1080p"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "adaptive",
+    "enum": [
+     "1:1",
+     "4:3",
+     "3:4",
+     "16:9",
+     "9:16",
+     "21:9",
+     "adaptive"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "default": 5
+   },
+   "output_format": {
+    "type": "string",
+    "default": "mp4",
+    "enum": [
+     "mp4",
+     "mov"
+    ]
+   },
+   "web_search": {
+    "type": "boolean"
+   },
+   "draft": {
+    "type": "boolean",
+    "default": false
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  }
+ },
+ "veo-3-1": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string"
+   },
+   "model": {
+    "type": "string",
+    "default": "veo3_fast",
+    "enum": [
+     "veo3_fast",
+     "veo3_lite",
+     "veo3"
+    ]
+   },
+   "image_urls": {
+    "type": "array",
+    "items": "string"
+   },
+   "generation_type": {
+    "type": "string",
+    "enum": [
+     "TEXT_2_VIDEO",
+     "FIRST_AND_LAST_FRAMES_2_VIDEO",
+     "REFERENCE_2_VIDEO"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "16:9",
+    "enum": [
+     "16:9",
+     "9:16",
+     "Auto"
+    ]
+   },
+   "enable_fallback": {
+    "type": "boolean",
+    "default": false,
+    "deprecated": true
+   },
+   "enable_translation": {
+    "type": "boolean"
+   },
+   "watermark": {
+    "type": "string"
+   },
+   "resolution": {
+    "type": "string",
+    "default": "720p",
+    "enum": [
+     "720p",
+     "1080p",
+     "4k"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "default": 8,
+    "enum": [
+     4,
+     6,
+     8
+    ]
+   }
+  }
+ },
+ "kling-4.0/keyframe-to-video": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 8000
+   },
+   "duration": {
+    "type": "integer",
+    "default": 5,
+    "minimum": 3,
+    "maximum": 30
+   },
+   "resolution": {
+    "type": "string",
+    "default": "720p",
+    "enum": [
+     "720p",
+     "1080p"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "16:9",
+     "9:16",
+     "1:1",
+     "21:9"
+    ]
+   },
+   "first_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "keyframe_urls": {
+    "type": "array",
+    "default": [],
+    "maxItems": 8,
+    "items": "string"
+   },
+   "last_frame_url": {
+    "type": "string",
+    "format": "uri"
+   }
+  }
+ },
+ "kling-4.0/reference-to-video": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 8000
+   },
+   "duration": {
+    "type": "integer",
+    "default": 5,
+    "minimum": 3,
+    "maximum": 30
+   },
+   "resolution": {
+    "type": "string",
+    "default": "720p",
+    "enum": [
+     "720p",
+     "1080p"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "16:9",
+     "9:16",
+     "1:1",
+     "21:9"
+    ]
+   },
+   "image_urls": {
+    "type": "array",
+    "default": [],
+    "maxItems": 10,
+    "items": "string"
+   },
+   "video_urls": {
+    "type": "array",
+    "default": [],
+    "maxItems": 5,
+    "items": "string"
+   },
+   "keep_original_sound": {
+    "type": "boolean",
+    "default": false
+   },
+   "elements": {
+    "type": "array",
+    "default": [],
+    "maxItems": 7,
+    "items": "object"
+   },
+   "voices": {
+    "type": "array",
+    "default": [],
+    "maxItems": 3,
+    "items": "object"
+   }
+  }
+ },
+ "wan/3-0-video": {
+  "required": [],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000
+   },
+   "first_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "last_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "reference_image_urls": {
+    "type": "array",
+    "maxItems": 10,
+    "items": "string"
+   },
+   "reference_video_urls": {
+    "type": "array",
+    "maxItems": 5,
+    "items": "string"
+   },
+   "reference_audio_urls": {
+    "type": "array",
+    "maxItems": 5,
+    "items": "string"
+   },
+   "reference_file_urls": {
+    "type": "array",
+    "maxItems": 1,
+    "items": "string"
+   },
+   "reference_link_urls": {
+    "type": "array",
+    "maxItems": 1,
+    "items": "string"
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1080P",
+    "enum": [
+     "480P",
+     "720P",
+     "1080P"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "adaptive",
+    "enum": [
+     "adaptive",
+     "16:9",
+     "4:3",
+     "1:1",
+     "3:4",
+     "9:16"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "default": 5
+   },
+   "audio": {
+    "type": "boolean",
+    "default": true
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  }
+ },
+ "wan/3-0-video-prime": {
+  "required": [],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000
+   },
+   "first_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "last_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "reference_image_urls": {
+    "type": "array",
+    "maxItems": 10,
+    "items": "string"
+   },
+   "reference_video_urls": {
+    "type": "array",
+    "maxItems": 5,
+    "items": "string"
+   },
+   "reference_audio_urls": {
+    "type": "array",
+    "maxItems": 5,
+    "items": "string"
+   },
+   "reference_file_urls": {
+    "type": "array",
+    "maxItems": 1,
+    "items": "string"
+   },
+   "reference_link_urls": {
+    "type": "array",
+    "maxItems": 1,
+    "items": "string"
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1080P",
+    "enum": [
+     "480P",
+     "720P",
+     "1080P"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "adaptive",
+    "enum": [
+     "adaptive",
+     "16:9",
+     "4:3",
+     "1:1",
+     "3:4",
+     "9:16"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "default": 5
+   },
+   "audio": {
+    "type": "boolean",
+    "default": true
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  }
+ },
+ "google/gemini-omni-flash-1-1": {
+  "required": [
+   "prompt",
+   "duration"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000
+   },
+   "image_urls": {
+    "type": "array",
+    "items": "string"
+   },
+   "first_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "last_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "audio_ids": {
+    "type": "array",
+    "items": "string"
+   },
+   "video_list": {
+    "type": "array",
+    "items": "object"
+   },
+   "character_ids": {
+    "type": "array",
+    "items": "string"
+   },
+   "duration": {
+    "type": "string",
+    "enum": [
+     "4",
+     "6",
+     "8",
+     "10"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "16:9",
+     "9:16"
+    ]
+   },
+   "seed": {
+    "type": "integer"
+   },
+   "resolution": {
+    "type": "string",
+    "default": "720p",
+    "enum": [
+     "360p",
+     "720p",
+     "1080p",
+     "4k"
+    ]
+   }
+  }
+ },
+ "grok-imagine-video-1-5-preview": {
+  "required": [
+   "image_urls"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 4096
+   },
+   "image_urls": {
+    "type": "array",
+    "maxItems": 1,
+    "items": "string"
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "auto",
+    "enum": [
+     "1:1",
+     "16:9",
+     "9:16",
+     "4:3",
+     "3:4",
+     "3:2",
+     "2:3",
+     "auto"
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "default": "480p",
+    "enum": [
+     "480p",
+     "720p",
+     "1080p"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "default": 8,
+    "minimum": 1,
+    "maximum": 15
+   },
+   "first_frame_url": {
+    "type": "string"
+   },
+   "last_frame_url": {
+    "type": "string"
+   },
+   "loop_url": {
+    "type": "string"
+   },
+   "keyframes": {
+    "type": "array",
+    "maxItems": 4,
+    "items": "object"
+   },
+   "enable_audio": {
+    "type": "boolean"
+   },
+   "nsfw_checker": {
+    "type": "boolean"
+   }
+  }
+ },
+ "pixverse-v6-max/text-to-video": {
+  "required": [
+   "prompt",
+   "aspect_ratio",
+   "quality",
+   "duration"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "16:9",
+     "4:3",
+     "1:1",
+     "3:4",
+     "9:16",
+     "2:3",
+     "3:2",
+     "21:9"
+    ]
+   },
+   "quality": {
+    "type": "string",
+    "enum": [
+     "360p",
+     "540p",
+     "720p",
+     "1080p"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": 15
+   },
+   "generate_audio_switch": {
+    "type": "boolean",
+    "default": false
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   }
+  }
+ },
+ "pixverse-v6-max/image-to-video": {
+  "required": [
+   "prompt",
+   "image_urls",
+   "quality",
+   "duration"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000
+   },
+   "image_urls": {
+    "type": "array",
+    "maxItems": 1,
+    "minItems": 1,
+    "items": "string"
+   },
+   "quality": {
+    "type": "string",
+    "enum": [
+     "360p",
+     "540p",
+     "720p",
+     "1080p"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": 15
+   },
+   "generate_audio_switch": {
+    "type": "boolean",
+    "default": false
+   },
+   "seed": {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 2147483647
+   }
+  }
+ },
+ "minimax-h3/text-to-video": {
+  "required": [
+   "prompt",
+   "aspect_ratio",
+   "duration"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 7000
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "enum": [
+     "21:9",
+     "16:9",
+     "4:3",
+     "1:1",
+     "3:4",
+     "9:16"
+    ]
+   },
+   "duration": {
+    "type": "integer",
+    "default": 6,
+    "minimum": 4,
+    "maximum": 15,
+    "enum": [
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "default": "2K",
+    "enum": [
+     "768P",
+     "2K"
+    ]
+   }
+  }
+ },
+ "minimax-h3/image-to-video": {
+  "required": [
+   "prompt",
+   "duration"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 7000
+   },
+   "first_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "last_frame_url": {
+    "type": "string",
+    "format": "uri"
+   },
+   "duration": {
+    "type": "integer",
+    "default": 6,
+    "minimum": 4,
+    "maximum": 15,
+    "enum": [
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15
+    ]
+   },
+   "resolution": {
+    "type": "string",
+    "default": "2K",
+    "enum": [
+     "768P",
+     "2K"
+    ]
+   }
+  }
+ },
+ "vidu-q4/image-to-video": {
+  "required": [
+   "image_url"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 20000
+   },
+   "duration": {
+    "type": "integer",
+    "default": 5,
+    "minimum": 3,
+    "maximum": 16
+   },
+   "resolution": {
+    "type": "string",
+    "default": "720p",
+    "enum": [
+     "540p",
+     "720p",
+     "1080p",
+     "2k",
+     "4k"
+    ]
+   },
+   "audio": {
+    "type": "boolean",
+    "default": true
+   },
+   "image_url": {
+    "type": "string"
+   }
+  }
+ },
+ "happyhorse-1-1/text-to-video": {
+  "required": [
+   "prompt"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "maxLength": 5000
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1080p",
+    "enum": [
+     "720p",
+     "1080p"
+    ]
+   },
+   "aspect_ratio": {
+    "type": "string",
+    "default": "16:9",
+    "enum": [
+     "16:9",
+     "9:16",
+     "1:1",
+     "4:3",
+     "3:4",
+     "4:5",
+     "5:4",
+     "9:21",
+     "21:9"
+    ]
+   },
+   "duration": {
+    "type": "number",
+    "default": 5,
+    "minimum": 3,
+    "maximum": 15
+   }
+  }
+ },
+ "happyhorse-1-1/image-to-video": {
+  "required": [
+   "image_urls"
+  ],
+  "props": {
+   "prompt": {
+    "type": "string",
+    "default": "",
+    "maxLength": 5000
+   },
+   "image_urls": {
+    "type": "array",
+    "maxItems": 1,
+    "items": "string"
+   },
+   "resolution": {
+    "type": "string",
+    "default": "1080p",
+    "enum": [
+     "720p",
+     "1080p"
+    ]
+   },
+   "duration": {
+    "type": "number",
+    "default": 5,
+    "minimum": 3,
+    "maximum": 15
    }
   }
  }
