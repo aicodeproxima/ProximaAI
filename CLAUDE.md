@@ -65,9 +65,10 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   The 5-minute sweep also removes deliveries that waited over 2 days for a row that never came.
   Backup copies are scrubbed by the server, never by the client: while an account's switch is off, the tasks/history
   delete triggers and the history update trigger queue into `backup_scrub_queue` in the change's own transaction; cron
-  `backup-scrub-drain` drains it every minute, and restore drains first and refuses while anything is left. Switching
-  OFF scrubs that account's backups of every id it deleted, restore-replaced rows included, and trims backed-up History
-  entries to their live items (owner rulings 2026-10-22). Files go through the durable queue `proximaai-file-deletes`
+  `backup-scrub-drain` drains it every minute, one account per transaction, and restore drains first and refuses while
+  anything is left. Switching OFF scrubs that account's backups of every id it deleted, restore-replaced rows included,
+  and trims backed-up History entries to their live items (owner rulings 2026-10-22). Files go through the durable queue
+  `proximaai-file-deletes`
   (`fileDelete.js`): held by `stagePurge` before any network call (`proximaai-held-purges-v3`, with the WaveSpeed
   deletes; a delete whose intents and hold cannot both be written changes nothing and says "storage is full"; when the
   rule that decides holds changes, they move to a key no previous build reads, see THE KEY RULE in storage.js),

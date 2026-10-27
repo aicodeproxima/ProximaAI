@@ -409,16 +409,28 @@ begin
     r := r || text 'FAIL folders: two accounts share one folder spelling';
   exception when sqlstate '23505' then r := r || text 'PASS folders: a second account with the same folder spelling refused (23505)';
             when others then r := r || format('FAIL folders: same spelling: %s %s', sqlstate, sqlerrm); end;
-  -- A rename to a name whose folder another account holds (E, a spelling of the same folder) is a counted
-  -- 'username_taken', so names cannot be probed past the rename limit.
+  -- A rename to a name whose folder another account holds (E's old name: an account keeps its folders) is a counted
+  -- 'username_taken', so names cannot be probed past the rename limit. A spelling of another account's folder with a
+  -- character outside the join allow-list is refused for its shape before anything is looked up (20261026200000), so
+  -- it tells nothing and is not counted.
   insert into proxima_auth.users (username, role, scope) values (p || 'e!', 'member', 'user:' || p || 'e!');
+  insert into proxima_auth.users (username, role, scope) values (p || 'e2', 'member', 'user:' || p || 'e2');
+  update proxima_auth.users set username = p || 'e3', scope = 'user:' || p || 'e3' where username = p || 'e2';
   insert into proxima_auth.users (id, username, role, scope, password_hash)
     values (d_id, p || 'd', 'member', 'user:' || p || 'd', extensions.crypt('mu-pass-D', extensions.gen_salt('bf', 4)));
   d_tok := proxima_auth.mint_token(d_id);
   begin
     j := public.rename_my_account(d_tok, 'mu-pass-D', p || 'e#');
     select u.rename_taken_count into n from proxima_auth.users u where u.id = d_id;
-    r := r || format('%s folders: a rename into another account''s folder spelling answers %s, counted %s',
+    r := r || format('%s folders: a rename into a spelling of another account''s folder answers %s, counted %s',
+                     case when j->>'reason' = 'invalid_username' and n = 0 then 'PASS' else 'FAIL' end,
+                     coalesce(j->>'reason', 'ok=' || (j->>'ok')), n);
+  exception when others then r := r || format('FAIL folders: rename into a folder spelling raised %s %s', sqlstate, sqlerrm); end;
+  begin
+    select u.rename_taken_count into n from proxima_auth.users u where u.id = d_id;
+    j := public.rename_my_account(d_tok, 'mu-pass-D', p || 'e2');
+    select u.rename_taken_count - n into n from proxima_auth.users u where u.id = d_id;
+    r := r || format('%s folders: a rename into another account''s old folder answers %s, counted %s',
                      case when j->>'reason' = 'username_taken' and n = 1 then 'PASS' else 'FAIL' end,
                      coalesce(j->>'reason', 'ok=' || (j->>'ok')), n);
   exception when others then r := r || format('FAIL folders: rename into another folder raised %s %s (not counted)', sqlstate, sqlerrm); end;

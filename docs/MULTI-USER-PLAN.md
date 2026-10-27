@@ -69,6 +69,7 @@ Verified 2026-10-22 22:15–22:20 UTC from catalog, code and logs; no content wa
     not.)
 11. **Unbounded cron loops.** backup-scrub-drain (every minute), ws-webhook-sweep (every 5 min) and auto-backup-2day
     loop over all data. They run as postgres with no statement timeout, so one account's backlog delays everyone.
+    backup-scrub-drain: **FIXED 2026-10-27** (20261026200000: one account per transaction, 2 s lock wait, linear scrub).
 
 ## 3. Design decisions (recommended)
 - **D1. Keep ProximaAI's own sign-in, made per account. No Supabase Auth now.**
@@ -221,6 +222,8 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   2026-10-26 06:07:28 UTC (review rounds 8-21, 3 critics each): gate 80/0 live.
 - 20261025820000 (backups hold their account row against a rename, an older race found in 800000's review) applied
   2026-10-26 06:10:55 UTC (review rounds lk1 and 11-21, 3 critics each).
+- 20261026200000 (backup scrubs per account; rename takes the name's sign-in key first) applied 2026-10-27 04:28:43 UTC
+  (review round 24, 3 critics): gate 81/0 live.
 - Policies:
   - `USING (device_id = scope)` for every command on all six tables;
   - the storage policies check the account's folders;
