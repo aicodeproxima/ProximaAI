@@ -147,7 +147,7 @@ await test("an answer is shown only if it is the newest request's; a success cle
   const s0 = { data: null, error: false, busy: true };
   const page = { ok: true, events: [{ id: 5 }], more: false, accounts: [{ account_id: "o1" }] };
   const s1 = H.applyAnswer(s0, { latest: 1, mine: 1, ok: false, page: null, beforeId: null });
-  assert.deepEqual(s1, { data: null, error: true, busy: false }, "a failure shows the error");
+  assert.deepEqual(s1, { data: null, error: true, busy: false, retryBefore: null }, "a failure shows the error");
   const s2 = H.applyAnswer({ ...s1, busy: true }, { latest: 2, mine: 2, ok: true, page, beforeId: null });
   assert.equal(s2.error, false, "fail, then succeed: the error is gone");
   assert.deepEqual(s2.data.events.map(e => e.id), [5]);
@@ -159,6 +159,25 @@ await test("an answer is shown only if it is the newest request's; a success cle
   const s4 = H.applyAnswer(s2, { latest: 4, mine: 4, ok: false, page: null, beforeId: 5 });
   assert.equal(s4.error, true);
   assert.equal(s4.data, s2.data, "a failed 'Load older' keeps what was loaded");
+  assert.equal(s4.retryBefore, 5, "and Retry asks for that same older page again");
+  const s5 = H.applyAnswer({ ...s4, busy: true }, { latest: 5, mine: 5, ok: true, page: { ok: true, events: [{ id: 4 }], more: false }, beforeId: 5 });
+  assert.deepEqual([s5.error, s5.retryBefore, s5.data.events.map(e => e.id)], [false, null, [5, 4]], "the retried page joins the list, error gone");
+});
+
+await test("rows belong to the filter they were loaded for (review wf_79964fbc-e0a Lows)", () => {
+  const page = a => ({ ok: true, events: [{ id: a === "m1" ? 7 : 9 }], more: true, accounts: [] });
+  const sAll = H.applyAnswer({}, { latest: 1, mine: 1, ok: true, page: page("all"), beforeId: null, account: "all" });
+  assert.equal(sAll.data.account, "all");
+  assert.deepEqual(H.rowsFor(sAll.data, "all").map(e => e.id), [9]);
+  assert.deepEqual(H.rowsFor(sAll.data, "m1"), [], "after a switch to m1, the all-accounts rows do not stand under it");
+  const sFail = H.applyAnswer({ ...sAll, busy: true }, { latest: 2, mine: 2, ok: false, page: null, beforeId: null, account: "m1" });
+  assert.deepEqual(H.rowsFor(sFail.data, "m1"), [], "the switch failed: still no rows of another filter");
+  assert.equal(sFail.retryBefore, null, "Retry asks for m1's first page");
+  const sM = H.applyAnswer(sFail, { latest: 3, mine: 3, ok: true, page: page("m1"), beforeId: 9, account: "m1" });
+  assert.deepEqual(sM.data.events.map(e => e.id), [7], "an older page never joins another filter's list");
+  assert.deepEqual(H.rowsFor(sM.data, "m1").map(e => e.id), [7], "m1's page shows under m1");
+  assert.deepEqual(H.rowsFor(sM.data, "all"), [], "and not under all accounts");
+  assert.deepEqual(H.rowsFor(null, "all"), []);
 });
 
 await test("account filter choices and paging", () => {
@@ -194,10 +213,14 @@ await test("Settings shows it once, to the owner only, as text", () => {
     "the account filter is labelled for screen readers");
   assert.match(comp, /useEffect\(\(\) => \{ load\(who, null\); \}, \[who, load\]\)/, "a new account choice reloads from the server");
   assert.match(comp, /const mine = \+\+seq\.current;/);
-  assert.match(comp, /const latest = seq\.current;\s*setState\(s => applyAnswer\(s, \{ latest, mine, ok: r\?\.ok === true, page: r, beforeId \}\)\);/,
-    "every answer, success or failure, goes through applyAnswer with the newest request's number read after it arrived");
+  assert.match(comp, /const latest = seq\.current;\s*setState\(s => applyAnswer\(s, \{ latest, mine, ok: r\?\.ok === true, page: r, beforeId, account \}\)\);/,
+    "every answer, success or failure, goes through applyAnswer with the newest request's number read after it arrived, and its filter");
+  assert.match(comp, /const events = rowsFor\(data, who\);/, "rows only of the selected filter");
+  assert.match(comp, /onClick=\{\(\) => load\(who, retryBefore\)\}/, "Retry asks again for the page that failed");
+  assert.match(comp, /<div style=\{\{ color: "var\(--text-muted\)", marginTop: 2 \}\}>\{whenLabel\(e\)\}<\/div>/,
+    "the time on its own line (a span needs the width at 384 px)");
   assert.match(comp, /onClick=\{\(\) => load\(who, oldest\)\}/, "Load older asks for the page before the oldest shown");
-  assert.match(comp, /\{!error && events\.length > 0 && \(/, "no stale rows under an error");
+  assert.match(comp, /\{events\.length > 0 && \(/, "the rows show whenever the selected filter has some, an error included (a failed Load older keeps them)");
   assert.match(comp, /<div role="alert"/, "a load failure is announced");
   assert.match(comp, /const btn = \{ minHeight: 44,/, "Refresh / Retry / Load older are full-size tap targets");
   assert.ok(!/ EST`/.test(comp), "no fixed 'EST' label (EDT half the year)");

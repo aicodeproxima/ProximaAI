@@ -5,12 +5,12 @@
 // (supabase/migrations/20261027100000_signin_history.sql). Browser strings are shown as text (React escapes them).
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listSignins } from "../lib/supabase.js";
-import { eventLabel, sourceLabel, whenLabel, lastSignInLabel, failedAttempts, accountChoices, applyAnswer } from "../lib/signinHistory.js";
+import { eventLabel, sourceLabel, whenLabel, lastSignInLabel, failedAttempts, accountChoices, applyAnswer, rowsFor } from "../lib/signinHistory.js";
 
 const PAGE = 100;
 
 export default function SigninHistory({ font }) {
-  const [state, setState] = useState({ data: null, error: false, busy: false });
+  const [state, setState] = useState({ data: null, error: false, busy: false, retryBefore: null });
   const [who, setWho] = useState("all");
   const seq = useRef(0);
 
@@ -21,12 +21,13 @@ export default function SigninHistory({ font }) {
     let r = null;
     try { r = await listSignins({ limit: PAGE, beforeId, account: account === "all" ? null : account }); } catch { r = null; }
     const latest = seq.current;
-    setState(s => applyAnswer(s, { latest, mine, ok: r?.ok === true, page: r, beforeId }));
+    setState(s => applyAnswer(s, { latest, mine, ok: r?.ok === true, page: r, beforeId, account }));
   }, []);
   useEffect(() => { load(who, null); }, [who, load]);
 
-  const { data, error, busy } = state;
-  const events = data?.events || [];
+  const { data, error, busy, retryBefore } = state;
+  // rows only of the selected filter: after a switch, the previous filter's rows never stand under the new choice
+  const events = rowsFor(data, who);
   const accounts = data?.accounts || [];
   const refused = failedAttempts(events);
   const oldest = events.length ? events[events.length - 1].id : null;
@@ -46,7 +47,7 @@ export default function SigninHistory({ font }) {
         an hour of an account's failures, successes or lockouts (60 a kind for names no account has), the rest are only
         counted, on one "not recorded one by one" line.
       </div>
-      {!error && accounts.length > 0 && (
+      {accounts.length > 0 && (
         <div style={{ marginTop: 8, fontSize: 12, fontFamily: font }}>
           <div style={{ color: "var(--text-muted)", marginBottom: 4 }}>Last sign-in per account</div>
           {accounts.map(a => (
@@ -67,14 +68,15 @@ export default function SigninHistory({ font }) {
       </div>
       {error && (
         <div role="alert" style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", fontSize: 12, fontFamily: font, color: "var(--error)" }}>
-          <span>✗ Couldn't load the sign-in history.</span>
-          <button className="api-test-btn" onClick={() => load(who, null)} style={btn}>Retry</button>
+          <span>{retryBefore ? "✗ Couldn't load older sign-ins." : "✗ Couldn't load the sign-in history."}</span>
+          {/* Retry asks again for the page that failed (an older page keeps what is already on screen) */}
+          <button className="api-test-btn" disabled={busy} onClick={() => load(who, retryBefore)} style={btn}>Retry</button>
         </div>
       )}
-      {!error && data && events.length === 0 && (
+      {!error && data?.account === who && events.length === 0 && (
         <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-muted)", fontFamily: font }}>No sign-ins recorded yet.</div>
       )}
-      {!error && events.length > 0 && (
+      {events.length > 0 && (
         <>
           <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-muted)", fontFamily: font }}>
             {events.length} line{events.length === 1 ? "" : "s"}{refused ? ` · ${refused} attempt${refused === 1 ? "" : "s"} did not go through` : ""}
@@ -85,12 +87,11 @@ export default function SigninHistory({ font }) {
               return (
                 <div key={e.id} style={{ padding: "8px 10px", borderRadius: 8, fontFamily: font, fontSize: 12,
                   border: `1px solid ${l.ok ? "var(--glass-border)" : "rgba(239,68,68,0.35)"}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                    <span style={{ color: l.ok ? "var(--success)" : "var(--error)", fontWeight: 700, minWidth: 0, overflowWrap: "anywhere" }}>
-                      {l.ok ? "✓ " : "✗ "}{l.text}
-                    </span>
-                    <span style={{ color: "var(--text-muted)", textAlign: "right" }}>{whenLabel(e)}</span>
+                  <div style={{ color: l.ok ? "var(--success)" : "var(--error)", fontWeight: 700, overflowWrap: "anywhere" }}>
+                    {l.ok ? "✓ " : "✗ "}{l.text}
                   </div>
+                  {/* the time on its own line: a span ("Oct 26, 11:50 PM EDT to Oct 27, 12:20 AM EDT") needs the width at 384 px */}
+                  <div style={{ color: "var(--text-muted)", marginTop: 2 }}>{whenLabel(e)}</div>
                   <div style={{ color: "var(--text-muted)", marginTop: 2, overflowWrap: "anywhere" }}>
                     {e.username || "(no account)"} · {sourceLabel(e)}
                   </div>

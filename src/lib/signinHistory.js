@@ -147,11 +147,20 @@ export function mergePage(prev, page, beforeId) {
   return { events: [...prev.events, ...events.filter(e => !seen.has(e.id))], more: !!page?.more, accounts: page?.accounts || prev.accounts };
 }
 
-// What the section shows after an answer: state { data, error, busy }. Only the newest request's answer counts (mine is
-// that request's number, latest the newest one asked): an older answer, success or failure, changes nothing, so switching
-// accounts quickly never shows another account's list or a stale error. A success clears an earlier error.
-export function applyAnswer(state, { latest, mine, ok, page, beforeId }) {
+// What the section shows after an answer: state { data, error, busy, retryBefore }. Only the newest request's answer
+// counts (mine is that request's number, latest the newest one asked): an older answer, success or failure, changes
+// nothing, so switching accounts quickly never shows a stale list or a stale error. data.account is the filter its
+// rows belong to (the page shows them only while that filter is selected). A success clears an earlier error; a failure
+// keeps what was loaded and remembers which page to ask again (retryBefore: null for the first page).
+export function applyAnswer(state, { latest, mine, ok, page, beforeId, account = "all" }) {
   if (mine !== latest) return state;
-  if (ok) return { data: mergePage(state?.data || null, page, beforeId), error: false, busy: false };
-  return { data: state?.data || null, error: true, busy: false };
+  // an older page joins only a list of the same filter
+  const prev = state?.data && state.data.account === account ? state.data : null;
+  if (ok) return { data: { ...mergePage(prev, page, beforeId), account }, error: false, busy: false, retryBefore: null };
+  return { data: state?.data || null, error: true, busy: false, retryBefore: beforeId ?? null };
+}
+
+// The rows to show for the selected filter: only a list loaded for that filter (another filter's rows never stand in).
+export function rowsFor(data, who) {
+  return data && data.account === who && Array.isArray(data.events) ? data.events : [];
 }
