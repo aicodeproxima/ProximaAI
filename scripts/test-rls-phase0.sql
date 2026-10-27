@@ -71,7 +71,7 @@ begin
   delete from public.tasks where id = p || '_no_such_row';                                                       -- +0
   execute 'set local role anon';
   insert into public.tasks (id, device_id, status) values (p || '_t', s, 'completed')
-    on conflict (id) do update set status = excluded.status;                                                     -- +1 (update part)
+    on conflict (device_id, id) do update set status = excluded.status;                                                     -- +1 (update part)
   insert into public.history (id, device_id) values (p || '_h', s);                                              -- +1
   execute 'reset role';
   delete from public.history where id = p || '_h';                                                               -- +1

@@ -88,7 +88,7 @@ begin
                        else format('FAIL T1 dqr task rowless tombstone n=%s scope_ok=%s; ', n, d = sa) end;
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_t1', sa, 'completed', 1000, '[]');
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_t1', sa, 'completed', 1000, '[]')
-      on conflict (id) do update set status = excluded.status;
+      on conflict (device_id, id) do update set status = excluded.status;
     out := out || case when not exists (select 1 from tasks where id = p || '_t1') then 'ok T1 later insert+upsert dropped (F1); '
                        else 'FAIL T1 later insert+upsert landed (F1); ' end;
   exception when others then execute 'reset role'; out := out || format('FAIL T1 %s %s; ', sqlstate, sqlerrm); end;
@@ -103,7 +103,7 @@ begin
                        else format('FAIL T2 dqr history rowless tombstone n=%s; ', n) end;
     insert into history (id, device_id, timestamp, tasks, total_cost) values (p || '_h1', sa, 1000, '[]', 0);
     insert into history (id, device_id, timestamp, tasks, total_cost) values (p || '_h1', sa, 1000, '[]', 0)
-      on conflict (id) do update set timestamp = excluded.timestamp;
+      on conflict (device_id, id) do update set timestamp = excluded.timestamp;
     out := out || case when not exists (select 1 from history where id = p || '_h1') then 'ok T2 later insert+upsert dropped (F4); '
                        else 'FAIL T2 later insert+upsert landed (F4); ' end;
   exception when others then execute 'reset role'; out := out || format('FAIL T2 %s %s; ', sqlstate, sqlerrm); end;
@@ -119,9 +119,9 @@ begin
     out := out || case when n = 2 then 'ok T3 clear task+history rowless tombstones in caller scope; '
                        else format('FAIL T3 clear rowless tombstones n=%s (want 2); ', n) end;
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_t3', sa, 'completed', 1000, '[]')
-      on conflict (id) do update set status = excluded.status;
+      on conflict (device_id, id) do update set status = excluded.status;
     insert into history (id, device_id, timestamp, tasks, total_cost) values (p || '_h3', sa, 1000, '[]', 0)
-      on conflict (id) do update set timestamp = excluded.timestamp;
+      on conflict (device_id, id) do update set timestamp = excluded.timestamp;
     out := out || case when not exists (select 1 from tasks where id = p || '_t3') and not exists (select 1 from history where id = p || '_h3')
                        then 'ok T3 later upserts dropped; ' else 'FAIL T3 later upserts landed; ' end;
   exception when others then execute 'reset role'; out := out || format('FAIL T3 %s %s; ', sqlstate, sqlerrm); end;
@@ -160,9 +160,9 @@ begin
                        then 'ok T5a A naming B''s live row: row kept, no tombstone in B; ' else 'FAIL T5a A naming B''s live row; ' end;
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_x2', sb, 'completed', 1000, '[]');
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_x2', sb, 'completed', 2000, '[]')
-      on conflict (id) do update set start_time = excluded.start_time;
+      on conflict (device_id, id) do update set start_time = excluded.start_time;
     insert into history (id, device_id, timestamp, tasks, total_cost) values (p || '_xl2', sb, 1000, '[]', 0)
-      on conflict (id) do update set timestamp = excluded.timestamp;
+      on conflict (device_id, id) do update set timestamp = excluded.timestamp;
     out := out || case when exists (select 1 from tasks where id = p || '_x2' and device_id = sb and start_time = 2000)
                         and exists (select 1 from history where id = p || '_xl2' and device_id = sb)
                        then 'ok T5b A''s tombstone never drops B''s insert/upsert; ' else 'FAIL T5b A''s tombstone dropped B''s insert/upsert; ' end;
@@ -190,7 +190,7 @@ begin
     out := out || case when n = 2 then 'ok T6 B''s tombstones keep device_id B after A names them; '
                        else format('FAIL T6 B''s tombstones moved n=%s; ', n) end;
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_x4', sb, 'completed', 1000, '[]')
-      on conflict (id) do update set status = excluded.status;
+      on conflict (device_id, id) do update set status = excluded.status;
     insert into history (id, device_id, timestamp, tasks, total_cost) values (p || '_xl4', sb, 1000, '[]', 0);
     out := out || case when not exists (select 1 from tasks where id = p || '_x4') and not exists (select 1 from history where id = p || '_xl4')
                        then 'ok T6 B''s re-insert/upsert still dropped; ' else 'FAIL T6 B''s re-insert landed; ' end;
@@ -304,7 +304,7 @@ begin
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_l4', sf, 'completed', 1000, '[]');
     if not pg_temp._tr_lock_held('task', sf, 'ShareLock') or pg_temp._tr_lock_held('task', sf, 'ExclusiveLock') then bad := bad || 'insert-task-no-shared,'; end if;
     insert into history (id, device_id, timestamp, tasks, total_cost) values (p || '_l5', sf, 1000, '[]', 0)
-      on conflict (id) do update set timestamp = excluded.timestamp;
+      on conflict (device_id, id) do update set timestamp = excluded.timestamp;
     if not pg_temp._tr_lock_held('history', sf, 'ShareLock') then bad := bad || 'upsert-history-no-shared,'; end if;
     perform set_config('proxima.restore', 'on', true);
     insert into tasks (id, device_id, status, start_time, outputs) values (p || '_l6', sg, 'completed', 1000, '[]');

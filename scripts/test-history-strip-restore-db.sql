@@ -68,7 +68,7 @@ begin
   begin
     insert into history (id, device_id, timestamp, tasks, total_cost) values
       ('hr-L', u, 1000, '[{"id":"hr-y","status":"completed","cost":2},{"id":"hr-x","status":"completed","cost":5}]', 7)
-      on conflict (id) do update set tasks = excluded.tasks, total_cost = excluded.total_cost;
+      on conflict (device_id, id) do update set tasks = excluded.tasks, total_cost = excluded.total_cost;
     select * into h from history where id = 'hr-L';
     ok := (select array_agg(e->>'id') from jsonb_array_elements(h.tasks) e) = '{hr-y}';
     out := out || case when ok then 'ok R5 upsert-stripped; ' else format('FAIL R5 upsert-stripped %s; ', h.tasks) end;
@@ -124,7 +124,7 @@ begin
     perform set_config('request.headers', json_build_object('x-proxima-session', tk)::text, true);
     insert into public.history (id, device_id, timestamp, tasks, total_cost) values
       (p || '_L', s, 1000, format('[{"id":"%s_x","status":"completed","cost":5},{"id":"%s_y","status":"completed","cost":4}]', p, p)::jsonb, 9)
-      on conflict (id) do update set tasks = excluded.tasks, total_cost = excluded.total_cost;
+      on conflict (device_id, id) do update set tasks = excluded.tasks, total_cost = excluded.total_cost;
     select string_agg(e->>'id', ',') into v from public.history hh, jsonb_array_elements(hh.tasks) e where hh.id = p || '_L';
     execute 'reset role';
     out := out || case when v = p || '_y' then 'ok R9 anon-token; ' else format('FAIL R9 anon-token %s; ', v) end;

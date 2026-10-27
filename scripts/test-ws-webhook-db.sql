@@ -84,7 +84,7 @@ begin
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs, error, end_time, wall_clock_ms, inference_ms, nsfw)
     values ('wh-late', scope, 'processing', 2000, 'wh-pred-late', '[]', null, null, 0, 0, null)
-    on conflict (id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
+    on conflict (device_id, id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
       start_time = excluded.start_time, end_time = excluded.end_time, wall_clock_ms = excluded.wall_clock_ms,
       inference_ms = excluded.inference_ms, nsfw = excluded.nsfw;
   reset role;
@@ -100,7 +100,7 @@ begin
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs, error, end_time, wall_clock_ms, inference_ms, nsfw)
     values ('wh-orph', scope, 'processing', 3000, 'wh-pred-orph', '[]', null, null, 0, 0, null)
-    on conflict (id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
+    on conflict (device_id, id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
       start_time = excluded.start_time, end_time = excluded.end_time, wall_clock_ms = excluded.wall_clock_ms,
       inference_ms = excluded.inference_ms, nsfw = excluded.nsfw;
   reset role;
@@ -112,7 +112,7 @@ begin
   set local role anon;
   insert into tasks (id, device_id, status, start_time, task_id, outputs, error, end_time, wall_clock_ms, inference_ms, nsfw)
     values ('wh-run', scope, 'processing', 1000, 'wh-pred-run', '[]', null, null, 0, 0, null)
-    on conflict (id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
+    on conflict (device_id, id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
       start_time = excluded.start_time, end_time = excluded.end_time, wall_clock_ms = excluded.wall_clock_ms,
       inference_ms = excluded.inference_ms, nsfw = excluded.nsfw;
   reset role;
@@ -184,7 +184,7 @@ begin
   insert into tasks (id, device_id, status, start_time, task_id, outputs, error, end_time, wall_clock_ms, inference_ms, nsfw)
     values ('wh-cx', scope, 'failed', 1000, 'wh-pred-cx', '[]', 'Cancelled', 5000, 4000, 4000, null),
            ('wh-ok', scope, 'completed', 1000, 'wh-pred-ok', '["https://cdn.example/ok.png"]', null, 5000, 4000, 4000, null)
-    on conflict (id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
+    on conflict (device_id, id) do update set status = excluded.status, task_id = excluded.task_id, outputs = excluded.outputs, error = excluded.error,
       start_time = excluded.start_time, end_time = excluded.end_time, wall_clock_ms = excluded.wall_clock_ms,
       inference_ms = excluded.inference_ms, nsfw = excluded.nsfw;
   reset role;

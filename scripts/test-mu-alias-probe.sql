@@ -40,7 +40,7 @@ begin
   end;
   begin
     insert into public.history (id, device_id, prompt) values (p || '_1', 'user:__legacy_name', 'x')
-      on conflict (id) do update set prompt = excluded.prompt, device_id = excluded.device_id;
+      on conflict (device_id, id) do update set prompt = excluded.prompt, device_id = excluded.device_id;
     r := r || text 'PASS upsert: legacy-stamped upsert of an existing row accepted';
   exception when others then r := r || format('FAIL upsert: %s %s', sqlstate, sqlerrm);
   end;

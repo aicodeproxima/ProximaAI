@@ -84,7 +84,7 @@ begin
       values ('pu-a1', u, 'completed', 1000, '[]', 'e1', 'a1');
     insert into tasks (id, device_id, status, start_time, outputs, end_frame_url, source_audio_url, source_video_url, ref_video_url)
       values ('pu-a1', u, 'completed', 1000, '[]', 'e2', 'a2', 'v2', 'r2')
-      on conflict (id) do update set end_frame_url = excluded.end_frame_url, source_audio_url = excluded.source_audio_url,
+      on conflict (device_id, id) do update set end_frame_url = excluded.end_frame_url, source_audio_url = excluded.source_audio_url,
         source_video_url = excluded.source_video_url, ref_video_url = excluded.ref_video_url;
     out := out || case when (select array[end_frame_url, source_audio_url, source_video_url, ref_video_url] from tasks where id = 'pu-a1')
                             = array['e2', 'a2', 'v2', 'r2'] then 'ok anon-upsert; ' else 'FAIL anon-upsert values; ' end;

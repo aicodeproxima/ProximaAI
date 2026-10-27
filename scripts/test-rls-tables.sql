@@ -12,7 +12,7 @@ declare
   bad_msg text[] := array['invalid signature','session token expired','session token revoked','not admin-scoped','malformed session token'];
   tbls text[] := array['tasks','history','settings','favorites','presets'];
   kcol text[] := array['id','id','key','id','model_id'];
-  conf text[] := array['id','id','device_id, key','id','device_id, model_id'];
+  conf text[] := array['device_id, id','device_id, id','device_id, key','device_id, id','device_id, model_id'];   -- each table's key: (device_id, id) works before step (c) (its unique index) and after it
   total int[] := '{}'; tomb0 int; r text[] := '{}';
   n int; i int; j int; k int; stmt text; verb text; tok text;
 begin

@@ -62,7 +62,7 @@ begin
       ('he-U', u, 1000, '[{"id":"he-c","status":"completed","cost":1}]', 1);
     insert into history (id, device_id, timestamp, tasks, total_cost) values
       ('he-U', u, 1000, '[{"id":"he-a","status":"completed","cost":1}]', 1)
-      on conflict (id) do update set tasks = excluded.tasks, total_cost = excluded.total_cost;
+      on conflict (device_id, id) do update set tasks = excluded.tasks, total_cost = excluded.total_cost;
     out := out || case when not exists (select 1 from history where id = 'he-U')
       and exists (select 1 from sync_tombstones where id = 'he-U' and kind = 'history')
       then 'ok upsert-emptied; ' else format('FAIL upsert-emptied live=%s; ', exists (select 1 from history where id = 'he-U')) end;

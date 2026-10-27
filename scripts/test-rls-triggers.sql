@@ -6,6 +6,10 @@ declare
   u text; tk text; sub text;   -- the owner's name, a fresh session token and its subject, set first thing below
   s text; p text := '__rls_probe_' || txid_current(); t_good text; r text[] := '{}'; n int; v text;
   qat bigint := (extract(epoch from clock_timestamp()) * 1000)::bigint + 60000;   -- a queue time after any restore
+  kc boolean := (select array(select a.attname::text from pg_constraint c join pg_attribute a on a.attrelid = c.conrelid
+                              and a.attnum = any (c.conkey) where c.conrelid = 'public.tasks'::regclass and c.contype = 'p'
+                              order by a.attname)) = array['device_id', 'id'];   -- per-account id keys step (c), 20261028100000
+  kq int;
 begin
   -- The owner: proxima_auth.users from P1's M1 on, app_secrets before it (this suite runs in every P1 state). From M1
   -- the session is minted by proxima_auth.mint_token the way the app's sign-in mints it ('u:' from M3), so the suite
@@ -27,12 +31,12 @@ begin
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
   begin
     -- T1 upsert of an existing row updates it (keep_finished allows processing -> completed)
-    insert into public.tasks (id, device_id, status) values (p || '_t', s, 'processing') on conflict (id) do update set status = excluded.status;
-    insert into public.tasks (id, device_id, status) values (p || '_t', s, 'completed')  on conflict (id) do update set status = excluded.status;
+    insert into public.tasks (id, device_id, status) values (p || '_t', s, 'processing') on conflict (device_id, id) do update set status = excluded.status;
+    insert into public.tasks (id, device_id, status) values (p || '_t', s, 'completed')  on conflict (device_id, id) do update set status = excluded.status;
     select status into v from public.tasks where id = p || '_t';
     r := r || format('%s T1 upsert existing row -> %s', case when v = 'completed' then 'PASS' else 'FAIL' end, v);
     -- T1b keep_finished: a stale 'processing' upsert never reopens a completed row
-    insert into public.tasks (id, device_id, status) values (p || '_t', s, 'processing') on conflict (id) do update set status = excluded.status;
+    insert into public.tasks (id, device_id, status) values (p || '_t', s, 'processing') on conflict (device_id, id) do update set status = excluded.status;
     select status into v from public.tasks where id = p || '_t';
     r := r || format('%s T1b completed row stays completed -> %s', case when v = 'completed' then 'PASS' else 'FAIL' end, v);
     -- T3 PATCH-style move OUT: keep_owner restores the owner, WITH CHECK passes, the row stays in the live scope
@@ -41,31 +45,44 @@ begin
     r := r || format('%s T3 move-out kept owner', case when v = s then 'PASS' else 'FAIL' end);
   exception when others then r := r || format('FAIL T1-T3 raised %s %s', sqlstate, sqlerrm);
   end;
-  -- T2 MUST DENY (since 20261023050000): an upsert whose id collides with another scope's row is refused, and that row
-  --    stays in its scope. Before, a valid session "rescued" such a row into its own scope; with several accounts that
-  --    would move another account's row.
+  -- T2 (since 20261023050000): an upsert whose id collides with another scope's row never moves that row. Before step (c)
+  --    it is refused (MUST DENY: a valid session once "rescued" such a row into its own scope; with several accounts that
+  --    would move another account's row). From step (c) (keys (device_id, id)) the upsert names (device_id, id) and lands
+  --    as the session's own row of that id. T2c checks the other scope's rows in both.
   begin
-    insert into public.tasks (id, device_id) values (p || '_orphan', s) on conflict (id) do update set device_id = excluded.device_id;
-    r := r || text 'FAIL T2 upsert over another scope''s row allowed';
+    if not kc then
+      insert into public.tasks (id, device_id) values (p || '_orphan', s) on conflict (id) do update set device_id = excluded.device_id;
+      r := r || text 'FAIL T2 upsert over another scope''s row allowed';
+    else
+      insert into public.tasks (id, device_id) values (p || '_orphan', s) on conflict (device_id, id) do update set device_id = excluded.device_id;
+      r := r || text 'PASS T2 upsert naming (device_id, id) with another scope''s id lands as the session''s own row';
+    end if;
   exception when sqlstate '42501' then r := r || format('%s T2 upsert over another scope''s row refused: %s',
-              case when sqlerrm like '%USING expression%' then 'PASS' else 'FAIL' end, sqlerrm);
+              case when sqlerrm like '%USING expression%' and not kc then 'PASS' else 'FAIL' end, sqlerrm);
             when others then r := r || format('FAIL T2 %s %s', sqlstate, sqlerrm);
   end;
   begin
-    insert into public.favorites (id, device_id) values (p || '_forphan', s) on conflict (id) do update set device_id = excluded.device_id;
-    r := r || text 'FAIL T2b favorites upsert over another scope''s row allowed';
-  exception when sqlstate '42501' then r := r || text 'PASS T2b favorites upsert over another scope''s row refused';
+    if not kc then
+      insert into public.favorites (id, device_id) values (p || '_forphan', s) on conflict (id) do update set device_id = excluded.device_id;
+      r := r || text 'FAIL T2b favorites upsert over another scope''s row allowed';
+    else
+      insert into public.favorites (id, device_id) values (p || '_forphan', s) on conflict (device_id, id) do update set device_id = excluded.device_id;
+      r := r || text 'PASS T2b favorites upsert naming (device_id, id) with another scope''s id lands as the session''s own row';
+    end if;
+  exception when sqlstate '42501' then r := r || format('%s T2b favorites upsert over another scope''s row refused', case when kc then 'FAIL' else 'PASS' end);
             when others then r := r || format('FAIL T2b %s %s', sqlstate, sqlerrm);
   end;
   execute 'reset role';
-  select count(*) into n from (select device_id from public.tasks where id = p || '_orphan'
-                               union all select device_id from public.favorites where id = p || '_forphan') x where x.device_id = 'user:__rls_orphan';
-  r := r || format('%s T2c the other scope''s rows stay in their scope (%s/2)', case when n = 2 then 'PASS' else 'FAIL' end, n);
+  select count(*) filter (where x.device_id = 'user:__rls_orphan'), count(*) filter (where x.device_id = s) into n, kq
+    from (select device_id from public.tasks where id = p || '_orphan'
+          union all select device_id from public.favorites where id = p || '_forphan') x;
+  r := r || format('%s T2c the other scope''s rows stay in their scope (%s/2; the session''s own rows of those ids %s, want %s)',
+                   case when n = 2 and kq = case when kc then 2 else 0 end then 'PASS' else 'FAIL' end, n, kq, case when kc then 2 else 0 end);
   execute 'set local role anon';
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
   -- T4 MUST DENY: an upsert proposing another scope for a NEW row fails the INSERT check
   begin
-    insert into public.tasks (id, device_id) values (p || '_t4', 'user:__rls_other') on conflict (id) do update set device_id = excluded.device_id;
+    insert into public.tasks (id, device_id) values (p || '_t4', 'user:__rls_other') on conflict (device_id, id) do update set device_id = excluded.device_id;
     r := r || text 'FAIL T4 other-scope insert allowed';
   exception when sqlstate '42501' then r := r || text 'PASS T4 other-scope insert refused';
             when others then r := r || format('FAIL T4 %s %s', sqlstate, sqlerrm);
@@ -81,7 +98,7 @@ begin
     select count(*) into n from public.sync_tombstones where id = p || '_t' and kind = 'task';
     r := r || format('%s T5 tombstone recorded', case when n = 1 then 'PASS' else 'FAIL' end);
     -- T6 not_tombstoned skip: re-insert of a tombstoned id is skipped, with no error and no row
-    insert into public.tasks (id, device_id) values (p || '_t', s) on conflict (id) do update set device_id = excluded.device_id;
+    insert into public.tasks (id, device_id) values (p || '_t', s) on conflict (device_id, id) do update set device_id = excluded.device_id;
     select count(*) into n from public.tasks where id = p || '_t';
     r := r || format('%s T6 tombstoned re-insert skipped', case when n = 0 then 'PASS' else 'FAIL' end);
     -- T7 tombstone clear: with proxima.restore=on (set by restore_my_backup_phase2) the insert lands and sync_tombstone_clear
@@ -94,7 +111,7 @@ begin
     -- T8 history: record + skip
     insert into public.history (id, device_id) values (p || '_h', s);
     perform public.delete_queued_rows(t_good, 'history', array[p || '_h'], qat);
-    insert into public.history (id, device_id) values (p || '_h', s) on conflict (id) do update set device_id = excluded.device_id;
+    insert into public.history (id, device_id) values (p || '_h', s) on conflict (device_id, id) do update set device_id = excluded.device_id;
     select count(*) into n from public.sync_tombstones where id = p || '_h' and kind = 'history';
     r := r || format('%s T8 history tombstone + skip', case when n = 1 and not exists (select 1 from public.history where id = p || '_h') then 'PASS' else 'FAIL' end);
     -- T9 webhook take/settle/purge triggers (DEFINER, ws_webhook_events) run under the new policies
@@ -115,10 +132,12 @@ begin
            case when exists (select 1 from public.history where id = p || '_horphan') then 'PASS' else 'FAIL' end);
     execute 'set local role anon';
     -- T12 the client's keyset id read and its scope-filtered pulls see the live rows: this test's own two probe rows (it
-    -- counted the owner's real rows too, with n >= 2, and failed once the owner deleted every generation, 2026-10-26)
+    -- counted the owner's real rows too, with n >= 2, and failed once the owner deleted every generation, 2026-10-26);
+    -- from step (c) also T2's own row of the orphan's id
     insert into public.tasks (id, device_id) values (p || '_t12', s);
     select count(*) into n from public.tasks where device_id = s and id > '' and left(id, length(p)) = p;
-    r := r || format('%s T12 scope read sees live rows (%s of its 2 probes)', case when n = 2 then 'PASS' else 'FAIL' end, n);
+    r := r || format('%s T12 scope read sees live rows (%s of its %s probes)', case when n = 2 + kc::int then 'PASS' else 'FAIL' end,
+                     n, 2 + kc::int);
   exception when others then r := r || format('FAIL T5-T12 raised %s %s', sqlstate, sqlerrm);
   end;
   execute 'reset role';

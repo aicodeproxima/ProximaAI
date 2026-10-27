@@ -21,7 +21,7 @@ begin
   execute 'set local role anon';
   perform set_config('request.headers', json_build_object('x-proxima-session', t_good)::text, true);
   foreach stmt in array array[
-      format('insert into public.tasks (id, device_id) values (%L, %L) on conflict (id) do update set device_id = excluded.device_id', '__rls_explain', s),
+      format('insert into public.tasks (id, device_id) values (%L, %L) on conflict (device_id, id) do update set device_id = excluded.device_id', '__rls_explain', s),
       format('select id from public.tasks where device_id = %L order by id limit 1000', s),
       format('select id from public.sync_tombstones where device_id = %L and kind = %L order by id limit 1000', s, 'task'),
       format('update public.tasks set status = status where id = any (%L::text[]) and device_id = %L', '{__rls_explain}', s),
