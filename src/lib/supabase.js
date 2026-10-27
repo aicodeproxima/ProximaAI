@@ -452,16 +452,29 @@ export async function pullRestoreAt() {
 
 // ─── Favorites Sync ───
 
+// No caller today (the browser does not sync favorites); kept correct for the next one. Like syncSetting it throws on a
+// failure so the caller's retry queue keeps the write, and it names the per-account key: with no target PostgREST uses
+// its cached primary key, still (id) right after the step (c) swap, and the write fails with 42P10
+// (scripts/test-id-keys-client.mjs).
 export async function syncFavorite(fav) {
-  if (!supabase) return;
+  if (!supabase) {
+    if (!isSupabaseConfigured()) return { ok: true, localOnly: true };
+    throw new Error("Cloud sync is not initialized");
+  }
   try {
-    await supabase.from("favorites").upsert({
+    const r = await supabase.from("favorites").upsert({
       id: fav.id,
       device_id: getDeviceId(),
       prompt: fav.prompt || null,
       tags: fav.tags || [],
-    });
-  } catch (err) { warnOnce("syncFavorite", err); }
+    }, { onConflict: "device_id,id" });
+    if (r.error) throw r.error;
+    touchSync();
+    return { ok: true };
+  } catch (err) {
+    warnOnce("syncFavorite", err);
+    throw err;
+  }
 }
 
 export async function pullFavorites() {
