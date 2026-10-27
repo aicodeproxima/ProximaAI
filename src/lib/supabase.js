@@ -152,7 +152,7 @@ export function taskToRow(task) {
 export async function syncTask(task) {
   if (!task?.id || !requireClient()) return;
   try {
-    const r = await supabase.from("tasks").upsert(taskToRow(task), { onConflict: "id" });
+    const r = await supabase.from("tasks").upsert(taskToRow(task), { onConflict: "device_id,id" });
     if (r.error) throw r.error;
     touchSync();
   } catch (err) { warnOnce("syncTask", err); throw err; }
@@ -164,7 +164,7 @@ export async function syncTasksBatch(tasks) {
   try {
     const rows = tasks.filter(t => t?.id).map(taskToRow);
     if (rows.length > 0) {
-      const r = await supabase.from("tasks").upsert(rows, { onConflict: "id" });
+      const r = await supabase.from("tasks").upsert(rows, { onConflict: "device_id,id" });
       if (r.error) throw r.error;
       touchSync();
     }
@@ -289,7 +289,7 @@ export function historyToRow(entry) {
 export async function syncHistoryEntry(entry) {
   if (!entry?.id || !requireClient()) return;
   try {
-    const r = await supabase.from("history").upsert(historyToRow(entry), { onConflict: "id" });
+    const r = await supabase.from("history").upsert(historyToRow(entry), { onConflict: "device_id,id" });
     if (r.error) throw r.error;
     touchSync();
   } catch (err) { warnOnce("syncHistoryEntry", err); throw err; }
@@ -526,7 +526,7 @@ export async function syncHistoryBatch(entries) {
   try {
     const rows = entries.filter(e => e?.id).map(historyToRow);
     if (rows.length > 0) {
-      const r = await supabase.from("history").upsert(rows, { onConflict: "id" });
+      const r = await supabase.from("history").upsert(rows, { onConflict: "device_id,id" });
       if (r.error) throw r.error;
       touchSync();
     }
