@@ -19,6 +19,7 @@ import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joi
 import { readBrowserAccount, browserAccountDecision, claimBrowser, browserAccountMessage, freeForNewAccount, bootSessionDecision, tokenAccountId,
   pageMustLeave, accountCheckStep, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
 import InviteSection from "./components/InviteSection.jsx";
+import SigninHistory from "./components/SigninHistory.jsx";
 import { clearSettlement } from "./lib/clearOutcome.js";
 import { SNAPSHOT_SLACK_MS, serverNow } from "./lib/serverClock.js";
 import { initSupabase, isSupabaseConfigured, pullSettings, pullRestoreAt, joinWithInvite, setPageExiting, backfillTaskInputs, deleteQueuedRemote, predictionsInUseRemote, generationsLiveRemote, pullTaskInputs, syncHistoryEntry as rawSyncHistoryEntry, syncTask as rawSyncTask, syncTasksBatch as rawSyncTasksBatch, pullTaskStartsInWindow, syncSetting, pullAllRemoteData, pullCloudIds, syncHistoryBatch as rawSyncHistoryBatch, subscribeToCloudChanges, deleteTasksRemote, clearQueuedRemote, resetQueuedRemote, serverTimeRemote, deleteHistoryRemote, upsertQueuedHistory as rawUpsertQueuedHistory, getDeviceId, resetDeviceIdCache, checkSession, signIn, unlockWithBackupCode, getMyAccount, setMyAccount, changeMyPassword, renameMyAccount, setBackupCode, saveWavespeedKey, myProviderKeys, saveProviderKey, clearProviderKey, sendEmailOtp, verifyEmailOtp, createBackup, listBackups, restoreBackup, deleteBackup, archiveUrl, deleteArchivedPath, getArchiveStats, getAutoBackups, setAutoBackups, pullAllForPurge, pathsInUseRemote, pullFormHolds, taskRowsPresentRemote } from "./lib/supabase.js";
@@ -5898,6 +5899,7 @@ export default function ProximaApp() {
                 </div>
 
                 {readBrowserAccount()?.role === "owner" && <InviteSection font={font} />}
+                {readBrowserAccount()?.role === "owner" && <SigninHistory font={font} />}
 
                 <div className="setting-group">
                   <div className="setting-label">Default Settings</div>

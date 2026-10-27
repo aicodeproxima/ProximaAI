@@ -53,7 +53,7 @@ declare
     'public.set_my_provider_key(text,text,text)', 'public.clear_my_provider_key(text,text)', 'public.my_provider_keys(text)',
     -- 20261026500000_mu_p5_invites: the owner creates, lists and revokes invites; anyone joins with one (members switch)
     'public.create_invite(text,text)', 'public.list_my_invites(text)', 'public.revoke_invite(text,uuid)',
-    'public.join_with_invite(text,text,text)'];
+    'public.join_with_invite(text,text,text)', 'public.list_signins(text,integer,bigint,text)'];
   m3_post constant text := 'b9ba44a18b04d17bdf0034b944a57035';   -- M3's issue_session (pg_get_functiondef md5)
   out text := ''; v text; n int; n2 int; v_m3 boolean; v_m4 boolean; v_tabs text[];
 begin

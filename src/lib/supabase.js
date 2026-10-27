@@ -877,6 +877,14 @@ export async function createInvite(currentPassword) {
   catch (err) { if (notOnServer(err)) return { ok: false, reason: "closed" }; throw err; }
 }
 
+// The owner's sign-in history, every account (migration 20261027100000): a page of events newest first (older than
+// beforeId; account = an account id, "none" for events of no account, or null for all), whether older ones exist, and every
+// account's last successful sign-in: { ok, events, more, accounts }. Anyone else is answered "forbidden".
+export async function listSignins({ limit = 100, beforeId = null, account = null } = {}) {
+  const r = await sessionRpc("list_signins", { p_limit: limit, p_before_id: beforeId, p_account: account });
+  return r || { ok: false, reason: "forbidden" };
+}
+
 // The owner's invites (state only): { ok, invites: [{ id, created_at, expires_at, state, used_at, used_by_username }] }.
 export async function listMyInvites() {
   try { return await sessionRpc("list_my_invites"); }

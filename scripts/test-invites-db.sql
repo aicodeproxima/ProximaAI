@@ -506,11 +506,12 @@ begin
       and position('v_bk_hash := crypt(v_backup, gen_salt(''bf'', 12));' in v) > position('for update of i' in v)
       and position('v_bk_hash := crypt(v_backup, gen_salt(''bf'', 12));' in v) < position('o.disabled_at is null for share;' in v)
       -- r7 tests #5: the whole re-check, so its role condition, its refusal and its count cannot drop out unnoticed
-      and v ~ 'perform 1 from proxima_auth\.users o where o\.id = v_inv\.created_by and o\.role = ''owner'' and o\.deleted_at is null\s+and o\.disabled_at is null for share;\s*if not found then\s*perform proxima_auth\._throttle\(''join'', true\);\s*return json_build_object\(''ok'', false, ''reason'', ''invalid''\);'
+      and v ~ 'perform 1 from proxima_auth\.users o where o\.id = v_inv\.created_by and o\.role = ''owner'' and o\.deleted_at is null\s+and o\.disabled_at is null for share;\s*if not found then\s*perform proxima_auth\._throttle\(''join'', true\);\s*(perform proxima_auth\._log_signin\(null, ''join'', ''invite_creator_gone'', false\);\s*)?return json_build_object\(''ok'', false, ''reason'', ''invalid''\);'
       and position('for update of i' in v) < position('o.disabled_at is null for share;' in v)
       and position('o.disabled_at is null for share;' in v) < position('_username_taken(' in v)
       and position('for key share' in v) = 0
-      and v ~ 'exception when unique_violation then[^;]*return json_build_object\(''ok'', false, ''reason'', ''username_taken''\);\s*end;\s*update proxima_auth\.invites set used_at';
+      -- 20261027100000: one sign-in log call may precede the answer (nothing else)
+      and v ~ 'exception when unique_violation then\s*(perform proxima_auth\._log_signin\(null, ''join'', ''username_taken'', false\);\s*)?return json_build_object\(''ok'', false, ''reason'', ''username_taken''\);\s*end;\s*update proxima_auth\.invites set used_at';
     out := out || case when ok then 'ok I20 lock-order-and-race-answer; ' else 'FAIL I20 lock-order-and-race-answer; ' end;
   exception when others then out := out || format('FAIL I20 %s %s; ', sqlstate, left(sqlerrm, 80)); end;
 
