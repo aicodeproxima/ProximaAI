@@ -1233,6 +1233,18 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .setting-input { width: 100%; background: var(--bg-input); border: 1px solid var(--glass-border); border-radius: 8px; padding: 10px 12px; color: var(--text-primary); font-family: ${font}; font-size: 13px; outline: none; transition: border-color 0.3s, box-shadow 0.3s; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .setting-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1), 0 0 20px rgba(99,102,241,0.06); }
 .setting-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+/* Settings page: one 500 px column. On desktop the sections flow into 2 columns from 1150 px and 3 from 1700 px (each
+   section kept whole, in page order), so no column is ever narrower than the 500 px they were laid out for. Below
+   1150 px (phones, tablets) nothing changes. */
+.settings-page { max-width: 500px; }
+@media (min-width: 1150px) {
+  .settings-page { max-width: 1800px; column-count: 2; column-gap: 48px; }
+  .settings-page > h2 { column-span: all; }
+  .settings-page > * { break-inside: avoid; }
+}
+@media (min-width: 1700px) {
+  .settings-page { column-count: 3; }
+}
 
 .api-test-btn { padding: 8px 16px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; border: none; border-radius: 6px; font-family: ${font}; font-size: 12px; cursor: pointer; margin-top: 8px; transition: all 0.3s cubic-bezier(0.4,0,0.2,1); }
 .api-test-btn:hover:not(:disabled) { box-shadow: 0 4px 16px rgba(99,102,241,0.35); transform: translateY(-1px); }
@@ -5670,7 +5682,7 @@ export default function ProximaApp() {
 
             {/* ═══ SETTINGS ═══ */}
             {page === "settings" && (
-              <div style={{ maxWidth: 500 }}>
+              <div className="settings-page">
                 <h2 style={{ fontFamily: font, fontSize: 16, marginBottom: 24, color: "var(--text-secondary)" }}>Settings</h2>
 
                 {/* Appearance */}
