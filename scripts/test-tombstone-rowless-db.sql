@@ -373,8 +373,10 @@ begin
     execute 'reset role';
     if (r->>'upserted')::int is distinct from 1 or not exists (select 1 from history where id = p || '_m6' and device_id = sl)
        or not pg_temp._tr_lock_held('history', sl, 'ShareLock') then bad := bad || format('f-rpc[%s],', r); end if;
-    execute 'drop trigger zzz_tr_probe on public.tasks';
-    execute 'drop trigger zzz_tr_probe on public.history';
+    -- The probe triggers stay until the rollback removes them. Never DROP them here: DROP TRIGGER holds the table ACCESS
+    -- EXCLUSIVE until the rollback, which stalled every live sync read of tasks and history for the rest of the run
+    -- (2026-10-27; AGENTS.md "A rolled-back test on the live database still stalls live traffic"). CREATE TRIGGER's
+    -- SHARE ROW EXCLUSIVE only holds back writes, and only for this last case.
     out := out || case when bad = '' then 'ok T12 browser inserts outside their session scope take no lock and are refused, own-scope, service_role, postgres and RPC inserts take it; '
                        else format('FAIL T12 %s; ', bad) end;
   exception when others then execute 'reset role'; out := out || format('FAIL T12 %s %s; ', sqlstate, sqlerrm); end;
