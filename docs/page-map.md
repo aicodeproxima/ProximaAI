@@ -89,6 +89,26 @@ Rows `.log-row:not(.log-header)` with `.log-prompt`, `.log-models` ("1 model · 
   to WaveSpeed. Do NOT paste `static.wavespeed.ai` example URLs: that CDN 403s any foreign Referer, so the browser
   reports "Format error" and nothing can be measured (the app's own uploads on `*.cloudfront.net` work).
 
+## kie.ai (measured live 2026-10-27, bundle ac35aaf, DJI account; driver `scripts/browser/kie-helpers.js`)
+- Balance: `.balance-pill` reads "kie 731.76 cr · $3.66"; raw credits (2 decimals) from a signed-in page:
+  `fetch("/api/kie/api/v1/chat/credit", { headers: { "X-Proxima-Session": <token> } })` → `{ data: 782 }`. $0.005 per credit.
+- Billing: estimate = card = charge, to the hundredth of a credit, on 21 models (9 image, 5 edit, 7 video: 188.68 cr).
+  Most models charge at submit (the credit read 6 s after Generate shows it); **Wan 3.0 charged at completion** (2.8 min
+  later), so read credits again after the cards finish.
+- Settings with several models selected: Resolution rows are labelled by model name; with one model the row is
+  "Resolution". Aspect, Duration, Batch and Seed are ONE shared row each (Duration offers 1..30, the union), so videos that
+  need different durations go in separate runs (a run does not wait for earlier ones).
+- Card actions `.result-action-btn`: "✏️ Edit" opens Image Edit with the result as the source image (pasted URL + preview,
+  label "✓ UPLOADED TO WAVESPEED" even for a kie.ai file); "🎬 Animate" opens Image → Video with it. kie.ai results live on
+  `tempfile.aiquickdraw.com` (14 days).
+- Proof a video is real: `__kt.probeVideos(n)` loads each card's video metadata (seconds, width, height). Measured: Veo
+  3.1 Lite 720p 8 s → 8.00 s 1280×720; Wan 3.0 480P 2 s → 2.02 s 854×480; MiniMax H3 768P 4 s → 4.46 s 1344×768;
+  PixVerse V6 Max 360p 1 s → 1.04 s 640×360 (640×640 from a square source); Grok Imagine Video 1.5 480p 1 s → 1.04 s
+  560×560; Vidu Q4 540p 3 s → 3.04 s 720×720 (same area as 960×540).
+- Proof an edit used its source: overlay a temporary grid of the source and edit results (fixed div, remove after), one
+  screenshot. All 5 edit image fields (`image_input`, `input_urls`, `image_urls`) changed only the asked detail.
+- A kie.ai-only account logs `400 /api/wavespeed-v2/api/v3/balance` after every generation (known Low).
+
 ## Result webhook (since 2026-10-20)
 - The proxy adds `standard_webhook=<site>/api/ws-webhook` to model submits; WaveSpeed's signed delivery is written into
   the cloud `tasks` row by task_id (`ws_webhook_apply`; waiting deliveries in `ws_webhook_events`, swept every 5 min by

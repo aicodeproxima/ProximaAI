@@ -24,8 +24,9 @@ window.__px = (() => {
     start: () => { const b = document.querySelector(".gen-btn"); if (!b || b.disabled) return false; window.__pxRun = { at: Date.now(), done: false };
       b.click(); (async () => { await sleep(1500); while (document.querySelector(".task-progress-fill")) await sleep(700); window.__pxRun.done = true; window.__pxRun.ms = Date.now() - window.__pxRun.at; })(); return true; },
     result: () => window.__pxRun,
-    rawBalance: async () => { const key = await idb("settings", s => s.get("apiKey"));
-      const j = await (await fetch("/wavespeed/api/v3/balance", { headers: { Authorization: "Bearer " + (key?.value ?? key) } })).json();
+    // WaveSpeed balance through the proxy (the key has been server-only since 2026-10-20; a kie.ai-only account gets 400).
+    rawBalance: async () => { const token = JSON.parse(localStorage["proximaai-session"]).token;
+      const j = await (await fetch("/api/wavespeed-v2/api/v3/balance", { headers: { "X-Proxima-Session": token } })).json();
       return j?.data?.balance ?? j?.balance; },
     snapshot: async () => { const tasks = await idb("tasks", s => s.getAll()); const history = await idb("history", s => s.count());
       return { bundle: [...document.scripts].map(s => s.src).find(s => s.includes("/assets/index-"))?.split("/").pop(),
