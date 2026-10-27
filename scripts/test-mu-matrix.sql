@@ -953,8 +953,13 @@ begin
 
   -- Sign-in history (the other session's 20261027100000; owner ruling 2026-10-27: only the owner sees it, for every
   -- account): a member is refused and gets no event; the owner reads them (the ruling's one exception to the walls).
-  if to_regprocedure('public.list_signins(text,integer)') is null then
-    r := r || text 'PASS sign-in history: not live yet (20261027100000), nothing to wall';
+  -- Found by name: the function's signature grew to (text, integer, bigint, text) before it shipped, and the lookup of
+  -- (text, integer) never found it, so this case never ran (the other session's review round 4). Missing while
+  -- 20261027100000 is recorded is a FAIL, not "not live yet".
+  if not exists (select 1 from pg_proc pr where pr.proname = 'list_signins' and pr.pronamespace = 'public'::regnamespace) then
+    r := r || case when exists (select 1 from supabase_migrations.schema_migrations where version = '20261027100000')
+                   then text 'FAIL sign-in history: 20261027100000 is recorded but public.list_signins is missing'
+                   else text 'PASS sign-in history: not live yet (20261027100000), nothing to wall' end;
   else
     begin
       -- a member made here with a fresh session (B's was revoked by its rename above), and a fresh owner session
@@ -963,9 +968,9 @@ begin
       ans := proxima_auth.mint_token(a_id);
       execute 'set local role anon';
       perform set_config('request.headers', json_build_object('x-proxima-session', v)::text, true);
-      execute 'select public.list_signins($1, 200)' into j using v;
+      execute 'select public.list_signins($1, 200, null, null)' into j using v;
       perform set_config('request.headers', json_build_object('x-proxima-session', ans)::text, true);
-      execute 'select public.list_signins($1, 1)' into jd using ans;
+      execute 'select public.list_signins($1, 1, null, null)' into jd using ans;
       execute 'reset role';
       r := r || format('%s sign-in history: a member is refused (%s, events in the answer: %s); the owner reads them (%s)',
                        case when j->>'reason' = 'forbidden' and j->'events' is null and (jd->>'ok')::boolean then 'PASS' else 'FAIL' end,
