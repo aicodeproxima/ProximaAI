@@ -1,6 +1,7 @@
--- 20261026200000's rollback proof: after the rollback, everything the migration touched is as it was before it. All
--- rolled back. Before the apply: node scripts/tools/sql-tx.mjs supabase/migrations/20261026200000_*.sql
--- supabase/rollback/20261026200000_*.rollback.sql --test <this file>; after it: the rollback alone, then this file.
+-- 20261026200000's rollback proof: after the rollback, everything the migration touched is as it was before it, and its
+-- record is gone (R7). All rolled back. Before the apply: node scripts/tools/sql-tx.mjs supabase/migrations/20261026200000_*.sql
+-- supabase/rollback/20261026200000_*.rollback.sql --test <this file>; after it: the rollback alone, then this file (the
+-- live record makes R7 meaningful there).
 do $t$
 declare
   r text[] := '{}'; v text; job record;
@@ -20,6 +21,8 @@ begin
                    case when not has_function_privilege('anon', 'public._scrub_backups_to_live_items(text)', 'execute')
                              and not has_function_privilege('authenticated', 'public._scrub_backups_to_live_items(text)', 'execute')
                              and has_function_privilege('anon', 'public.rename_my_account(text,text,text)', 'execute') then 'PASS' else 'FAIL' end);
+  r := r || format('%s R7 no record of 20261026200000 (a re-apply after the rollback is not skipped as already recorded)',
+                   case when not exists (select 1 from supabase_migrations.schema_migrations where version = '20261026200000') then 'PASS' else 'FAIL' end);
   raise exception 'RESULT: % PASS, % FAIL :: %', (select count(*) from unnest(r) q where q like 'PASS%'),
     (select count(*) from unnest(r) q where q like 'FAIL%'), array_to_string(r, ' | ');
 end $t$;

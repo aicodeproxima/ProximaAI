@@ -1,6 +1,6 @@
 -- Rollback of supabase/migrations/20261026200000_mu_p4_backup_scrubs_per_account.sql (exact inverse: the two function
--- bodies below are the live ones it replaced, saved byte for byte before it; the drain job gets its old command back and
--- the procedure goes). Kept OUT of supabase/migrations/.
+-- bodies below are the live ones it replaced, saved byte for byte before it; the drain job gets its old command back,
+-- the procedure goes, and so does the migration's record). Kept OUT of supabase/migrations/.
 set local lock_timeout = '2s';   -- a rollback that cannot take its locks within 2 s stops; a browser call is cancelled after 3 s
 
 -- md5 guard: what this file restores or removes must still be what 20261026200000 installed.
@@ -144,3 +144,7 @@ begin
     'token', v_s->>'token', 'expires_at', (v_s->>'expires_at')::bigint);
 end $function$
 ;
+
+-- Its record goes too (2026-10-27): left behind, apply-migration.mjs would skip a later re-apply of 20261026200000 as
+-- already recorded. scripts/test-backup-scrubs-rollback.sql R7.
+delete from supabase_migrations.schema_migrations where version = '20261026200000' and name = 'mu_p4_backup_scrubs_per_account';
