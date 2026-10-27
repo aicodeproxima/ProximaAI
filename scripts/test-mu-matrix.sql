@@ -849,6 +849,27 @@ begin
 
   if not walls then r := r || text 'FAIL walls: proxima_auth.account_folders missing (20261025100000 not applied)'; end if;
 
+  -- Sign-in history (the other session's 20261027100000; owner ruling 2026-10-27: only the owner sees it, for every
+  -- account): a member is refused and gets no event; the owner reads them (the ruling's one exception to the walls).
+  if to_regprocedure('public.list_signins(text,integer)') is null then
+    r := r || text 'PASS sign-in history: not live yet (20261027100000), nothing to wall';
+  else
+    begin
+      -- a member made here with a fresh session (B's was revoked by its rename above), and a fresh owner session
+      insert into proxima_auth.users (username, role, scope) values (p || 'sg', 'member', 'user:' || p || 'sg');
+      select proxima_auth.mint_token(u.id) into v from proxima_auth.users u where u.username = p || 'sg';
+      ans := proxima_auth.mint_token(a_id);
+      execute 'set local role anon';
+      perform set_config('request.headers', json_build_object('x-proxima-session', v)::text, true);
+      execute 'select public.list_signins($1, 200)' into j using v;
+      perform set_config('request.headers', json_build_object('x-proxima-session', ans)::text, true);
+      execute 'select public.list_signins($1, 1)' into jd using ans;
+      execute 'reset role';
+      r := r || format('%s sign-in history: a member is refused (%s, events in the answer: %s); the owner reads them (%s)',
+                       case when j->>'reason' = 'forbidden' and j->'events' is null and (jd->>'ok')::boolean then 'PASS' else 'FAIL' end,
+                       coalesce(j->>'reason', 'ok'), j->'events' is not null, coalesce(jd->>'ok', jd->>'reason'));
+    exception when others then r := r || format('FAIL sign-in history: %s %s', sqlstate, sqlerrm); end;
+  end if;
   raise exception 'RESULT: % PASS, % FAIL :: %',
     (select count(*) from unnest(r) x where x like 'PASS%'), (select count(*) from unnest(r) x where x like 'FAIL%'),
     array_to_string(r, ' | ');
