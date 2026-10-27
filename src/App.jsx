@@ -385,7 +385,7 @@ function LoginScreen({ onSignedIn, notice = "", refusal = "", joinLink = null })
             <div>
               <label htmlFor="join-username" style={labelStyle}>Choose a username</label>
               <input id="join-username" type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
-                autoComplete="username" autoCapitalize="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+                autoComplete="username" autoCapitalize="off" autoCorrect="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
             <div>
               <label htmlFor="join-password" style={labelStyle}>Choose a password (8+ characters)</label>
@@ -401,7 +401,7 @@ function LoginScreen({ onSignedIn, notice = "", refusal = "", joinLink = null })
             <div>
               <label htmlFor="login-username" style={labelStyle}>Username</label>
               <input id="login-username" type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
-                autoFocus autoComplete="username" style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+                autoFocus autoComplete="username" autoCapitalize="off" autoCorrect="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
             </div>
             <div>
               <label htmlFor="login-password" style={labelStyle}>Password</label>
@@ -413,7 +413,7 @@ function LoginScreen({ onSignedIn, notice = "", refusal = "", joinLink = null })
               <div>
                 <label htmlFor="login-reset-username" style={labelStyle}>Username</label>
                 <input id="login-reset-username" type="text" value={username} onChange={e => { setUsername(e.target.value); setError(""); }}
-                  autoComplete="username" autoCapitalize="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
+                  autoComplete="username" autoCapitalize="off" autoCorrect="off" spellCheck={false} style={loginInputStyle} onFocus={loginFocus} onBlur={loginBlur} />
               </div>
             )}
             <div>

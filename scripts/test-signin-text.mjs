@@ -124,6 +124,13 @@ test("rename: rate_limited -> one-hour text; throttled; taken; others unchanged"
     assert.equal(calls.length, 2, "sign-in unlock/reset + AccountModal reset");
     for (const i of calls) assert.match(app.slice(i, i + 900), /setError\(backupCodeError\(r(, \{ ownAccount: true \})?\)\)/);
   });
+  test("every username box turns off autocorrect, autocapitalize and spellcheck (a phone must not change the name)", () => {
+    for (const id of ["login-username", "login-reset-username", "join-username"]) {
+      const m = app.match(new RegExp(`<input id="${id}"[\\s\\S]*?\\/>`));   // to "/>": onChange's "=>" holds a ">"
+      assert.ok(m, id);
+      for (const a of ['autoCapitalize="off"', 'autoCorrect="off"', "spellCheck={false}"]) assert.ok(m[0].includes(a), `${id} lacks ${a}`);
+    }
+  });
   test("wiring: sign-in switches to unlock mode on the old server's locked, then shows signInError", () => {
     assert.match(app, /if \(signInSwitchesToUnlock\(r\)\) switchMode\("unlock"\);\s*\n\s*setError\(signInError\(r\)\);/);
   });
