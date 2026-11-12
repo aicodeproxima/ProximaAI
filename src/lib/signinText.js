@@ -125,9 +125,13 @@ export function sessionEndedText(why = "") {
 // a code) or none at all (status 0) leaves it unknown whether the change was saved: that is said, with `unsure` (how to
 // tell, or what holds if it was). An error raised in the page before any call (no status) keeps its own words.
 // saved: "your password changed"; nothing: "your password did not change" (owner 2026-11-12: accurate errors).
+// The codes this app's functions raise a refusal with, its message being the reason in words meant for the screen:
+// raise exception's default P0001, 22023 (a bad value: set_my_provider_key's key check), 42501 ('forbidden'), 55000
+// (not now: set_auto_backups while a switch-off is still applying). Any other code is a server error.
+const REFUSAL_CODES = new Set(["P0001", "22023", "42501", "55000"]);
 export function changeFailedText(err, { saved = "this was saved", nothing = "nothing was changed", unsure = "" } = {}) {
   if (err?.session) return SESSION_ENDED;
-  if (err?.code === "P0001" && err.message) return err.message === "forbidden" ? SESSION_INVALID : err.message;
+  if (REFUSAL_CODES.has(err?.code) && err.message) return err.message === "forbidden" ? SESSION_INVALID : err.message;
   if (err?.code) return `The server hit an error${err.message ? ` (${err.message})` : ""}, so ${nothing}. Try again in a moment.`;
   const tail = unsure ? ` ${unsure}` : "";
   if (Number(err?.status) > 0) return `The server had a problem and didn't answer properly, so it's unknown whether ${saved}.${tail}`;

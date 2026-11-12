@@ -138,6 +138,13 @@ test("a change whose call threw: a refusal in the server's words; a server error
   assert.equal(T.changeFailedText({ code: "P0001", message: "That key does not look right (8 to 512 characters, no spaces).", status: 400 }, w),
     "That key does not look right (8 to 512 characters, no spaces).");                              // the server's refusal
   assert.equal(T.changeFailedText({ code: "P0001", message: "forbidden", status: 400 }, w), T.SESSION_INVALID);
+  // The app's functions raise refusals with their own codes too (set_my_provider_key, set_auto_backups, ...): each is the
+  // server's deliberate answer in words meant for the screen, never "the server hit an error".
+  assert.equal(T.changeFailedText({ code: "22023", message: "That key does not look right (8 to 512 characters, no spaces).", status: 400 }, w),
+    "That key does not look right (8 to 512 characters, no spaces).");
+  assert.equal(T.changeFailedText({ code: "42501", message: "forbidden", status: 403 }, w), T.SESSION_INVALID);
+  assert.equal(T.changeFailedText({ code: "55000", message: "the last switch-off is still being applied to your backups; try again in a minute", status: 400 }, w),
+    "the last switch-off is still being applied to your backups; try again in a minute");
   assert.equal(T.changeFailedText({ code: "P0001", message: "session token revoked", status: 400, session: true }, w), T.SESSION_ENDED);
   assert.match(T.SESSION_ENDED, /sign in again/i);
   assert.equal(T.changeFailedText({ code: "57014", message: "canceling statement due to statement timeout", status: 500 }, w),
