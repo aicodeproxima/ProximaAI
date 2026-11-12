@@ -311,6 +311,7 @@ begin
   -- H7. Calls from a blocked network are marked throttled on every branch that can see it: a wrong password, the right one
   --     (a correct password still signs in), an unknown name, an unlock while the backup code is paused (H3), and for
   --     another member: a wrong backup code, the right one with a new password, then that password from an older build.
+  --     Since 20261115100000 only the log carries the flag: the wrong password answers what it is, 'invalid'.
   begin
     v_from := pg_temp.maxid();
     got := pg_temp.hdr('198.51.100.90', guard);
@@ -342,7 +343,7 @@ begin
     ok := got = 'signin:wrong_password,signin:wrong_password:T,signin:ok:T,unlock:paused:T' and got2 = 'signin:unknown:T'
       and pg_temp.evn(v_from, 'unlock') = 'unlock:unknown:T'
       and got3 = 'unlock:wrong_code:T,unlock:ok_password_reset:T,signin:update_required:T'
-      and j->>'reason' = 'throttled' and (j2->>'ok')::boolean and (j3->>'ok')::boolean;
+      and j::jsonb = '{"ok": false, "reason": "invalid"}'::jsonb and (j2->>'ok')::boolean and (j3->>'ok')::boolean;
     out := out || case when ok then 'ok H7 throttled-flag; ' else format('FAIL H7 %s | %s | %s reason=%s; ', got, got2, got3, j->>'reason') end;
   exception when others then
     begin reset role; exception when others then null; end;
@@ -781,7 +782,8 @@ begin
     update proxima_auth.users set login_failed = 0, login_locked_at = null, backup_failed = 0, backup_locked_until = null where id = k;
     got := pg_temp.ev(v_from, k);
     ok := got = 'signin:wrong_password,signin:suppressed,signin:suppressed,unlock:suppressed,unlock:ok_password_reset,unlock:paused_now,signin:suppressed_lock'
-      and j->>'reason' = 'invalid' and j2->>'reason' = 'invalid' and (j3->>'ok')::boolean;
+      and j->>'reason' = 'invalid' and j2::jsonb = '{"ok": false, "reason": "backup_locked", "retry_after": 900, "paused_now": true}'::jsonb
+      and (j3->>'ok')::boolean;
     out := out || case when ok then 'ok H15 cap-windows-classes; ' else format('FAIL H15 %s; ', got) end;
   exception when others then
     begin reset role; exception when others then null; end;

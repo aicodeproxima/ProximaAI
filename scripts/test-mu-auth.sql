@@ -191,8 +191,9 @@ begin
       then 'ok signin-B; ' else format('FAIL signin-B %s; ', left(coalesce(r->>'reason', s, 'null'), 60)) end;
   exception when others then reset role; out := out || format('FAIL signin-B %s; ', left(sqlerrm, 60)); end;
 
-  -- 4. One generic error: an unknown name, a wrong password and a disabled account's RIGHT password answer the same
-  --    bytes; the disabled row is never changed.
+  -- 4. Accurate answers (20261115100000, owner rulings 2026-11-12): an unknown name and a wrong password answer the same
+  --    bytes, 'invalid' (wrong username or password); a disabled account's RIGHT password answers 'disabled'; the
+  --    disabled row is never changed.
   begin
     perform set_config('request.headers', ip_v, true);
     set local role anon;
@@ -202,17 +203,18 @@ begin
     reset role;
     update proxima_auth.users set login_failed = 0 where id = b;                       -- undo the probe's count on B
     ok := (select login_failed = 0 and login_locked_at is null and sessions_valid_after = 0 from proxima_auth.users where id = d);
-    out := out || case when r::jsonb = r2::jsonb and r::jsonb = r3::jsonb and r->>'reason' = 'invalid'
-                         and not (r::jsonb ? 'attempts_left') and ok
-      then 'ok generic-error; ' else format('FAIL generic-error %s|%s|%s; ', left(r::text, 20), left(r2::text, 20), left(r3::text, 20)) end;
-  exception when others then reset role; out := out || format('FAIL generic-error %s; ', left(sqlerrm, 60)); end;
+    out := out || case when r::jsonb = r2::jsonb and r::jsonb = '{"ok": false, "reason": "invalid"}'::jsonb
+                         and r3::jsonb = '{"ok": false, "reason": "disabled"}'::jsonb and ok
+      then 'ok wrong-name-or-password; ' else format('FAIL wrong-name-or-password %s|%s|%s; ', left(r::text, 40), left(r2::text, 40), left(r3::text, 40)) end;
+  exception when others then reset role; out := out || format('FAIL wrong-name-or-password %s; ', left(sqlerrm, 60)); end;
 
-  -- 5. A's 3 wrong passwords lock only A. While locked, A's right and a wrong password give the same bytes ('invalid':
-  --    the lock never confirms a guess); B still signs in; B's counter is 0.
+  -- 5. A's 3 wrong passwords lock only A; the 3rd answers 'locked' with locked_now (20261115100000). While locked, A's
+  --    right and a wrong password give the same bytes, 'locked' (the lock is named but never confirms a guess); B still
+  --    signs in; B's counter is 0.
   begin
     perform set_config('request.headers', ip_u, true);
     set local role anon;
-    for i in 1..3 loop r := verify_admin('__mu_a', 'wrong-password-' || i); end loop;
+    for i in 1..3 loop r4 := verify_admin('__mu_a', 'wrong-password-' || i); end loop;
     r := verify_admin('__mu_a', pa);
     r3 := verify_admin('__mu_a', 'wrong-password-9');
     r2 := verify_admin('__mu_b', pb);
@@ -221,8 +223,9 @@ begin
     ok := (select login_locked_at is not null from proxima_auth.users where id = a);
     out := out || case when (r2->>'ok')::boolean and n = 0 and ok and r->>'token' is null
       then 'ok lock-A-only; ' else format('FAIL lock-A-only A=%s B=%s nB=%s; ', r->>'reason', coalesce(r2->>'reason', 'ok'), n) end;
-    out := out || case when r::jsonb = r3::jsonb and r->>'reason' = 'invalid'
-      then 'ok locked-generic; ' else format('FAIL locked-generic %s|%s; ', left(r::text, 28), left(r3::text, 28)) end;
+    out := out || case when r4::jsonb = '{"ok": false, "reason": "locked", "locked_now": true}'::jsonb
+                         and r::jsonb = r3::jsonb and r::jsonb = '{"ok": false, "reason": "locked"}'::jsonb
+      then 'ok locked-says-so; ' else format('FAIL locked-says-so %s|%s|%s; ', left(r4::text, 60), left(r::text, 40), left(r3::text, 40)) end;
   exception when others then reset role; out := out || format('FAIL lock-A-only %s; ', left(sqlerrm, 60)); end;
 
   -- 6. A's backup code unlocks only A (and resets A's password); a wrong code counts on A only; only A's epoch moves.
@@ -244,8 +247,9 @@ begin
     out := out || case when (r->>'ok')::boolean then 'ok unlock-keeps-B; ' else 'FAIL unlock-keeps-B; ' end;
   exception when others then reset role; out := out || format('FAIL unlock-A-only %s; ', left(sqlerrm, 60)); end;
 
-  -- 7. Unlock answers one generic error with one bcrypt each: an unknown name, an account with no code (C), a wrong code
-  --    (B) and a disabled account's RIGHT code (D) answer the same bytes; D's row is never changed.
+  -- 7. Unlock answers accurately with one bcrypt each (20261115100000): an unknown name and a wrong code (B) answer the
+  --    same bytes, 'invalid'; an account with no code (C) answers 'no_backup_code'; a disabled account's RIGHT code (D)
+  --    answers 'disabled'; D's row is never changed.
   begin
     perform set_config('request.headers', ip_v, true);
     set local role anon;
@@ -256,10 +260,11 @@ begin
     reset role;
     update proxima_auth.users set backup_failed = 0 where id = b;                      -- undo the probe's count on B
     ok := (select backup_failed = 0 and backup_locked_until is null and sessions_valid_after = 0 from proxima_auth.users where id = d);
-    out := out || case when r::jsonb = r2::jsonb and r::jsonb = r3::jsonb and r::jsonb = r4::jsonb and r->>'reason' = 'invalid'
-                         and not (r::jsonb ? 'attempts_left') and ok
-      then 'ok unlock-generic; ' else format('FAIL unlock-generic %s|%s|%s; ', left(r::text, 18), left(r2::text, 18), left(r4::text, 18)) end;
-  exception when others then reset role; out := out || format('FAIL unlock-generic %s; ', left(sqlerrm, 60)); end;
+    out := out || case when r::jsonb = r3::jsonb and r::jsonb = '{"ok": false, "reason": "invalid"}'::jsonb
+                         and r2::jsonb = '{"ok": false, "reason": "no_backup_code"}'::jsonb
+                         and r4::jsonb = '{"ok": false, "reason": "disabled"}'::jsonb and ok
+      then 'ok unlock-accurate; ' else format('FAIL unlock-accurate %s|%s|%s|%s; ', left(r::text, 40), left(r2::text, 48), left(r3::text, 40), left(r4::text, 42)) end;
+  exception when others then reset role; out := out || format('FAIL unlock-accurate %s; ', left(sqlerrm, 60)); end;
 
   -- 7b. Exactly one bcrypt per attempt for EVERY input (review round 16 #1, the NULL-secret timing oracle): verify_admin
   --     and unlock_with_backup_code called as anon with a NULL and an empty secret on an existing name, a NULL secret
@@ -281,6 +286,12 @@ begin
     t0 := clock_timestamp(); r := verify_admin('__mu_e', null);                 el[1] := extract(epoch from clock_timestamp() - t0); bodies[1] := r::jsonb;
     t0 := clock_timestamp(); r := verify_admin('__mu_e', '');                   el[2] := extract(epoch from clock_timestamp() - t0); bodies[2] := r::jsonb;
     t0 := clock_timestamp(); r := verify_admin('__mu_e_nobody', null);          el[3] := extract(epoch from clock_timestamp() - t0); bodies[3] := r::jsonb;
+    reset role;
+    -- The NULL and the empty password each counted (2 so far): undo them so the wrong one below is a 1st failure, not the
+    -- 3rd, which locks and answers 'locked' (20261115100000), and the four bodies stay comparable.
+    n := (select login_failed from proxima_auth.users where id = e);
+    update proxima_auth.users set login_failed = 0 where id = e;
+    set local role anon;
     t0 := clock_timestamp(); r := verify_admin('__mu_e', 'wrong-password-E1');  el[4] := extract(epoch from clock_timestamp() - t0); bodies[4] := r::jsonb;
     t0 := clock_timestamp(); r := unlock_with_backup_code('__mu_e', null, null);            el[5] := extract(epoch from clock_timestamp() - t0); bodies[5] := r::jsonb;
     t0 := clock_timestamp(); r := unlock_with_backup_code('__mu_e', '', null);              el[6] := extract(epoch from clock_timestamp() - t0); bodies[6] := r::jsonb;
@@ -295,7 +306,7 @@ begin
         bad := bad || format('%s:%sms ', lbl[i], round(el[i] * 1000));
       end if;
     end loop;
-    ok := (select login_failed = 3 and login_locked_at is not null and backup_failed = 3 from proxima_auth.users where id = e);
+    ok := n = 2 and (select login_failed = 1 and login_locked_at is null and backup_failed = 3 from proxima_auth.users where id = e);
     update proxima_auth.users set login_failed = 0, login_locked_at = null, backup_failed = 0 where id = e;
     out := out || case when bad = '' and ok
       then format('ok one-bcrypt-every-input (va wrong %sms, ub wrong %sms, min %sms); ', round(el[4] * 1000), round(el[8] * 1000),
@@ -444,10 +455,12 @@ begin
   exception when others then reset role; out := out || format('FAIL dual-accept-admin %s; ', left(sqlerrm, 60)); end;
 
   -- 15. Per-IP throttle (limit lowered to 3). From a blocked IP the password is still checked: B's right password signs
-  --     in, a wrong one answers 'throttled' AND counts on B as from anywhere (main-session decision replacing review
-  --     #22's "never counts": the 3-try lock stays the guessing limit). Another IP signs B in. IPv6 is keyed by its /64.
-  --     No header, or one that does not cast to inet, is never throttled. The shared-key guard (lowered to 3 names)
-  --     drops the mode to 'observe'. Limits and mode are restored at the end.
+  --     in, a wrong one answers what it is, 'invalid' (20261115100000: the limit never decides the outcome, so it is never
+  --     answered), AND counts on B as from anywhere (main-session decision replacing review #22's "never counts": the
+  --     3-try lock stays the guessing limit). Another IP signs B in. The block itself is read from the limiter's own check
+  --     (proxima_auth._throttle(name, false), which counts nothing): IPv6 is keyed by its /64; no header, or one that does
+  --     not cast to inet, is never throttled. The shared-key guard (lowered to 3 names) drops the mode to 'observe'.
+  --     Limits and mode are restored at the end.
   begin
     update proxima_auth.auth_config set throttle_max_failures = 3;
     perform set_config('request.headers', ip_t, true);
@@ -457,34 +470,42 @@ begin
     r2 := verify_admin('__mu_b', 'wrong-password-t');
     reset role;
     select login_failed into n from proxima_auth.users where id = b;   -- the wrong one from the blocked IP counted on B
+    ok := coalesce((proxima_auth._throttle('__mu_b', false)->>'blocked')::boolean, false);   -- still ip_t: blocked
     set local role anon;
     perform set_config('request.headers', ip_w, true);
     r3 := verify_admin('__mu_b', pb);
     reset role;
-    out := out || case when (r->>'ok')::boolean and r2->>'reason' = 'throttled' and r2->>'token' is null and (r3->>'ok')::boolean and n = 1
-      then 'ok ip-throttle; ' else format('FAIL ip-throttle %s %s nB=%s; ', coalesce(r->>'reason', 'ok'), r2->>'reason', n) end;
+    out := out || case when ok and (r->>'ok')::boolean and r2::jsonb = '{"ok": false, "reason": "invalid"}'::jsonb and (r3->>'ok')::boolean and n = 1
+      then 'ok ip-throttle; ' else format('FAIL ip-throttle blocked=%s %s %s nB=%s; ', ok, coalesce(r->>'reason', 'ok'), left(r2::text, 60), n) end;
 
     set local role anon;
     perform set_config('request.headers', ip6_1, true); r := verify_admin('__mu_ghost4', 'whatever-123');
     perform set_config('request.headers', ip6_2, true); r := verify_admin('__mu_ghost5', 'whatever-123');
     perform set_config('request.headers', ip6_3, true); r := verify_admin('__mu_ghost6', 'whatever-123');
     perform set_config('request.headers', ip6_4, true); r := verify_admin('__mu_ghost7', 'whatever-123');
-    perform set_config('request.headers', ip6_o, true); r2 := verify_admin('__mu_ghost8', 'whatever-123');
     reset role;
-    out := out || case when r->>'reason' = 'throttled' and r2->>'reason' = 'invalid'
-      then 'ok ipv6-per-64; ' else format('FAIL ipv6-per-64 %s %s; ', r->>'reason', r2->>'reason') end;
+    ok := coalesce((proxima_auth._throttle('x', false)->>'blocked')::boolean, false);              -- ip6_4: the /64 the others share
+    perform set_config('request.headers', ip6_o, true);
+    ok := ok and not coalesce((proxima_auth._throttle('x', false)->>'blocked')::boolean, false);   -- another /64
+    set local role anon;
+    r2 := verify_admin('__mu_ghost8', 'whatever-123');
+    reset role;
+    out := out || case when ok and r::jsonb = '{"ok": false, "reason": "invalid"}'::jsonb and r2::jsonb = r::jsonb
+      then 'ok ipv6-per-64; ' else format('FAIL ipv6-per-64 own-blocked-other-not=%s %s %s; ', ok, left(r::text, 40), left(r2::text, 40)) end;
 
     perform set_config('request.headers', '{}', true);
     set local role anon;
     for i in 1..4 loop r := verify_admin('__mu_ghost' || i, 'whatever-123'); end loop;
     reset role;
-    out := out || case when r->>'reason' = 'invalid' then 'ok no-ip-no-throttle; ' else format('FAIL no-ip-no-throttle %s; ', r->>'reason') end;
+    ok := not coalesce((proxima_auth._throttle('x', false)->>'blocked')::boolean, false);
+    out := out || case when ok and r->>'reason' = 'invalid' then 'ok no-ip-no-throttle; ' else format('FAIL no-ip-no-throttle %s %s; ', ok, r->>'reason') end;
 
     perform set_config('request.headers', ip_bad, true);
     set local role anon;
     for i in 1..4 loop r := verify_admin('__mu_ghost' || i, 'whatever-123'); end loop;
     reset role;
-    out := out || case when r->>'reason' = 'invalid' then 'ok bad-ip-no-throttle; ' else format('FAIL bad-ip-no-throttle %s; ', r->>'reason') end;
+    ok := not coalesce((proxima_auth._throttle('x', false)->>'blocked')::boolean, false);
+    out := out || case when ok and r->>'reason' = 'invalid' then 'ok bad-ip-no-throttle; ' else format('FAIL bad-ip-no-throttle %s %s; ', ok, r->>'reason') end;
 
     update proxima_auth.auth_config set throttle_max_failures = 10, throttle_guard_names = 3;
     perform set_config('request.headers', ip_g, true);
@@ -533,13 +554,14 @@ begin
                          else format('FAIL disabled-C %s; ', left(sqlerrm, 40)) end; end;
   exception when others then out := out || format('FAIL disabled-C %s; ', left(sqlerrm, 60)); end;
 
-  -- 18. The backup pause is per account: 5 wrong codes pause A; during the pause A's right and a wrong code answer the
-  --     same bytes and nothing unlocks; B's right code still unlocks B.
+  -- 18. The backup pause is per account: 5 wrong codes pause A, and the 5th answers 'backup_locked' with retry_after 900
+  --     and paused_now (20261115100000); during the pause A's right and a wrong code answer alike, 'backup_locked' with
+  --     the seconds left (the only difference the clock can make), and nothing unlocks; B's right code still unlocks B.
   begin
     select sessions_valid_after into v_ep from proxima_auth.users where id = a;
     perform set_config('request.headers', ip_x, true);
     set local role anon;
-    for i in 1..5 loop r := unlock_with_backup_code('__mu_a2', 'not-the-code-' || i || '-000000', null); end loop;
+    for i in 1..5 loop r4 := unlock_with_backup_code('__mu_a2', 'not-the-code-' || i || '-000000', null); end loop;
     r := unlock_with_backup_code('__mu_a2', ka, null);
     r2 := unlock_with_backup_code('__mu_a2', 'not-the-code-9-000000', null);
     r3 := unlock_with_backup_code('__mu_b', kb, null);
@@ -548,8 +570,11 @@ begin
     out := out || case when ok and (r3->>'ok')::boolean
                          and (select backup_failed = 0 and backup_locked_until is null from proxima_auth.users where id = b)
       then 'ok backup-pause-A-only; ' else format('FAIL backup-pause-A-only B=%s; ', coalesce(r3->>'reason', 'ok')) end;
-    out := out || case when r::jsonb = r2::jsonb and r->>'reason' = 'invalid' and ok
-      then 'ok pause-generic; ' else format('FAIL pause-generic %s|%s; ', left(r::text, 28), left(r2::text, 28)) end;
+    out := out || case when r4::jsonb = '{"ok": false, "reason": "backup_locked", "retry_after": 900, "paused_now": true}'::jsonb
+                         and (r::jsonb - 'retry_after') = '{"ok": false, "reason": "backup_locked"}'::jsonb
+                         and (r2::jsonb - 'retry_after') = '{"ok": false, "reason": "backup_locked"}'::jsonb
+                         and (r->>'retry_after')::int between 1 and 900 and (r2->>'retry_after')::int between 1 and 900 and ok
+      then 'ok pause-says-so; ' else format('FAIL pause-says-so %s|%s|%s; ', left(r4::text, 90), left(r::text, 60), left(r2::text, 60)) end;
   exception when others then reset role; out := out || format('FAIL backup-pause-A-only %s; ', left(sqlerrm, 60)); end;
 
   -- 19. The verifier fails closed: a validly signed subject that is neither 'u:' nor 'admin:' is malformed.
