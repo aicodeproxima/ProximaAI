@@ -659,13 +659,13 @@ async function sessionRpc(fn, args = {}) {
   await initSupabase();
   if (!supabase) throw new Error("Cloud not configured");
   const token = sessionToken();
-  if (!token) { reportSessionExpired(); throw new Error("Session expired — sign in again"); }
+  if (!token) { reportSessionExpired(); throw new Error("Not signed in on this device — sign in again"); }
   const { data, error, status } = await supabase.rpc(fn, { p_session_token: token, ...args });
   if (error) {
     const refusedSession = isSessionError(error);
     if (refusedSession) {
       if (isSuperseded(token)) return sessionRpc(fn, args); // token replaced mid-flight: retry once with the new one
-      reportSessionExpired(token);
+      reportSessionExpired(token, error.message);
     }
     // What the screens need to say what happened (signinText.js changeFailedText): the HTTP status (0: no answer came
     // back, so the call may or may not have run) and whether the server refused the session.

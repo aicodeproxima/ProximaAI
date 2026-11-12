@@ -121,8 +121,10 @@ await test("the account check acts only on the session it checked (r8 #3)", () =
   assert.match(eff, /const checked = getSession\(\)\?\.token;/);
   assert.match(eff, /const step = accountCheckStep\(\{ checked, now: getSession\(\)\?\.token, answer \}\);/);
   assert.match(eff, /if \(step === "restart"\) \{ window\.location\.reload\(\); return; \}/);
-  assert.match(eff, /if \(step === "drop"\) \{ clearSession\(\); setAccountCheck\(null\); setSessionNotice\(SESSION_EXPIRED\); return; \}/);
-  assert.match(eff, /if \(step === "expired"\) \{ setAccountCheck\(null\); setSessionNotice\(SESSION_EXPIRED\); return; \}/);
+  // Accurate errors (2026-11-12): the server's 'forbidden' says no account is behind the session; a session that went
+  // away during the check says it ended (neither is known to have expired).
+  assert.match(eff, /if \(step === "drop"\) \{ clearSession\(\); setAccountCheck\(null\); setSessionNotice\(SESSION_NO_ACCOUNT\); return; \}/);
+  assert.match(eff, /if \(step === "expired"\) \{ setAccountCheck\(null\); setSessionNotice\(SESSION_ENDED\); return; \}/);
   assert.match(eff, /if \(step !== "decide"\) \{ setAccountCheck\("failed"\); return; \}/);
   const v = eff.indexOf("const verdict = browserAccountDecision("), again = eff.indexOf("if (getSession()?.token !== checked) { window.location.reload(); return; }"), refuse = eff.indexOf("refuseSession(");
   assert.ok(v > 0 && again > v && refuse > again, `re-checked after the data count, before any refusal or claim: ${v} ${again} ${refuse}`);

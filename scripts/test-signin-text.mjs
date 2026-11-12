@@ -150,6 +150,14 @@ test("a change whose call threw: a refusal in the server's words; a server error
   assert.equal(T.changeFailedText({ code: "", status: 0 }), "No answer from the server, so it's unknown whether this was saved.");
   assert.match(T.changeFailedText(null), /before anything was sent/);
 });
+test("a session that ended says why when the server said so: expired, signed out, or just ended", () => {
+  assert.equal(T.sessionEndedText("session token expired"), T.SESSION_EXPIRED);
+  assert.equal(T.sessionEndedText("session token revoked"), T.SESSION_REVOKED);
+  assert.match(T.SESSION_REVOKED, /signed out.*a password change or a backup-code unlock signs out every device/);
+  for (const why of ["invalid signature", "malformed session token", "", undefined, null]) assert.equal(T.sessionEndedText(why), T.SESSION_ENDED, String(why));
+  assert.doesNotMatch(T.SESSION_ENDED, /expired|signed out/, "no cause is claimed without the server's");
+  assert.match(T.SESSION_NO_ACCOUNT, /doesn't belong to an account/);
+});
 test("rename: rate_limited -> one-hour text; throttled; taken; others unchanged", () => {
   assert.equal(accountError({ reason: "rate_limited" }, "F"), "Too many name checks — try again in an hour");
   assert.equal(RENAME_RATE_LIMITED, "Too many name checks — try again in an hour");
@@ -212,6 +220,17 @@ test("invites: making and revoking name the real refusal", () => {
     const inv = fs.readFileSync(new URL("../src/components/InviteSection.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     assert.equal((inv.match(/catch \(err\) \{[^}]*changeFailedText\(err, \{/g) || []).length, 2, "make + revoke");
     assert.doesNotMatch(inv, /text: OFFLINE/);
+  });
+  test("wiring: a session the server refused says why (the refusal's words reach the notice); none claims a cause it lacks", () => {
+    assert.match(app, /expireSessionRef\.current = \(why\) => \{[^}]*setSessionNotice\(sessionEndedText\(why\)\);/);
+    assert.match(app, /onSessionExpired\(\(why\) => expireSessionRef\.current\?\.\(why\)\)/);
+    assert.ok(!app.includes('"Your session expired — sign in again."'), "the words live in signinText.js");
+    const ses = fs.readFileSync(new URL("../src/lib/session.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    assert.match(ses, /export function reportSessionExpired\(tokenUsed, why = ""\) \{/);
+    assert.match(ses, /expiredHandler\?\.\(why\)/);
+    assert.match(sb, /reportSessionExpired\(token, error\.message\)/);
+    const apiSrc = fs.readFileSync(new URL("../src/lib/api.js", import.meta.url), "utf8");
+    for (const [name, src] of [["api.js", apiSrc], ["supabase.js", sb]]) assert.doesNotMatch(src, /Session expired — sign in again/, name);
   });
   test("wiring: sessionRpc and joinWithInvite keep the status (and the session refusal) on what they throw", () => {
     const i = sb.indexOf("async function sessionRpc(");

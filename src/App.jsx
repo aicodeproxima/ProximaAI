@@ -18,7 +18,7 @@ import { hfModelById } from "./config/higgsfieldModels.js";
 import { hfInputProblem } from "./lib/higgsfield.js";
 import { getSetting, hasLocalData, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, advanceFormStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
-import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, USERNAME_RULE, USERNAME_HINT, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, callFailedText, changeFailedText } from "./lib/signinText.js";
+import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, USERNAME_RULE, USERNAME_HINT, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_ENDED, SESSION_NO_ACCOUNT, sessionEndedText, SIGNIN_HINT, callFailedText, changeFailedText } from "./lib/signinText.js";
 import { readBrowserAccount, browserAccountDecision, claimBrowser, browserAccountMessage, freeForNewAccount, bootSessionDecision, tokenAccountId,
   pageMustLeave, accountCheckStep, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
 import InviteSection from "./components/InviteSection.jsx";
@@ -1644,8 +1644,8 @@ export default function ProximaApp() {
       if (cancelled) return;
       const step = accountCheckStep({ checked, now: getSession()?.token, answer });
       if (step === "restart") { window.location.reload(); return; }
-      if (step === "expired") { setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
-      if (step === "drop") { clearSession(); setAccountCheck(null); setSessionNotice(SESSION_EXPIRED); return; }
+      if (step === "expired") { setAccountCheck(null); setSessionNotice(SESSION_ENDED); return; }
+      if (step === "drop") { clearSession(); setAccountCheck(null); setSessionNotice(SESSION_NO_ACCOUNT); return; }
       if (step !== "decide") { setAccountCheck("failed"); return; }
       try {
         const a = answer;
@@ -2264,15 +2264,16 @@ export default function ProximaApp() {
     taskSyncQueueRef.current = [];
   }
 
-  // Session expiry: an RPC or the proxy rejected the token, or its 12 hours ran out on this device.
+  // Session end: an RPC or the proxy rejected the token, or its 12 hours ran out on this device. why: the server's refusal
+  // words when it gave any, so the notice says expired or signed out only when that is known (accurate errors).
   const expireSessionRef = useRef(null);
-  expireSessionRef.current = () => {
+  expireSessionRef.current = (why) => {
     if (!isAuthed) return;
     signOutLocal();
-    setSessionNotice("Your session expired — sign in again.");
+    setSessionNotice(sessionEndedText(why));
   };
   useEffect(() => {
-    onSessionExpired(() => expireSessionRef.current?.());
+    onSessionExpired((why) => expireSessionRef.current?.(why));
     return () => onSessionExpired(null);
   }, []);
   useEffect(() => {

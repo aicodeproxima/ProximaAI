@@ -31,14 +31,15 @@ async function wsFetch(url, options = {}, provider = "wavespeed") {
   const token = sessionToken();
   if (!token) {
     reportSessionExpired();
-    throw { code: 401, message: "Session expired — sign in again", session: true };
+    throw { code: 401, message: "Not signed in on this device — sign in again", session: true };
   }
   const res = await fetch(url, { ...options, headers: { ...(options.headers || {}), "X-Proxima-Session": token } });
   const refusal = res.headers.get("x-proxima-auth");
   if (res.status === 401 && refusal === "session") {
     if (isSuperseded(token)) return wsFetch(url, options, provider); // refused a token replaced mid-flight: resend with the new one
+    // The proxy refused the session without saying why (expired or signed out): no cause is claimed.
     reportSessionExpired(token);
-    throw { code: 401, message: "Session expired — sign in again", session: true };
+    throw { code: 401, message: "This device's session has ended — sign in again", session: true };
   }
   if (res.status === 400 && refusal === "no-key") {
     if (provider === "kie") throw { code: 400, message: "No kie.ai key saved — add it in Settings", noKey: true, kie: true };

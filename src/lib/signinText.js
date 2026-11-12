@@ -105,8 +105,19 @@ export function callFailedText(err) {
   return NO_ANSWER;
 }
 
-// The server refused this device's session (expired, or signed out by a password change or a backup-code unlock).
-export const SESSION_ENDED = "This device's session has ended (it expired or was signed out). Sign in again.";
+// This device's session ended, and why when the server said why (its refusal's words; sessionEndedText): it expired, or
+// it was signed out (a password change or a backup-code unlock signs out every device). Without the server's reason (the
+// proxies' 401, a session gone during the page's check) no cause is claimed.
+export const SESSION_ENDED = "This device's session has ended. Sign in again.";
+export const SESSION_REVOKED = "This device was signed out: a password change or a backup-code unlock signs out every device. Sign in again.";
+// The page-load check: the server's 'forbidden' (the session's token resolves to no account).
+export const SESSION_NO_ACCOUNT = "This session doesn't belong to an account anymore. Sign in again.";
+export function sessionEndedText(why = "") {
+  const s = String(why || "");
+  if (/session token expired/i.test(s)) return SESSION_EXPIRED;
+  if (/session token revoked/i.test(s)) return SESSION_REVOKED;
+  return SESSION_ENDED;
+}
 
 // A change (rename, password, backup code, a provider key, Automatic backups, joining, an invite) whose call threw
 // (src/lib/supabase.js keeps the HTTP status and the session refusal on it). The server's own refusal (P0001, a raised

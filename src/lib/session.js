@@ -96,9 +96,11 @@ export function isSuperseded(tokenUsed) {
   const current = sessionToken();
   return !!(tokenUsed && current && current !== tokenUsed);
 }
-export function reportSessionExpired(tokenUsed) {
+// why: the server's refusal message when there is one ("session token expired", "session token revoked", ...), so the
+// notice can say why the session ended (signinText.js sessionEndedText; owner 2026-11-12: accurate errors).
+export function reportSessionExpired(tokenUsed, why = "") {
   if (isSuperseded(tokenUsed)) return;
   if (isForeign(getSession()?.token)) { leaveForForeign(); return; }   // another account's session: not this page's to clear
   clearSession();
-  try { expiredHandler?.(); } catch {}
+  try { expiredHandler?.(why); } catch {}
 }
