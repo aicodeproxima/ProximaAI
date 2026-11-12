@@ -224,6 +224,7 @@ await test("deleting a kie.ai generation queues nothing for WaveSpeed (kie.ai ha
 
 const CAT = await load("../src/config/catalog.js");
 const { MODELS } = await import("../src/config/models.js");
+const { HF_MODELS } = await import("../src/config/higgsfieldModels.js");
 await test("the picker offers kie.ai models only with a kie.ai key; lookups by id find every model", () => {
   const ids = (type, keys) => CAT.visibleModels(type, keys).map(m => m.id);
   const ws = MODELS.image.map(m => m.id), kie = C.KIE_MODELS.image.map(m => m.id);
@@ -233,7 +234,7 @@ await test("the picker offers kie.ai models only with a kie.ai key; lookups by i
   assert.deepEqual(ids("image", new Set(["kie"])), kie, "kie.ai key only: kie.ai models only");
   assert.deepEqual(ids("image", new Set(["wavespeed", "kie"])), [...ws, ...kie]);
   assert.deepEqual(ids("i23d", new Set(["kie"])), [], "a type kie.ai has nothing for");
-  for (const type of Object.keys(MODELS)) assert.equal(CAT.CATALOG[type].length, MODELS[type].length + (C.KIE_MODELS[type]?.length || 0), type);
+  for (const type of Object.keys(MODELS)) assert.equal(CAT.CATALOG[type].length, MODELS[type].length + (C.KIE_MODELS[type]?.length || 0) + (HF_MODELS[type]?.length || 0), type);
   assert.ok(CAT.CATALOG.t2v.some(m => m.id === "kie/kling-3.0/text-to-video"));
 });
 

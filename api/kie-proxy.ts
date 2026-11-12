@@ -121,7 +121,10 @@ export default async function handler(req: Request, ctx?: { waitUntil?: (p: Prom
   const lookup = await getKieKey(token!);
   if (!('key' in lookup)) {
     if (lookup.status === 'session') return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...json, 'X-Proxima-Auth': 'session' } });
-    if (lookup.status === 'missing') return new Response(JSON.stringify({ error: 'No kie.ai key saved' }), { status: 400, headers: { ...json, 'X-Proxima-Auth': 'no-key' } });
+    if (lookup.status === 'missing') return new Response(JSON.stringify({
+      error: 'NO_PROVIDER_KEY',
+      message: 'Please configure your Kie.ai API key in Settings -> Providers.',
+    }), { status: 400, headers: { ...json, 'X-Proxima-Auth': 'no-key' } });
     return new Response(JSON.stringify({ error: 'Key lookup failed — try again' }), { status: 503, headers: json });
   }
 

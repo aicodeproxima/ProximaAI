@@ -13,6 +13,8 @@
 import { pollErrorAction, isRecoverableFailure } from "./taskResume.js";
 import { isKieGeneration } from "./kie.js";
 
+export const isHiggsfieldGeneration = t => t?.api === "higgsfield" || Boolean(t?.modelId?.startsWith("hf/"));
+
 export const WS_DELETE_CHUNK = 50;               // ids per request (WaveSpeed states no maximum)
 export const RUNNING_RETRY_MS = 10 * 60 * 1000;  // a prediction still running when deleted: ask again after this
 export const MAX_RUNNING_ATTEMPTS = 6;           // ~1 h of retries for one that was running
@@ -25,8 +27,8 @@ const IN_FLIGHT = new Set(["pending", "processing"]);
 export function queueDeletes(queue, tasks, now) {
   const out = { ...(queue || {}) };
   for (const t of tasks) {
-    // A kie.ai generation: kie.ai has no delete, its copy expires there after 14 days (docs/SECOND-ACCOUNT-PLAN.md K4).
-    if (!t?.taskId || out[t.taskId] || isKieGeneration(t)) continue;
+    // A kie.ai or Higgsfield generation: handled separately from WaveSpeed.
+    if (!t?.taskId || out[t.taskId] || isKieGeneration(t) || isHiggsfieldGeneration(t)) continue;
     const running = IN_FLIGHT.has(t.status) || t.error === "Cancelled" || isRecoverableFailure(t, now);
     // tid: the generation's id, so the flush can ask whether it is still live (generations_live, review round 6).
     out[t.taskId] = { at: now, attempts: 0, next: now, running, ...(t.id ? { tid: t.id } : {}) };

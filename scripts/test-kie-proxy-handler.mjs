@@ -82,6 +82,10 @@ await test("no kie.ai key saved: 400 no-key", async () => {
   const r = await handler(req("api/v1/chat/credit", { method: "GET" }));
   assert.equal(r.status, 400);
   assert.equal(r.headers.get("x-proxima-auth"), "no-key");
+  assert.deepEqual(await r.json(), {
+    error: "NO_PROVIDER_KEY",
+    message: "Please configure your Kie.ai API key in Settings -> Providers.",
+  });
   assert.equal(calls.length, 1);
 });
 

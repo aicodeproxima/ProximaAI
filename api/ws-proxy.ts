@@ -104,11 +104,13 @@ async function verifySessionToken(token: string | null): Promise<string | null> 
   return null;
 }
 
-// ─── Per-user WaveSpeed key (service role) ──────────────────────────────────
-// get_my_wavespeed_key re-verifies the token in the database, which also applies revocation (a rename or
-// password change) that the in-memory HMAC check above cannot see. Its answer is kept apart:
+// ─── Per-account WaveSpeed key (service role) ────────────────────────────────
+// In Phase 5, provider keys live in Supabase Vault per account (proxima_auth.provider_keys).
+// get_provider_key re-verifies the session token in the database, determines caller's account
+// UUID (supporting both new u:<uuid> and legacy owner tokens), and retrieves the decrypted key.
+// Its answer is kept apart:
 //   key      — use it
-//   missing  — signed in, but no key saved yet          → 400 X-Proxima-Auth: no-key
+//   missing  — signed in, but no key configured         → 400 { error: 'NO_PROVIDER_KEY', ... }
 //   session  — the database refused the token           → 401 X-Proxima-Auth: session
 //   error    — Supabase unreachable / misconfigured      → 503 (retryable; never shown as "no key")
 type KeyLookup = { key: string } | { status: 'missing' | 'session' | 'error' };
@@ -125,19 +127,31 @@ async function getUserWaveSpeedKey(token: string): Promise<KeyLookup> {
     'Content-Type': 'application/json',
   };
   try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_my_wavespeed_key`, {
-      method: 'POST', headers, body: JSON.stringify({ p_session_token: token }),
+    let r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_provider_key`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ p_session_token: token, p_provider: 'wavespeed' }),
+      signal: AbortSignal.timeout(8000),
     });
+    if (r.status === 404) {
+      // Backwards compatibility fallback if get_provider_key is not yet present
+      r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_my_wavespeed_key`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ p_session_token: token }),
+        signal: AbortSignal.timeout(8000),
+      });
+    }
     if (r.ok) {
       const v = await r.json();
       return typeof v === 'string' && v.length >= 8 ? { key: v } : { status: 'missing' };
     }
     const body = await r.text().catch(() => '');
-    if (/session token|invalid signature|malformed/i.test(body)) return { status: 'session' };
-    console.warn('[wavespeed-v2] get_my_wavespeed_key HTTP', r.status);
+    if (/session token|invalid signature|malformed|forbidden/i.test(body)) return { status: 'session' };
+    console.warn('[wavespeed-v2] get_provider_key HTTP', r.status);
     return { status: 'error' };
   } catch (e) {
-    console.warn('[wavespeed-v2] get_my_wavespeed_key failed', e);
+    console.warn('[wavespeed-v2] get_provider_key failed', String((e as Error)?.message || e));
     return { status: 'error' };
   }
 }
@@ -233,7 +247,10 @@ export default async function handler(req: Request, ctx?: { waitUntil?: (p: Prom
       return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...json, 'X-Proxima-Auth': 'session' } });
     }
     if (lookup.status === 'missing') {
-      return new Response(JSON.stringify({ error: 'No WaveSpeed key configured' }), { status: 400, headers: { ...json, 'X-Proxima-Auth': 'no-key' } });
+      return new Response(JSON.stringify({
+        error: 'NO_PROVIDER_KEY',
+        message: 'Please configure your WaveSpeed API key in Settings -> Providers.',
+      }), { status: 400, headers: { ...json, 'X-Proxima-Auth': 'no-key' } });
     }
     return new Response(JSON.stringify({ error: 'Key lookup failed — try again' }), { status: 503, headers: json });
   }

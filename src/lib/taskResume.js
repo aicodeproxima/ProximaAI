@@ -9,6 +9,8 @@
 // although its docs say outputs expire "within 7 days".
 import { kieCost, isKieModelId, kiePollUrl } from "./kie.js";
 
+export const isHiggsfieldModelId = (id) => Boolean(id?.startsWith("hf/"));
+
 export const RESUME_WINDOW_MS = 48 * 60 * 60 * 1000; // inside the youngest purge measured (54 h)
 // A lost submit (no prediction id) is looked up in WaveSpeed's history for a prediction created between LOOKUP_SKEW_MS
 // before its start (device vs WaveSpeed clock) and ORPHAN_GRACE_MS after it (a slow submit); it fails only when a
@@ -32,8 +34,8 @@ export const failTask = (task, now, error) => ({ ...task, status: "failed", erro
 // image "Timeout" declared before one last poll. WaveSpeed had already accepted these tasks, so while it keeps the
 // result they can be fetched; errors WaveSpeed itself returned (flagged content, failed generation) stay final.
 const NETWORK_FAILURE = /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?|Network request failed|Poll error( \(resumed\))?|Timeout( \(resumed\))?)$/;
-// A kie.ai task's poll goes through the kie.ai proxy (a row pulled from another device carries no pollUrl).
-export const pollUrlFor = (t) => t.pollUrl || (t.taskId ? (isKieModelId(t.modelId) ? kiePollUrl(t.taskId) : `/api/v3/predictions/${t.taskId}/result`) : null);
+// A kie.ai or Higgsfield task's poll goes through its respective proxy.
+export const pollUrlFor = (t) => t.pollUrl || (t.taskId ? (isHiggsfieldModelId(t.modelId) ? `/api/higgsfield/requests/${t.taskId}/status` : (isKieModelId(t.modelId) ? kiePollUrl(t.taskId) : `/api/v3/predictions/${t.taskId}/result`)) : null);
 export function isRecoverableFailure(t, now) {
   return t?.status === "failed" && !!t.taskId && NETWORK_FAILURE.test(t.error || "") && now - (t.startTime || 0) <= RESUME_WINDOW_MS;
 }
@@ -64,7 +66,7 @@ export function planResume(rows, now) {
 // this tab (`submitting`) is not an orphan yet.
 export function isOrphan(t, submitting, now) {
   return t?.status === "pending" && !t.taskId && !submitting.has(t.id) && now - (t.startTime || 0) <= RESUME_WINDOW_MS
-    && !isKieModelId(t.modelId);   // kie.ai has no task history to look a lost submit up in: lostKieSubmits instead
+    && !isKieModelId(t.modelId) && !isHiggsfieldModelId(t.modelId);   // kie.ai and Higgsfield have no task history to look a lost submit up in
 }
 
 // A kie.ai submit whose answer never came (cut off, or the tab died while it was on the wire): kie.ai may have run it,
@@ -211,7 +213,7 @@ export function noteClaimants(map, tasks, now, { deleted = false } = {}) {
   const live = rememberClaimants(map, [], now);
   const waiting = [];
   for (const t of tasks || []) {
-    if (!t?.id || t.taskId || isKieModelId(t.modelId)) continue;   // claimants pair with WaveSpeed's history only
+    if (!t?.id || t.taskId || isKieModelId(t.modelId) || isHiggsfieldModelId(t.modelId)) continue;   // claimants pair with WaveSpeed's history only
     if (t.status === "pending") waiting.push(t);
     else if (deleted && live[t.id]) live[t.id] = { ...live[t.id], deleted: true, at: now };
     // A cancel whose claimant expired (the app was closed past the hour): deleting it still deletes its prediction

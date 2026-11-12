@@ -7,6 +7,10 @@
     {
       "source": "/api/kie/:path*",
       "destination": "/api/kie-proxy?p=:path*"
+    },
+    {
+      "source": "/api/higgsfield/:path*",
+      "destination": "/api/higgsfield-proxy?p=:path*"
     }
   ]
 }

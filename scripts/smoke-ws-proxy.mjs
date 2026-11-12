@@ -13,7 +13,7 @@ const exp = Math.floor(Date.now() / 1000) + 120;
 const token = `admin:test.${exp}.` + createHmac("sha256", signKey).update(`admin:test.${exp}`).digest("hex");
 const up = [];
 globalThis.fetch = async (url, init = {}) => {
-  if (String(url).includes("/rpc/get_my_wavespeed_key")) return new Response(JSON.stringify("ws-test-key-123456"), { status: 200 });
+  if (String(url).includes("/rpc/get_provider_key") || String(url).includes("/rpc/get_my_wavespeed_key")) return new Response(JSON.stringify("ws-test-key-123456"), { status: 200 });
   up.push({ url: String(url), method: init.method, body: init.body ? new TextDecoder().decode(init.body) : null });
   return new Response(JSON.stringify({ data: { id: "p1" } }), { status: 200, headers: { "content-type": "application/json" } });
 };

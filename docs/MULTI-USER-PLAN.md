@@ -270,6 +270,18 @@ Each phase ships on its own, keeps the owner's account working exactly as now, a
   - a live two-account probe over REST, Storage and the topic (counts only).
 
 **P5 — Members (server, client and Vercel). Size L.**
+- Progress (2026-11-12):
+  - `api/ws-proxy.ts` and `api/kie-proxy.ts` updated for per-account Vault provider key resolution via `get_provider_key(p_session_token, p_provider)`.
+  - Backwards-compatible session token decoding: supports member `u:<uuid>` tokens and legacy owner `admin:<name>` tokens with fallback.
+  - Standardized missing key error shape: HTTP 400 with `{ error: "NO_PROVIDER_KEY", message: "..." }` and `X-Proxima-Auth: no-key`.
+  - Added unit test suite `scripts/test-ws-proxy-handler.mjs`.
+  - Higgsfield Genjutsu Integration:
+    - Added database migration `supabase/migrations/20261115000000_provider_keys_higgsfield.sql` expanding `provider_keys` check constraint to support `higgsfield` keys in Supabase Vault.
+    - Verified via transaction test `scripts/test-provider-keys-hf.sql` (4/4 passed).
+    - Built Edge proxy `api/higgsfield-proxy.ts` and validator `src/lib/higgsfieldProxy.js` with `Authorization: Key <id>:<secret>` header formatting, whitelisted endpoints (Motion Transfer, Object Swap, Restyle, presets, status, delete), and tests in `scripts/test-hf-proxy-handler.mjs` (8/8 passed).
+    - Created `src/config/higgsfieldModels.js` and `src/components/GenjutsuStudio.jsx` for dedicated V→V studio workflow.
+    - Updated `src/lib/taskResume.js` and `src/lib/wsDelete.js` to isolate Higgsfield tasks and polls.
+    - All 69 automated test suites in `npm test` pass (0 failures). Vite build passes cleanly in 1.87s.
 - Invite and `/join?code=` (the code is removed from the URL after use), then:
   - the member sets an account name and password, and gets a backup code shown once;
   - onboarding asks for the WaveSpeed key (validated against its balance endpoint) and, optionally, the webhook secret.
