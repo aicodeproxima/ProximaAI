@@ -33,7 +33,7 @@ import useTheme from "./lib/useTheme.js";
 import BackgroundLayer from "./lib/BackgroundLayer.jsx";
 import { planTaskSync, planLogSync, applyCloudUpdate, inputBackfill, historyRemovals, tombstonedItems } from "./lib/syncReconcile.js";
 import { batchLogItems, finishLogs, isOpenLog, sameLogContent, takeFinishedFromCloud, purgeLogsForDeleted, mergeLogs, restoredVersions, historyOnlyGenerations, restoreStrippedLogs } from "./lib/batchLog.js";
-import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, lostKieSubmits, KIE_LOST_ERROR, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
+import { mergeLoadedTasks, applyPoll, settlePoll, retryTask, nextPollDelay, pollErrorAction, planRepoll, isOrphan, orphanWindows, planOrphans, lostKieSubmits, KIE_LOST_ERROR, claimantLookupNeeded, planClaimOutcomes, lookupStale, unambiguousDeletes, submitMayHaveLanded, isInFlight, keyStatusAfter, rejectedKeyText, ORPHAN_GRACE_MS, LOOKUP_SKEW_MS, failTask, EXPIRED_ERROR, RESUME_WINDOW_MS } from "./lib/taskResume.js";
 import { MODEL_FAVORITES_SETTING, createModelFavoritesSetting, emptyModelFavorites, getCategoryFavoriteIds, readModelFavoritesSetting, toggleModelFavorite as toggleFavoriteInMap } from "./lib/modelFavorites.js";
 import { liveElapsedMs, progressPercent } from "./lib/taskTime.js";
 
@@ -3165,6 +3165,8 @@ export default function ProximaApp() {
           if (ks) setKeyStatus(ks);
           // kie.ai rejected its key: shown in Settings; a working key saved there restarts this poll (S3 verification #3).
           if (e?.kie && (e.code === 401 || e.code === 403)) setKieKeyStatus("invalid");
+          // Higgsfield likewise: its own card shows the rejection (never the WaveSpeed one: keyStatusAfter).
+          if (e?.higgsfield && (e.code === 401 || e.code === 403)) setHfKeyStatus("invalid");
         }
         else if (action === "retry") schedule(wait() * 2 + Math.random() * 2000);
         else finish(t => ({ ...t, status: "failed", error: e.message || (resumed ? "Poll error (resumed)" : "Poll error"), endTime: Date.now() }));
@@ -4133,7 +4135,7 @@ export default function ProximaApp() {
           const ks = keyStatusAfter(e);
           if (ks) setKeyStatus(ks);
           let errMsg = e.message || "Submit failed";
-          if (e.code === 401 && !e.session) errMsg = e.kie ? "kie.ai rejected the saved key — update it in Settings" : "WaveSpeed rejected the saved API key — update it in Settings";
+          if (e.code === 401 && !e.session) errMsg = rejectedKeyText(e);
           if (e.code === 402) errMsg = "Insufficient balance";
           if (e.code === 429) errMsg = "Rate limited — try fewer models";
           setTasks(prev => prev.map(t => t.id === task.id ? {
@@ -4254,7 +4256,7 @@ export default function ProximaApp() {
         const ks = keyStatusAfter(e);
         if (ks) setKeyStatus(ks);
         let errMsg = e.message || "Regenerate failed";
-        if (e.code === 401 && !e.session) errMsg = e.kie ? "kie.ai rejected the saved key — update it in Settings" : "WaveSpeed rejected the saved API key — update it in Settings";
+        if (e.code === 401 && !e.session) errMsg = rejectedKeyText(e);
         if (e.code === 402) errMsg = "Insufficient balance";
         setTasks(prev => prev.map(t => t.id === newTask.id ? {
           ...t, status: "failed", error: errMsg, endTime: Date.now()

@@ -322,10 +322,19 @@ export function pollErrorAction(e) {
 }
 // The key status a failed WaveSpeed call implies: "missing" (none saved), "invalid" (WaveSpeed rejected it), or null.
 export function keyStatusAfter(e) {
-  if (e?.kie) return null;   // a kie.ai refusal says nothing about the WaveSpeed key (src/lib/kie.js)
+  // A kie.ai or Higgsfield refusal says nothing about the WaveSpeed key (src/lib/kie.js, src/lib/higgsfield.js): before the
+  // accurate-errors audit (2026-11-12) a Higgsfield 401 or no-key marked the WaveSpeed key rejected or missing.
+  if (e?.kie || e?.higgsfield) return null;
   if (e?.noKey) return "missing";
   if (e?.session || !isHttp(e)) return null;
   return e.code === 401 || e.code === 403 ? "invalid" : null;
+}
+
+// A call the provider itself refused with 401 (not the session: e.session): whose key it was, in words.
+export function rejectedKeyText(e) {
+  if (e?.higgsfield) return "Higgsfield rejected the saved key — update it in Settings";
+  if (e?.kie) return "kie.ai rejected the saved key — update it in Settings";
+  return "WaveSpeed rejected the saved API key — update it in Settings";
 }
 
 // How often to poll. There is no client-side give-up: a task with a prediction id ends only on WaveSpeed's answer or

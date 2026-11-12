@@ -46,5 +46,20 @@ test("a key removal says Removed only when a key was there; nothing saved says s
   }
 });
 
+const R = await import("../src/lib/taskResume.js");
+test("a Higgsfield refusal names Higgsfield and never changes the WaveSpeed key's status", () => {
+  assert.equal(R.keyStatusAfter({ code: 401, message: "bad key", higgsfield: true }), null);
+  assert.equal(R.keyStatusAfter({ code: 403, higgsfield: true }), null);
+  assert.equal(R.keyStatusAfter({ code: 400, message: "No Higgsfield key saved — add it in Settings", noKey: true, higgsfield: true }), null);
+  assert.equal(R.keyStatusAfter({ code: 401 }), "invalid", "WaveSpeed's own refusal still counts");
+  assert.equal(R.keyStatusAfter({ code: 400, noKey: true }), "missing", "WaveSpeed's own no-key still counts");
+  assert.equal(R.rejectedKeyText({ code: 401, higgsfield: true }), "Higgsfield rejected the saved key — update it in Settings");
+  assert.equal(R.rejectedKeyText({ code: 401, kie: true }), "kie.ai rejected the saved key — update it in Settings");
+  assert.equal(R.rejectedKeyText({ code: 401 }), "WaveSpeed rejected the saved API key — update it in Settings");
+  assert.equal((app.match(/if \(e\.code === 401 && !e\.session\) errMsg = rejectedKeyText\(e\);/g) || []).length, 2, "submit + regenerate");
+  assert.doesNotMatch(app, /errMsg = e\.kie \?/, "no two-provider ternary left");
+  assert.match(app, /if \(e\?\.higgsfield && \(e\.code === 401 \|\| e\.code === 403\)\) setHfKeyStatus\("invalid"\);/, "the Higgsfield card shows it");
+});
+
 console.log(`${n}/${n + failed} passed`);
 process.exit(failed ? 1 : 0);
