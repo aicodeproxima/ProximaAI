@@ -133,6 +133,23 @@ test("a call that threw: a server error didn't count, a gateway problem and no a
   for (const s of [SERVER_PROBLEM, NO_ANSWER, EMPTY_ANSWER]) assert.doesNotMatch(s, /count/, s);
   assert.doesNotMatch(NO_ANSWER, /can't reach/i);   // the answer may have been lost after the server got the try
 });
+test("a change whose call threw: a refusal in the server's words; a server error changed nothing; a lost answer is unknown", () => {
+  const w = { saved: "your password changed", nothing: "your password did not change", unsure: "If it changed, the new one works." };
+  assert.equal(T.changeFailedText({ code: "P0001", message: "That key does not look right (8 to 512 characters, no spaces).", status: 400 }, w),
+    "That key does not look right (8 to 512 characters, no spaces).");                              // the server's refusal
+  assert.equal(T.changeFailedText({ code: "P0001", message: "forbidden", status: 400 }, w), T.SESSION_INVALID);
+  assert.equal(T.changeFailedText({ code: "P0001", message: "session token revoked", status: 400, session: true }, w), T.SESSION_ENDED);
+  assert.match(T.SESSION_ENDED, /sign in again/i);
+  assert.equal(T.changeFailedText({ code: "57014", message: "canceling statement due to statement timeout", status: 500 }, w),
+    "The server hit an error (canceling statement due to statement timeout), so your password did not change. Try again in a moment.");
+  assert.equal(T.changeFailedText({ code: "", status: 502 }, w),
+    "The server had a problem and didn't answer properly, so it's unknown whether your password changed. If it changed, the new one works.");
+  assert.equal(T.changeFailedText({ code: "", status: 0 }, w),
+    "No answer from the server, so it's unknown whether your password changed. If it changed, the new one works.");
+  assert.equal(T.changeFailedText(new Error("Session expired — sign in again"), w), "Session expired — sign in again");   // raised here, no call
+  assert.equal(T.changeFailedText({ code: "", status: 0 }), "No answer from the server, so it's unknown whether this was saved.");
+  assert.match(T.changeFailedText(null), /before anything was sent/);
+});
 test("rename: rate_limited -> one-hour text; throttled; taken; others unchanged", () => {
   assert.equal(accountError({ reason: "rate_limited" }, "F"), "Too many name checks — try again in an hour");
   assert.equal(RENAME_RATE_LIMITED, "Too many name checks — try again in an hour");
@@ -176,6 +193,36 @@ test("invites: making and revoking name the real refusal", () => {
   test("wiring: App.jsx has no local copies of the answer texts", () => {
     assert.ok(!/function (backupCodeError|accountError|signInError|callFailedText)\b/.test(app));
     assert.ok(!/tries? left|attempts? left/.test(app.replace(/\/\/.*$/gm, "")));
+  });
+  test("wiring: every change whose call can throw says what is known (changeFailedText), never a fixed failure", () => {
+    const sites = [["submitNewUsername", "await renameMyAccount("], ["submitNewPassword", "await changeMyPassword("],
+      ["submitBackupCode", "await setBackupCode("], ["WaveSpeed key", "await saveWavespeedKey("], ["kie.ai key", 'await saveProviderKey("kie"'],
+      ["kie.ai remove", 'await clearProviderKey("kie")'], ["Higgsfield key", 'await saveProviderKey("higgsfield"'],
+      ["Higgsfield remove", 'await clearProviderKey("higgsfield")'], ["Automatic backups", "await setAutoBackups(next)"], ["handleJoin", "await joinWithInvite("]];
+    for (const [name, call] of sites) {
+      const i = app.indexOf(call);
+      assert.ok(i > 0, name);
+      const k = app.indexOf("catch (", i);   // this call's own catch: the first after it (a neighbour's must not count)
+      assert.ok(k > i, name);
+      assert.match(app.slice(k, k + 500), /^catch \((err|e)\) \{[^}]*changeFailedText\((err|e), \{/, name);
+    }
+    for (const bad of ['err.message || "Failed to save. Try again."', '"Could not save the key"', '"Could not remove the key"',
+      "Couldn't change Automatic backups: ", "`${OFFLINE} ${JOIN_MAYBE_CREATED}`"]) assert.ok(!app.includes(bad), bad);
+    assert.match(app, /changeFailedText\(e, \{[^}]*\}\)\);\s*readAutoBackups\(\);/, "a lost switch answer re-reads the server's state");
+    const inv = fs.readFileSync(new URL("../src/components/InviteSection.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    assert.equal((inv.match(/catch \(err\) \{[^}]*changeFailedText\(err, \{/g) || []).length, 2, "make + revoke");
+    assert.doesNotMatch(inv, /text: OFFLINE/);
+  });
+  test("wiring: sessionRpc and joinWithInvite keep the status (and the session refusal) on what they throw", () => {
+    const i = sb.indexOf("async function sessionRpc(");
+    const body = sb.slice(i, sb.indexOf("\n}\n", i));
+    assert.match(body, /const \{ data, error, status \} = await supabase\.rpc\(/);
+    assert.match(body, /error\.status = Number\(status\) \|\| 0;/);
+    assert.match(body, /error\.session = true/);
+    const j = sb.indexOf("export async function joinWithInvite(");
+    const jb = sb.slice(j, sb.indexOf("\n}\n", j));
+    assert.match(jb, /throw rpcError\(error, status\);/);
+    assert.match(jb, /return data \|\| \{ ok: false, reason: "no_answer" \};/);
   });
   test("wiring: no account answer falls back to a catch-all text; the revoke answer goes through revokeInviteError", () => {
     assert.doesNotMatch(app, /accountError\(r, /, "accountError takes the answer only");

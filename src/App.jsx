@@ -18,7 +18,7 @@ import { hfModelById } from "./config/higgsfieldModels.js";
 import { hfInputProblem } from "./lib/higgsfield.js";
 import { getSetting, hasLocalData, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, advanceFormStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
-import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, USERNAME_RULE, USERNAME_HINT, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, callFailedText, OFFLINE } from "./lib/signinText.js";
+import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, USERNAME_RULE, USERNAME_HINT, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, callFailedText, changeFailedText } from "./lib/signinText.js";
 import { readBrowserAccount, browserAccountDecision, claimBrowser, browserAccountMessage, freeForNewAccount, bootSessionDecision, tokenAccountId,
   pageMustLeave, accountCheckStep, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
 import InviteSection from "./components/InviteSection.jsx";
@@ -280,9 +280,10 @@ function LoginScreen({ onSignedIn, notice = "", refusal = "", joinLink = null })
       rememberJoinedNote(r.username);
       setPassword(""); setConfirmPassword(""); setInviteCode(""); setSavedCode(false);
       setJoined({ backupCode: r.backup_code, claimed, session: { token: r.token, expires_at: r.expires_at, username: r.username } });
-    } catch {
-      setJoinNetFailed(true);
-      setError(`${OFFLINE} ${JOIN_MAYBE_CREATED}`);
+    } catch (err) {
+      // A server error (a code) rolled the join back. No answer, or a gateway's, may hide a made account (r6 #7).
+      if (!err?.code) setJoinNetFailed(true);
+      setError(changeFailedText(err, { saved: "your account was made", nothing: "no account was made and the invite wasn't used", unsure: JOIN_MAYBE_CREATED }));
     } finally {
       setLoading(false);
     }
@@ -723,7 +724,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
       setStep("done");
       onSaved?.("Username changed — reloading");
       setTimeout(() => window.location.reload(), 1500);
-    } catch (err) { setError(err.message || "Failed to save. Try again."); }
+    } catch (err) { setError(changeFailedText(err, { saved: "your name changed", nothing: "your name did not change", unsure: "Close Account and open it again to see the name you have now." })); }
     finally { setBusy(false); setCurrentPassword(""); }
   }
 
@@ -741,7 +742,11 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
       setNewPassword(""); setConfirmPassword("");
       setStep("done");
       onSaved?.("Password changed — your other devices were signed out");
-    } catch (err) { setError(err.message || "Failed to save. Try again."); }
+    } catch (err) {
+      // A change that went through also signs this device out (its new token was in the lost answer), so the next sign-in
+      // needs the new password: say so, or the old one gets typed and counts toward the lock.
+      setError(changeFailedText(err, { saved: "your password changed", nothing: "your password did not change", unsure: "If it changed, the new password is the one that works, and this device will soon ask you to sign in again." }));
+    }
     finally { setBusy(false); setCurrentPassword(""); }
   }
 
@@ -759,7 +764,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
       setCreds(c => ({ ...c, has_backup_code: true }));
       setStep("done");
       onSaved?.("Backup code saved — keep your written copy safe");
-    } catch (err) { setError(err.message || "Failed to save. Try again."); }
+    } catch (err) { setError(changeFailedText(err, { saved: "the new backup code was saved", nothing: "your backup code did not change", unsure: "Save it again to be sure: saving the same code twice is harmless." })); }
     finally { setBusy(false); setCurrentPassword(""); }
   }
 
@@ -5887,7 +5892,7 @@ export default function ProximaApp() {
                         else if (r.keyStatus === "invalid") setTestStatus({ ok: false, msg: `${saved}WaveSpeed rejected this key. Check it and save again.` });
                         else setTestStatus({ ok: false, msg: `${saved}${r.error || "Could not reach WaveSpeed."}` });
                       } catch (err) {
-                        setTestStatus({ ok: false, msg: err.message || "Could not save the key" });
+                        setTestStatus({ ok: false, msg: changeFailedText(err, { saved: "the key was saved", nothing: "the key was not saved", unsure: "Tap the button again: saving the same key twice is harmless." }) });
                       }
                     }}>
                     {testStatus === "testing" ? "Checking..." : keyInput.trim() ? "Save & Test Key" : "Test Connection"}
@@ -5936,7 +5941,7 @@ export default function ProximaApp() {
                           else if (r.keyStatus === "invalid") setKieTestStatus({ ok: false, msg: `${saved}kie.ai rejected this key. Check it and save again.` });
                           else setKieTestStatus({ ok: false, msg: `${saved}${r.error || "Could not reach kie.ai."}` });
                         } catch (err) {
-                          setKieTestStatus({ ok: false, msg: err.message || "Could not save the key" });
+                          setKieTestStatus({ ok: false, msg: changeFailedText(err, { saved: "the key was saved", nothing: "the key was not saved", unsure: "Tap the button again: saving the same key twice is harmless." }) });
                         }
                       }}>
                       {kieTestStatus === "testing" ? "Checking..." : kieKeyInput.trim() ? "Save & Test Key" : "Test Connection"}
@@ -5951,7 +5956,7 @@ export default function ProximaApp() {
                             await refreshProviderKeys();
                             setKieTestStatus({ ok: true, msg: "Removed." });
                           } catch (err) {
-                            setKieTestStatus({ ok: false, msg: err.message || "Could not remove the key" });
+                            setKieTestStatus({ ok: false, msg: changeFailedText(err, { saved: "the key was removed", nothing: "the key was not removed", unsure: "Tap Remove again: removing twice is harmless." }) });
                           }
                         }}>
                         Remove Key
@@ -6008,7 +6013,7 @@ export default function ProximaApp() {
                           else if (r.keyStatus === "invalid") setHfTestStatus({ ok: false, msg: `${saved}Higgsfield rejected this key. Check key ID and secret.` });
                           else setHfTestStatus({ ok: false, msg: `${saved}${r.error || "Could not reach Higgsfield."}` });
                         } catch (err) {
-                          setHfTestStatus({ ok: false, msg: err.message || "Could not save the key" });
+                          setHfTestStatus({ ok: false, msg: changeFailedText(err, { saved: "the key was saved", nothing: "the key was not saved", unsure: "Tap the button again: saving the same key twice is harmless." }) });
                         }
                       }}>
                       {hfTestStatus === "testing" ? "Checking..." : hfKeyInput.trim() ? "Save & Test Key" : "Test Connection"}
@@ -6023,7 +6028,7 @@ export default function ProximaApp() {
                             await refreshProviderKeys();
                             setHfTestStatus({ ok: true, msg: "Removed." });
                           } catch (err) {
-                            setHfTestStatus({ ok: false, msg: err.message || "Could not remove the key" });
+                            setHfTestStatus({ ok: false, msg: changeFailedText(err, { saved: "the key was removed", nothing: "the key was not removed", unsure: "Tap Remove again: removing twice is harmless." }) });
                           }
                         }}>
                         Remove Key
@@ -6793,7 +6798,9 @@ export default function ProximaApp() {
                           setAutoBackupsState(v);
                           setAccountToast(v ? "Automatic backups on" : "Automatic backups off — deletes are now final, and deleted items are being removed from your backups");
                         } catch (e) {
-                          setAccountToast("Couldn't change Automatic backups: " + (e?.message || "unknown error"));
+                          // A lost answer leaves the switch's state unknown: say so, and show what the server has.
+                          setAccountToast(changeFailedText(e, { saved: "Automatic backups changed", nothing: "Automatic backups did not change", unsure: "The switch now shows what the server has." }));
+                          readAutoBackups();
                         }
                         setTimeout(() => setAccountToast(""), 4000);
                       }}

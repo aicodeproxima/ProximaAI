@@ -660,12 +660,16 @@ async function sessionRpc(fn, args = {}) {
   if (!supabase) throw new Error("Cloud not configured");
   const token = sessionToken();
   if (!token) { reportSessionExpired(); throw new Error("Session expired — sign in again"); }
-  const { data, error } = await supabase.rpc(fn, { p_session_token: token, ...args });
+  const { data, error, status } = await supabase.rpc(fn, { p_session_token: token, ...args });
   if (error) {
-    if (isSessionError(error)) {
+    const refusedSession = isSessionError(error);
+    if (refusedSession) {
       if (isSuperseded(token)) return sessionRpc(fn, args); // token replaced mid-flight: retry once with the new one
       reportSessionExpired(token);
     }
+    // What the screens need to say what happened (signinText.js changeFailedText): the HTTP status (0: no answer came
+    // back, so the call may or may not have run) and whether the server refused the session.
+    try { error.status = Number(status) || 0; if (refusedSession) error.session = true; } catch {}
     throw error;
   }
   return data;
@@ -888,9 +892,9 @@ const notOnServer = (err) => err?.code === "PGRST202" || /could not find the fun
 export async function joinWithInvite(code, username, password) {
   await initSupabase();
   if (!supabase) throw new Error("Cloud not configured");
-  const { data, error } = await supabase.rpc("join_with_invite", { p_code: code, p_username: username, p_password: password });
-  if (error) { if (notOnServer(error)) return { ok: false, reason: "closed" }; throw error; }
-  return data || { ok: false, reason: "invalid" };
+  const { data, error, status } = await supabase.rpc("join_with_invite", { p_code: code, p_username: username, p_password: password });
+  if (error) { if (notOnServer(error)) return { ok: false, reason: "closed" }; throw rpcError(error, status); }
+  return data || { ok: false, reason: "no_answer" };
 }
 
 // The owner (password re-checked): { ok, code, expires_at } once, or { ok:false, reason }.

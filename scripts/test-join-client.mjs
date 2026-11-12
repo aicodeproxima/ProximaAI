@@ -174,8 +174,10 @@ await test("join: the exact free-browser guard first; the claim checked; the cod
   assert.match(app, /onChange=\{e => setSavedCode\(e\.target\.checked\)\}/);
   assert.match(app, /disabled=\{!savedCode \|\| !joined\.claimed\}/);
   assert.match(app, /onClick=\{\(\) => \{ const s = joined\.session; forgetJoinedNote\(\); setJoined\(null\); clearSecrets\(\); onSignedIn\(s\); \}\}/);
-  // r6 #7: a lost answer may hide a made account: say so then, and on a dead-code answer after it
-  assert.match(h, /\} catch \{\s*setJoinNetFailed\(true\);\s*setError\(`\$\{OFFLINE\} \$\{JOIN_MAYBE_CREATED\}`\);/);
+  // r6 #7: a lost answer may hide a made account: say so then, and on a dead-code answer after it. Since the
+  // accurate-errors ruling (2026-11-12) a server error (a code) says no account was made, and only an unknown outcome
+  // keeps the note (changeFailedText).
+  assert.match(h, /\} catch \(err\) \{[^}]*if \(!err\?\.code\) setJoinNetFailed\(true\);[^}]*changeFailedText\(err, \{[^}]*unsure: JOIN_MAYBE_CREATED \}\)\);/);
   assert.match(h, /setError\(joinNetFailed && r\?\.reason === "invalid" \? `\$\{joinError\(r\)\} \$\{JOIN_MAYBE_CREATED\}` : joinError\(r\)\);/);
   assert.match(h, /rememberJoinedNote\(r\.username\);/);
 });

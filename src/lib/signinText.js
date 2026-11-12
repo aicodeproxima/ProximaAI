@@ -105,6 +105,25 @@ export function callFailedText(err) {
   return NO_ANSWER;
 }
 
+// The server refused this device's session (expired, or signed out by a password change or a backup-code unlock).
+export const SESSION_ENDED = "This device's session has ended (it expired or was signed out). Sign in again.";
+
+// A change (rename, password, backup code, a provider key, Automatic backups, joining, an invite) whose call threw
+// (src/lib/supabase.js keeps the HTTP status and the session refusal on it). The server's own refusal (P0001, a raised
+// message) reads in its words; another server error (a code) rolled the change back. A gateway's answer (a status without
+// a code) or none at all (status 0) leaves it unknown whether the change was saved: that is said, with `unsure` (how to
+// tell, or what holds if it was). An error raised in the page before any call (no status) keeps its own words.
+// saved: "your password changed"; nothing: "your password did not change" (owner 2026-11-12: accurate errors).
+export function changeFailedText(err, { saved = "this was saved", nothing = "nothing was changed", unsure = "" } = {}) {
+  if (err?.session) return SESSION_ENDED;
+  if (err?.code === "P0001" && err.message) return err.message === "forbidden" ? SESSION_INVALID : err.message;
+  if (err?.code) return `The server hit an error${err.message ? ` (${err.message})` : ""}, so ${nothing}. Try again in a moment.`;
+  const tail = unsure ? ` ${unsure}` : "";
+  if (Number(err?.status) > 0) return `The server had a problem and didn't answer properly, so it's unknown whether ${saved}.${tail}`;
+  if (err?.status === 0) return `No answer from the server, so it's unknown whether ${saved}.${tail}`;
+  return err?.message || "Something went wrong in this page before anything was sent. Reload the page and try again.";
+}
+
 // A name an account may take: join (20261026500000) and, since 20261026200000, rename refuse anything else.
 export const USERNAME_RULE = /^[A-Za-z0-9_-]{2,64}$/;
 export const USERNAME_HINT = "Choose a name of 2 to 64 letters, digits, - or _ (no spaces or other characters).";
