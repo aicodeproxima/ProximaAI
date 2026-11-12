@@ -978,7 +978,7 @@ export async function saveProviderKey(provider, key) {
 }
 export async function clearProviderKey(provider) {
   const r = await sessionRpc("clear_my_provider_key", { p_provider: provider });
-  return !!r?.ok;
+  return r?.ok ? { removed: !!r.removed } : null;   // removed: false when no key was saved; null: the answer said nothing
 }
 
 // ─── Email OTP via Supabase Auth ───

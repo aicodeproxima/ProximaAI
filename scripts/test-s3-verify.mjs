@@ -94,7 +94,8 @@ await test("#2: kie.ai's maintenance and limit codes (455, 433) retry a poll; no
 await test("#3 wiring: a kie.ai key kie.ai rejects shows in Settings, and saving a key restarts the stopped polls", () => {
   assert.match(src, /if \(e\?\.kie && \(e\.code === 401 \|\| e\.code === 403\)\) setKieKeyStatus\("invalid"\);/);
   assert.match(src, /setKieKeyStatus\("ok"\);\s*pollUntracked\(\);/);
-  assert.match(src, /if \(typed\) \{ await saveWavespeedKey\(typed\); setKeyInput\(""\); refreshProviderKeys\(\); pollUntracked\(\); \}/);
+  // Since the accurate-errors audit (2026-11-12) the save's answer is checked first; a saved key still restarts the polls.
+  assert.match(src, /if \(typed\) \{ if \(!\(await saveWavespeedKey\(typed\)\)\) \{ setTestStatus\(\{ ok: false, msg: KEY_SAVE_UNCONFIRMED \}\); return; \} setKeyInput\(""\); refreshProviderKeys\(\); pollUntracked\(\); \}/);
 });
 
 // Cloud publications (read by other devices, ordered by the server: 20261025900000) are stamped and judged on the

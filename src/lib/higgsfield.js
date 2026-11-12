@@ -77,6 +77,14 @@ export function hfPresetList(data) {
     .map(p => ({ id: String(p.id), name: p.name ? String(p.name) : String(p.id) }));
 }
 
+// The connection check's verdict on an answer that wasn't OK (api/higgsfield-proxy.ts passes Higgsfield's status
+// through). Only Higgsfield's own 401/403 rejects the key: the proxy's session and no-key refusals are handled in wsFetch
+// before this, and anything else (another Higgsfield error, the proxy's 502 upstream or 503 key lookup) says nothing
+// about the key (owner 2026-11-12: accurate errors).
+export function hfCheckKeyStatus(httpStatus) {
+  return httpStatus === 401 || httpStatus === 403 ? "invalid" : "unknown";
+}
+
 export function higgsfieldPollResult(data) {
   const st = data?.status;
   let status = "processing";

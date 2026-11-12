@@ -46,6 +46,9 @@ function queueArchivedFileDeletes(paths) {
 // Review round 24 #2: what a delete says when it cannot hold its files and WaveSpeed deletes (stagePurge: no room in
 // localStorage). It stops before any server call; nothing was deleted.
 const STORAGE_FULL_TOAST = "This device's storage is full — nothing was deleted. Free some space (or let pending uploads finish) and try again.";
+// A key save or removal the server answered without an ok (an empty answer): its outcome is unknown (accurate errors).
+const KEY_SAVE_UNCONFIRMED = "The server's answer was empty, so it's unknown whether the key was saved. Tap the button again: saving the same key twice is harmless.";
+const KEY_REMOVE_UNCONFIRMED = "The server's answer was empty, so it's unknown whether the key was removed. Tap Remove again: removing twice is harmless.";
 // Task B12b (review round 25 #3): the reconcile pass reads only the newest History entries (supabase.js pullAllRemoteData:
 // pullHistory(1000)); a read that returned this many may have left older entries out (the held-delete evidence is then
 // confirmed with the server, generations_live).
@@ -5884,7 +5887,7 @@ export default function ProximaApp() {
                       setTestStatus("testing");
                       try {
                         const typed = keyInput.trim();
-                        if (typed) { await saveWavespeedKey(typed); setKeyInput(""); refreshProviderKeys(); pollUntracked(); }
+                        if (typed) { if (!(await saveWavespeedKey(typed))) { setTestStatus({ ok: false, msg: KEY_SAVE_UNCONFIRMED }); return; } setKeyInput(""); refreshProviderKeys(); pollUntracked(); }
                         const r = await refreshBalance();
                         const saved = typed ? "Saved. " : "";
                         if (r.keyStatus === "ok") setTestStatus({ ok: true, msg: `${saved}Connected! Balance: $${Number(r.balance).toFixed(4)}` });
@@ -5931,7 +5934,7 @@ export default function ProximaApp() {
                         setKieTestStatus("testing");
                         try {
                           const typed = kieKeyInput.trim();
-                          if (typed) { await saveProviderKey("kie", typed); setKieKeyInput(""); await refreshProviderKeys(); }
+                          if (typed) { if (!(await saveProviderKey("kie", typed))) { setKieTestStatus({ ok: false, msg: KEY_SAVE_UNCONFIRMED }); return; } setKieKeyInput(""); await refreshProviderKeys(); }
                           const r = await checkKieBalance();
                           const saved = typed ? "Saved. " : "";
                           if (r.keyStatus === "ok") { setKieKeyStatus("ok"); pollUntracked(); }
@@ -5952,9 +5955,9 @@ export default function ProximaApp() {
                           if (!window.confirm("Remove the saved kie.ai key? kie.ai models disappear from the list until a key is saved again.")) return;
                           setKieTestStatus("testing");
                           try {
-                            await clearProviderKey("kie");
+                            const r = await clearProviderKey("kie");
                             await refreshProviderKeys();
-                            setKieTestStatus({ ok: true, msg: "Removed." });
+                            setKieTestStatus(r ? { ok: true, msg: r.removed ? "Removed." : "No kie.ai key was saved, so there was nothing to remove." } : { ok: false, msg: KEY_REMOVE_UNCONFIRMED });
                           } catch (err) {
                             setKieTestStatus({ ok: false, msg: changeFailedText(err, { saved: "the key was removed", nothing: "the key was not removed", unsure: "Tap Remove again: removing twice is harmless." }) });
                           }
@@ -6003,12 +6006,12 @@ export default function ProximaApp() {
                         setHfTestStatus("testing");
                         try {
                           const typed = hfKeyInput.trim();
-                          if (typed) { await saveProviderKey("higgsfield", typed); setHfKeyInput(""); await refreshProviderKeys(); }
+                          if (typed) { if (!(await saveProviderKey("higgsfield", typed))) { setHfTestStatus({ ok: false, msg: KEY_SAVE_UNCONFIRMED }); return; } setHfKeyInput(""); await refreshProviderKeys(); }
                           const r = await checkHiggsfieldConnection();
                           const saved = typed ? "Saved. " : "";
                           if (r.keyStatus === "ok") { setHfKeyStatus("ok"); }
                           if (r.keyStatus === "invalid") setHfKeyStatus("invalid");
-                          if (r.keyStatus === "ok") setHfTestStatus({ ok: true, msg: `${saved}Connected to Higgsfield! Loaded ${r.presetsCount || 20} Genjutsu style presets.` });
+                          if (r.keyStatus === "ok") setHfTestStatus({ ok: true, msg: `${saved}Connected to Higgsfield!${r.presetsCount ? ` It lists ${r.presetsCount} Genjutsu style presets.` : ""}` });
                           else if (r.keyStatus === "missing") setHfTestStatus({ ok: false, msg: "No Higgsfield key saved yet — paste it above." });
                           else if (r.keyStatus === "invalid") setHfTestStatus({ ok: false, msg: `${saved}Higgsfield rejected this key. Check key ID and secret.` });
                           else setHfTestStatus({ ok: false, msg: `${saved}${r.error || "Could not reach Higgsfield."}` });
@@ -6024,9 +6027,9 @@ export default function ProximaApp() {
                           if (!window.confirm("Remove the saved Higgsfield key?")) return;
                           setHfTestStatus("testing");
                           try {
-                            await clearProviderKey("higgsfield");
+                            const r = await clearProviderKey("higgsfield");
                             await refreshProviderKeys();
-                            setHfTestStatus({ ok: true, msg: "Removed." });
+                            setHfTestStatus(r ? { ok: true, msg: r.removed ? "Removed." : "No Higgsfield key was saved, so there was nothing to remove." } : { ok: false, msg: KEY_REMOVE_UNCONFIRMED });
                           } catch (err) {
                             setHfTestStatus({ ok: false, msg: changeFailedText(err, { saved: "the key was removed", nothing: "the key was not removed", unsure: "Tap Remove again: removing twice is harmless." }) });
                           }

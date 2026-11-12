@@ -6,7 +6,7 @@ import { sessionToken, reportSessionExpired, isSuperseded } from "./session.js";
 import { uploadInputFile } from "./supabase.js";
 import { isKieModelId, isKiePollUrl, kieInput, kieInputProblem, kieSubmitResult, kiePollResult, KIE_PROXY_ROOT } from "./kie.js";
 import { kieModelById } from "../config/kieModels.js";
-import { isHiggsfieldModelId, isHiggsfieldPollUrl, higgsfieldSubmitResult, higgsfieldPollResult, HIGGSFIELD_PROXY_ROOT, hfPresetList } from "./higgsfield.js";
+import { isHiggsfieldModelId, isHiggsfieldPollUrl, higgsfieldSubmitResult, higgsfieldPollResult, HIGGSFIELD_PROXY_ROOT, hfPresetList, hfCheckKeyStatus } from "./higgsfield.js";
 import { hfModelById } from "../config/higgsfieldModels.js";
 
 const PROXY_ROOT = "/api/wavespeed-v2";
@@ -151,12 +151,13 @@ export async function checkHiggsfieldConnection() {
   try {
     const res = await wsFetch(`${HIGGSFIELD_PROXY_ROOT}/models/higgsfield/genjutsu/restyle/v1.0/presets`, { signal: timeoutSignal(POLL_TIMEOUT_MS) }, "higgsfield");
     if (!res.ok) {
+      // Only Higgsfield's own 401/403 judges the key (hfCheckKeyStatus); any other answer means the check couldn't be made.
       const err = await res.json().catch(() => ({}));
-      return { ok: false, error: err.error || `HTTP ${res.status}`, keyStatus: res.status === 400 ? "missing" : "invalid" };
+      const said = err.error || err.message;
+      return { ok: false, error: `Couldn't check the key (HTTP ${res.status}${said ? `: ${said}` : ""}).`, keyStatus: hfCheckKeyStatus(res.status) };
     }
     const json = await res.json();
-    const count = Array.isArray(json?.items) ? json.items.length : (Array.isArray(json?.presets) ? json.presets.length : 0);
-    return { ok: true, keyStatus: "ok", presetsCount: count, error: null };
+    return { ok: true, keyStatus: "ok", presetsCount: hfPresetList(json).length, error: null };
   } catch (e) {
     return { ok: false, error: e.message || "Network error", keyStatus: e.noKey ? "missing" : "unknown" };
   }
