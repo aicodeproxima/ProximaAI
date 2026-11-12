@@ -309,15 +309,19 @@ export function buildPayload(model, userSettings, genType) {
   }
 
   // Higgsfield Genjutsu models (v2v: Motion Transfer, Object Swap, Restyle)
+  // Only what the studio shows is sent: in V→V the source video is sourceImageUrl (the field the studio shows and
+  // Generate checks; sourceVideoUrl belongs to the Avatar tab and may still hold its video), and a field goes only to a
+  // mode that takes it (hf.fields: preset_id is Restyle's alone).
   if (model.api === "higgsfield") {
-    const video = userSettings.sourceVideoUrl || userSettings.sourceImageUrl;
+    const takes = (f) => !model.hf?.fields || model.hf.fields.includes(f);
+    const video = genType === "v2v" ? userSettings.sourceImageUrl : (userSettings.sourceVideoUrl || userSettings.sourceImageUrl);
     if (video) payload.video_url = video.trim();
-    if (userSettings.sourceImageUrls?.length > 0) {
+    if (takes("image_urls") && userSettings.sourceImageUrls?.length > 0) {
       payload.image_urls = userSettings.sourceImageUrls.filter(Boolean);
-    } else if (userSettings.sourceImageUrl && genType !== "v2v") {
+    } else if (takes("image_urls") && userSettings.sourceImageUrl && genType !== "v2v") {
       payload.image_urls = [userSettings.sourceImageUrl.trim()];
     }
-    if (userSettings.presetId || userSettings.selectedPreset) {
+    if (takes("preset_id") && (userSettings.presetId || userSettings.selectedPreset)) {
       payload.preset_id = userSettings.presetId || userSettings.selectedPreset;
     }
   }

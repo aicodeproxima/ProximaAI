@@ -6,7 +6,7 @@ import { sessionToken, reportSessionExpired, isSuperseded } from "./session.js";
 import { uploadInputFile } from "./supabase.js";
 import { isKieModelId, isKiePollUrl, kieInput, kieInputProblem, kieSubmitResult, kiePollResult, KIE_PROXY_ROOT } from "./kie.js";
 import { kieModelById } from "../config/kieModels.js";
-import { isHiggsfieldModelId, isHiggsfieldPollUrl, higgsfieldSubmitResult, higgsfieldPollResult, HIGGSFIELD_PROXY_ROOT } from "./higgsfield.js";
+import { isHiggsfieldModelId, isHiggsfieldPollUrl, higgsfieldSubmitResult, higgsfieldPollResult, HIGGSFIELD_PROXY_ROOT, hfPresetList } from "./higgsfield.js";
 import { hfModelById } from "../config/higgsfieldModels.js";
 
 const PROXY_ROOT = "/api/wavespeed-v2";
@@ -159,6 +159,21 @@ export async function checkHiggsfieldConnection() {
     return { ok: true, keyStatus: "ok", presetsCount: count, error: null };
   } catch (e) {
     return { ok: false, error: e.message || "Network error", keyStatus: e.noKey ? "missing" : "unknown" };
+  }
+}
+
+// Restyle's style presets for the studio, through the proxy WITH the session (a plain fetch is refused 401 by
+// api/higgsfield-proxy.ts). { ok: true, presets: [{ id, name }] } or { ok: false, error } in words the studio shows as is.
+export async function listHiggsfieldPresets() {
+  try {
+    const res = await wsFetch(`${HIGGSFIELD_PROXY_ROOT}/models/higgsfield/genjutsu/restyle/v1.0/presets`, { signal: timeoutSignal(POLL_TIMEOUT_MS) }, "higgsfield");
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { ok: false, error: `Higgsfield answered HTTP ${res.status}${err.error || err.message ? `: ${err.error || err.message}` : ""}` };
+    }
+    return { ok: true, presets: hfPresetList(await res.json()) };
+  } catch (e) {
+    return { ok: false, error: e?.name === "AbortError" || e?.name === "TimeoutError" ? "Higgsfield took too long to answer" : (e?.message || "Couldn't reach the Higgsfield proxy") };
   }
 }
 

@@ -15,6 +15,7 @@ import VersionInfo from "./lib/VersionInfo.jsx";
 import { downscaleImage } from "./lib/imageUpload.js";
 import GenjutsuStudio from "./components/GenjutsuStudio.jsx";
 import { hfModelById } from "./config/higgsfieldModels.js";
+import { hfInputProblem } from "./lib/higgsfield.js";
 import { getSetting, hasLocalData, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, advanceFormStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, USERNAME_RULE, USERNAME_HINT, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
@@ -3827,6 +3828,14 @@ export default function ProximaApp() {
     perModelRes: effectivePerModel, optionalParams, briaPresets, endFrameUrl, refVideoUrl,
     sourceAudioUrl, sourceVideoUrl, presetId: selectedHfPreset };
   draftFormRef.current = draftForm;
+  // Genjutsu Studio: what the chosen mode still needs (src/lib/higgsfield.js), shown on the Generate button and checked
+  // again by handleGenerate (Ctrl+Enter skips the button).
+  const hfStudioOn = genType === "v2v" && hfStudioActive;
+  const hfStudioModel = hfStudioOn ? (models.find(m => m.id === selectedModels[0]) || hfModelById("hf/genjutsu/motion-transfer")) : null;
+  const hfStudioDuration = mediaDurations[(sourceImageUrl || "").trim()];
+  const hfProblem = hfStudioOn
+    ? hfInputProblem(hfStudioModel, { video: sourceImageUrl, images: sourceImageUrls, preset: selectedHfPreset, duration: hfStudioDuration })
+    : null;
   // This tab's Generate form inputs, published for every tab's file flush (fileDelete.js liveFormPaths, review #3):
   // refreshed every minute, withdrawn when the tab closes. This browser's live holds (all its tabs) also go to the cloud
   // for the other device's flush, when they change and every 10 minutes (review wf_ec400a67-988 #6). Task B13c (simulator
@@ -4027,6 +4036,7 @@ export default function ProximaApp() {
       alert(`Please provide a source ${genType === "v2v" ? "video" : "image"}.`);
       return;
     }
+    if (hfProblem) { alert(`${hfProblem}.`); return; }
     if (selectedConfigs.some(m => m.params?.requiresLastImage) && !endFrameUrl.trim() && sourceImageUrls.length === 0) {
       alert("Please add a second image for the end frame.");
       return;
@@ -4865,10 +4875,12 @@ export default function ProximaApp() {
 
                   {genType === "v2v" && hfStudioActive ? (
                     <GenjutsuStudio
-                      selectedModel={models.find(m => m.id === selectedModels[0]) || hfModelById("hf/genjutsu/motion-transfer")}
+                      selectedModel={hfStudioModel}
                       onSelectModel={(id) => setSelectedModels([id])}
                       sourceVideo={sourceImageUrl}
                       onSourceVideoChange={(url) => setSourceImageUrl(url)}
+                      sourceDuration={hfStudioDuration}
+                      uploadFile={uploadSingleFile}
                       refImages={sourceImageUrls}
                       onRefImagesChange={(urls) => setSourceImageUrls(urls)}
                       prompt={prompt}
@@ -5484,11 +5496,11 @@ export default function ProximaApp() {
                     )}
 
                     <button className={`gen-btn ${isGenerating ? "running" : "ready"}`}
-                      disabled={keyBlocked || (promptRequired && !prompt.trim()) || selectedConfigs.length === 0 || (sourceRequired && !sourceImageUrl.trim()) || (needsAudio && !sourceAudioUrl.trim())}
+                      disabled={keyBlocked || !!hfProblem || (promptRequired && !prompt.trim()) || selectedConfigs.length === 0 || (sourceRequired && !sourceImageUrl.trim()) || (needsAudio && !sourceAudioUrl.trim())}
                       onClick={handleGenerate}>
                       {isGenerating ? `⏳ GENERATING (${activeCount} active)...` :
                        keyBlocked ? (keyStatus === "invalid" ? "⚠ UPDATE API KEY IN SETTINGS" : "⚠ SET API KEY IN SETTINGS") :
-                       (genType === "v2v" && hfStudioActive) && !sourceImageUrl.trim() ? "⚠ ADD SOURCE VIDEO URL ABOVE" :
+                       hfProblem ? `⚠ ${hfProblem.toUpperCase()}` :
                        sourceRequired && !sourceImageUrl.trim() ? `⚠ ADD SOURCE ${sourceIsVideo ? "VIDEO" : "IMAGE"} ABOVE` :
                        needsAudio && !sourceAudioUrl.trim() ? "⚠ ADD SOURCE AUDIO ABOVE" :
                        (genType === "v2v" && hfStudioActive) ? "⚡ RUN GENJUTSU · HIGGSFIELD" :
