@@ -9,12 +9,21 @@ handed over from the webhook session (pending). `api/ws-webhook.ts` is not ours.
 Measured 2026-10-22 from the catalog (`pg_get_functiondef` via `scripts/tools/sb-query.mjs`, read-only) and from the
 code. No secret value was selected: app_secrets was read for key names, JSON field names and `updated_at` only.
 
+**Superseded in part (owner rulings 2026-11-12; migration 20261115100000, client c7f4ac5):** "the issue should never be
+misleading" and "all users now and going forward should receive accurate errors", after a member's locked account read
+"Wrong username or password" for every try, the right password included. Sign-in and unlock now answer the real reason:
+'locked' (+ locked_now on the try that locks), 'backup_locked' (+ retry_after; paused_now on the 5th wrong code),
+'disabled', 'no_password', 'no_backup_code'; 'invalid' only for a wrong username, password or code; never 'throttled',
+since both check the secret from a blocked network too. A lock or a pause still checks no secret, so it confirms no
+guess. Accepted cost: a name's existence shows once its account is locked or paused. Decision #1 of round 1 and §4's
+"Sign-in answers are generic" describe the earlier design; the one-bcrypt and lock-order rules still hold.
+
 ## Review round 1 (2026-10-23)
 Three critics, 25 findings, all accepted. Where a finding offered options, the chosen one is written below.
 
 | # | Change | Section(s) |
 |---|---|---|
-| 1 | A locked account or a running backup pause answers the generic `invalid` without checking the secret (dummy bcrypt, counted on the IP); `_reauth` keeps locked-first | §4, §6, §9.1 cases 5, 18 |
+| 1 | A locked account or a running backup pause answers the generic `invalid` without checking the secret (dummy bcrypt, counted on the IP); `_reauth` keeps locked-first. **Superseded 2026-11-12** (note above): they answer `locked` / `backup_locked`, still without checking the secret | §4, §6, §9.1 cases 5, 18 |
 | 2 | Header probe needs two more passes (two real networks → different keys; forged `cf-connecting-ip` ignored); `xff-first` dropped; runtime guard falls back to `observe` | §2, §6 |
 | 3 | IP parsed with `::inet` (bad value = no IP); IPv6 keyed by its /64; row budget, then `observe` | §2, §6, §9.1 case 15 |
 | 4 | unlock always runs one bcrypt (row code or dummy); disabled and deleted rows count as unknown and are never changed | §4, §6, §9.1 cases 4, 7 |
@@ -419,7 +428,8 @@ functions now refuse too. `v_user := v_acc.scope`. The re-check after the marker
 by `if (proxima_auth.current_account(p_session_token)).scope is distinct from v_user then raise 'session token
 revoked'`.
 
-**Sign-in answers are generic.** A disabled or deleted row counts as unknown everywhere a name is typed, and P1 never
+**Sign-in answers are generic** (superseded 2026-11-12 by the owner's accurate-errors ruling, see the note at the top:
+a disabled row now answers 'disabled'; a deleted one still reads as unknown; the bcrypt rules below still hold). A disabled or deleted row counts as unknown everywhere a name is typed, and P1 never
 writes to a disabled or deleted row from a sign-in or unlock. Every attempt runs exactly one bcrypt: against the row's
 hash when the row is live and its secret is checked, otherwise against `auth_config.dummy_hash`. A NULL or empty
 secret is no exception: it pays the same bcrypt (`crypt(coalesce(secret, ''), hash)`) before it is refused (review
