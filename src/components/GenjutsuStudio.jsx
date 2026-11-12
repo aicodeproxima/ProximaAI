@@ -26,12 +26,13 @@ export default function GenjutsuStudio({
     if (mode === "restyle" && presets.length === 0) {
       setLoadingPresets(true);
       fetch("/api/higgsfield/models/higgsfield/genjutsu/restyle/v1.0/presets")
-        .then(r => r.ok ? r.json() : { presets: [] })
+        .then(r => r.ok ? r.json() : { items: [] })
         .then(data => {
-          if (Array.isArray(data?.presets)) {
-            setPresets(data.presets);
-            if (!selectedPreset && data.presets.length > 0) {
-              onPresetChange(data.presets[0].id);
+          const list = Array.isArray(data?.items) ? data.items : (Array.isArray(data?.presets) ? data.presets : []);
+          if (list.length > 0) {
+            setPresets(list);
+            if (!selectedPreset) {
+              onPresetChange(list[0].id);
             }
           }
         })

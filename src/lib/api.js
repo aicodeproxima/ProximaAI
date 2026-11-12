@@ -6,6 +6,8 @@ import { sessionToken, reportSessionExpired, isSuperseded } from "./session.js";
 import { uploadInputFile } from "./supabase.js";
 import { isKieModelId, isKiePollUrl, kieInput, kieInputProblem, kieSubmitResult, kiePollResult, KIE_PROXY_ROOT } from "./kie.js";
 import { kieModelById } from "../config/kieModels.js";
+import { isHiggsfieldModelId, isHiggsfieldPollUrl, higgsfieldSubmitResult, higgsfieldPollResult, HIGGSFIELD_PROXY_ROOT } from "./higgsfield.js";
+import { hfModelById } from "../config/higgsfieldModels.js";
 
 const PROXY_ROOT = "/api/wavespeed-v2";
 const API_BASE = `${PROXY_ROOT}/api/v3`;
@@ -40,6 +42,7 @@ async function wsFetch(url, options = {}, provider = "wavespeed") {
   }
   if (res.status === 400 && refusal === "no-key") {
     if (provider === "kie") throw { code: 400, message: "No kie.ai key saved — add it in Settings", noKey: true, kie: true };
+    if (provider === "higgsfield") throw { code: 400, message: "No Higgsfield key saved — add it in Settings", noKey: true, higgsfield: true };
     throw { code: 400, message: "No WaveSpeed key saved — add it in Settings", noKey: true };
   }
   return res;
@@ -51,6 +54,7 @@ const timeoutSignal = (ms) => (typeof AbortSignal !== "undefined" && AbortSignal
 // proxy finishes the submit anyway, so the task then waits for the history lookup instead of failing.
 const SUBMIT_TIMEOUT_MS = 60_000;
 export async function submitTask(modelSlug, payload) {
+  if (isHiggsfieldModelId(modelSlug)) return submitHiggsfieldTask(modelSlug, payload);
   if (isKieModelId(modelSlug)) return submitKieTask(modelSlug, payload);
   const res = await wsFetch(`${API_BASE}/${modelSlug}`, {
     method: "POST",
@@ -71,6 +75,11 @@ export async function submitTask(modelSlug, payload) {
 const POLL_TIMEOUT_MS = 15_000;
 export async function pollResult(pollUrl) {
   const signal = timeoutSignal(POLL_TIMEOUT_MS);
+  if (isHiggsfieldPollUrl(pollUrl)) {
+    const res = await wsFetch(pollUrl, signal ? { signal } : {}, "higgsfield");
+    if (!res.ok) throw { code: res.status, message: res.statusText || "The Higgsfield proxy refused the poll", higgsfield: true, proxy: true };
+    return higgsfieldPollResult(await res.json());
+  }
   if (isKiePollUrl(pollUrl)) {
     const res = await wsFetch(pollUrl, signal ? { signal } : {}, "kie");
     // Not 200: our proxy answered, not kie.ai (kie.ai answers 200 with its own code). proxy: a 4xx of its rules stops the
@@ -117,6 +126,39 @@ export async function checkKieBalance() {
     return { error: null, credits: json.data, keyStatus: "ok" };
   } catch (e) {
     return { error: e.message || "Network error", credits: null, keyStatus: e.noKey ? "missing" : "unknown" };
+  }
+}
+
+// Higgsfield Genjutsu task submission and connection testing
+async function submitHiggsfieldTask(modelSlug, payload) {
+  const model = hfModelById(modelSlug);
+  if (!model) throw { code: 0, message: "This Higgsfield model is not available in this version", higgsfield: true, answered: true };
+  const endpoint = model.hfModel;
+  const res = await wsFetch(`${HIGGSFIELD_PROXY_ROOT}/${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: timeoutSignal(SUBMIT_TIMEOUT_MS),
+  }, "higgsfield");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw { code: res.status, message: err.error || err.message || res.statusText, higgsfield: true, answered: true };
+  }
+  return higgsfieldSubmitResult(await res.json());
+}
+
+export async function checkHiggsfieldConnection() {
+  try {
+    const res = await wsFetch(`${HIGGSFIELD_PROXY_ROOT}/models/higgsfield/genjutsu/restyle/v1.0/presets`, { signal: timeoutSignal(POLL_TIMEOUT_MS) }, "higgsfield");
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { ok: false, error: err.error || `HTTP ${res.status}`, keyStatus: res.status === 400 ? "missing" : "invalid" };
+    }
+    const json = await res.json();
+    const count = Array.isArray(json?.items) ? json.items.length : (Array.isArray(json?.presets) ? json.presets.length : 0);
+    return { ok: true, keyStatus: "ok", presetsCount: count, error: null };
+  } catch (e) {
+    return { ok: false, error: e.message || "Network error", keyStatus: e.noKey ? "missing" : "unknown" };
   }
 }
 

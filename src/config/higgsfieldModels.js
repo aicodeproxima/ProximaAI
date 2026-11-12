@@ -16,6 +16,7 @@ export const HF_MODELS = {
         resolution: RES_VID,
         negativePrompt: false,
         seed: false,
+        noPrompt: true,
       },
       hf: {
         mode: "motion-transfer",
@@ -36,6 +37,7 @@ export const HF_MODELS = {
         resolution: RES_VID,
         negativePrompt: false,
         seed: false,
+        noPrompt: true,
       },
       hf: {
         mode: "object-swap",
@@ -56,6 +58,7 @@ export const HF_MODELS = {
         resolution: RES_VID,
         negativePrompt: false,
         seed: false,
+        noPrompt: true,
       },
       hf: {
         mode: "restyle",

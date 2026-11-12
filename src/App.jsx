@@ -7,12 +7,14 @@ import { buildPayload, chosenResolution, getEffectiveImageBatchCount, getImageBa
 import { requestCost, REFERENCE_INPUT_S } from "./lib/pricing.js";
 import { draftTask, unitQuote, taskUserSettings, effectivePerModelRes, labelPerModelRes, resolutionNotes, runLabels } from "./lib/taskDraft.js";
 import { probeMediaDuration } from "./lib/mediaDuration.js";
-import { submitTask, pollResult, listPredictions, deletePredictions, checkBalance, checkKieBalance, uploadMedia, API_BASE } from "./lib/api.js";
+import { submitTask, pollResult, listPredictions, deletePredictions, checkBalance, checkKieBalance, checkHiggsfieldConnection, uploadMedia, API_BASE } from "./lib/api.js";
 import { queueDeletes, dropDeletes, dueDeletes, settleDeletes, failDeletes, holdHeldIds, waitHeldIds } from "./lib/wsDelete.js";
 import { getSession, setSession, clearSession, onSessionExpired, bindPageAccount, pageAccountId, onForeignSession } from "./lib/session.js";
 import useUpdateAvailable from "./lib/updateCheck.js";
 import VersionInfo from "./lib/VersionInfo.jsx";
 import { downscaleImage } from "./lib/imageUpload.js";
+import GenjutsuStudio from "./components/GenjutsuStudio.jsx";
+import { hfModelById } from "./config/higgsfieldModels.js";
 import { getSetting, hasLocalData, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, advanceFormStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
 import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, USERNAME_RULE, USERNAME_HINT, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
@@ -1696,8 +1698,16 @@ export default function ProximaApp() {
   // "invalid" once kie.ai rejects the saved key on a poll or submit (its polls then stop); "ok" after a working Save & Test.
   const [kieKeyStatus, setKieKeyStatus] = useState("unknown");
   const hasKieKey = !!providerKeys?.has("kie");
-  const keyBlocked = (keyStatus === "missing" || keyStatus === "invalid") && !hasKieKey;
+  const hasHfKey = !!providerKeys?.has("higgsfield");
+  const keyBlocked = (keyStatus === "missing" || keyStatus === "invalid") && !hasKieKey && !hasHfKey;
   const kieFingerprint = providerKeyList.find(k => k.provider === "kie")?.fingerprint || null;
+  const hfFingerprint = providerKeyList.find(k => k.provider === "higgsfield")?.fingerprint || null;
+
+  const [hfKeyInput, setHfKeyInput] = useState("");
+  const [hfTestStatus, setHfTestStatus] = useState(null); // null | "testing" | {ok, msg}
+  const [hfKeyStatus, setHfKeyStatus] = useState("unknown");
+  const [selectedHfPreset, setSelectedHfPreset] = useState("");
+  const [hfStudioActive, setHfStudioActive] = useState(true);
   // The kie.ai balance next to WaveSpeed's (owner 2026-10-26), refreshed at the same moments; asked only when the
   // account has a kie.ai key (an account without one would get a "no key" answer on every refresh).
   const [kieCredits, setKieCredits] = useState(null);
@@ -3815,7 +3825,7 @@ export default function ProximaApp() {
   const effectivePerModel = useMemo(() => effectivePerModelRes(selectedModelConfigs, perModelRes), [selectedModels, models, perModelRes]); // eslint-disable-line react-hooks/exhaustive-deps
   const draftForm = { genType, prompt, negPrompt, resolution, duration, seed, aspectRatio, sourceImageUrl, sourceImageUrls,
     perModelRes: effectivePerModel, optionalParams, briaPresets, endFrameUrl, refVideoUrl,
-    sourceAudioUrl, sourceVideoUrl };
+    sourceAudioUrl, sourceVideoUrl, presetId: selectedHfPreset };
   draftFormRef.current = draftForm;
   // This tab's Generate form inputs, published for every tab's file flush (fileDelete.js liveFormPaths, review #3):
   // refreshed every minute, withdrawn when the tab closes. This browser's live holds (all its tabs) also go to the cloud
@@ -4810,7 +4820,9 @@ export default function ProximaApp() {
                       {Object.entries(TYPE_LABELS).map(([key, label]) => (
                         <button key={key} className={`type-tab ${genType===key?"active":""}`}
                           onClick={e => {
-                            setGenType(key); setSelectedModels([]); setPerModelRes({}); setResolution(""); setDuration(5); setAspectRatio("auto"); setSourceImageUrls([]);
+                            setGenType(key);
+                            setSelectedModels(key === "v2v" && hfStudioActive ? ["hf/genjutsu/motion-transfer"] : []);
+                            setPerModelRes({}); setResolution(""); setDuration(5); setAspectRatio("auto"); setSourceImageUrls([]);
                             if (!["i2i", "i2v", "v2v", "avatar", "i23d"].includes(key)) { clearSourceImage(); }
                             // Scroll selected tab into view (desktop only — mobile shows all 5 in one row)
                             if (window.innerWidth > 768) e.currentTarget.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
@@ -4823,6 +4835,52 @@ export default function ProximaApp() {
                     </div>
                   </div>
 
+                  {/* V->V Mode Switcher (Genjutsu Studio vs Standard V->V) */}
+                  {genType === "v2v" && (
+                    <div style={{ marginBottom: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <button
+                        type="button"
+                        className={`type-tab ${hfStudioActive ? "active" : ""}`}
+                        style={{ padding: "8px 10px", fontSize: 11, fontWeight: 700, borderRadius: 8, justifyContent: "center" }}
+                        onClick={() => {
+                          setHfStudioActive(true);
+                          if (!selectedModels.some(id => id.startsWith("hf/"))) {
+                            setSelectedModels(["hf/genjutsu/motion-transfer"]);
+                          }
+                        }}>
+                        ⚡ Genjutsu Studio
+                      </button>
+                      <button
+                        type="button"
+                        className={`type-tab ${!hfStudioActive ? "active" : ""}`}
+                        style={{ padding: "8px 10px", fontSize: 11, fontWeight: 700, borderRadius: 8, justifyContent: "center" }}
+                        onClick={() => {
+                          setHfStudioActive(false);
+                          setSelectedModels(prev => prev.filter(id => !id.startsWith("hf/")));
+                        }}>
+                        Standard V→V
+                      </button>
+                    </div>
+                  )}
+
+                  {genType === "v2v" && hfStudioActive ? (
+                    <GenjutsuStudio
+                      selectedModel={models.find(m => m.id === selectedModels[0]) || hfModelById("hf/genjutsu/motion-transfer")}
+                      onSelectModel={(id) => setSelectedModels([id])}
+                      sourceVideo={sourceImageUrl}
+                      onSourceVideoChange={(url) => setSourceImageUrl(url)}
+                      refImages={sourceImageUrls}
+                      onRefImagesChange={(urls) => setSourceImageUrls(urls)}
+                      prompt={prompt}
+                      onPromptChange={(p) => setPrompt(p)}
+                      resolution={resolution || "720p"}
+                      onResolutionChange={(r) => setResolution(r)}
+                      selectedPreset={selectedHfPreset}
+                      onPresetChange={(p) => setSelectedHfPreset(p)}
+                      font={font}
+                    />
+                  ) : (
+                    <>
                   {/* Prompt */}
                   <div className="card">
                     <div className="card-title">{genType === "i2i" || genType === "v2v" ? "Edit Instructions" : "Prompt"}</div>
@@ -5413,6 +5471,8 @@ export default function ProximaApp() {
                       </div>
                     )}
                   </div>
+                    </>
+                  )}
 
                   {/* Cost + Generate — sticky on mobile, inline on desktop */}
                   <div className="action-panel">
@@ -5428,8 +5488,10 @@ export default function ProximaApp() {
                       onClick={handleGenerate}>
                       {isGenerating ? `⏳ GENERATING (${activeCount} active)...` :
                        keyBlocked ? (keyStatus === "invalid" ? "⚠ UPDATE API KEY IN SETTINGS" : "⚠ SET API KEY IN SETTINGS") :
+                       (genType === "v2v" && hfStudioActive) && !sourceImageUrl.trim() ? "⚠ ADD SOURCE VIDEO URL ABOVE" :
                        sourceRequired && !sourceImageUrl.trim() ? `⚠ ADD SOURCE ${sourceIsVideo ? "VIDEO" : "IMAGE"} ABOVE` :
                        needsAudio && !sourceAudioUrl.trim() ? "⚠ ADD SOURCE AUDIO ABOVE" :
+                       (genType === "v2v" && hfStudioActive) ? "⚡ RUN GENJUTSU · HIGGSFIELD" :
                        `⚡ ${genType === "i2i" || genType === "v2v" ? "EDIT" : "GENERATE"}${selectedConfigs.length > 0 ? ` ACROSS ${selectedConfigs.length} MODELS` : ""}`}
                     </button>
                     <div className="gen-hint" style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center" }}>Ctrl+Enter to generate</div>
@@ -5908,6 +5970,73 @@ export default function ProximaApp() {
                     const waiting = tasks.filter(t => isInFlight(t) && isKieGeneration(t)).length;
                     return waiting > 0 && <div style={{ marginTop: 8, fontSize: 12, color: "var(--amber)", fontFamily: font }}>{waiting} kie.ai generation{waiting > 1 ? "s are" : " is"} waiting for a kie.ai key.</div>;
                   })()}
+                </div>
+
+                {/* Higgsfield Genjutsu key: encrypted in the server's Vault */}
+                <div className="setting-group">
+                  <div className="setting-label">Higgsfield API Key</div>
+                  <input id="settings-hf-key" type="text" className="setting-input" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                    style={maskedCodeStyle(false)} aria-label="Higgsfield API key"
+                    placeholder={hfFingerprint ? `Saved (${hfFingerprint}) — paste a new key to replace it` : hasHfKey ? "Saved on the server — paste a new key to replace it" : "Paste your Higgsfield key (<key_id>:<key_secret>)..."}
+                    value={hfKeyInput} onChange={e => { setHfKeyInput(e.target.value); setHfTestStatus(null); }} />
+                  <div className="setting-hint">Get your key from your <span style={{ color: "var(--accent)" }}>higgsfield.ai</span> account (API Keys). Format: <span style={{ fontFamily: "monospace" }}>&lt;key_id&gt;:&lt;key_secret&gt;</span>. Saved encrypted in Supabase Vault to enable Genjutsu Video-to-Video workflows (Motion Transfer, Object Swap, and Restyle).</div>
+                  <div style={{ display: "grid", gridTemplateColumns: hasHfKey ? "1fr 1fr" : "1fr", gap: 8 }}>
+                    <button className="api-test-btn" disabled={hfTestStatus === "testing"}
+                      onClick={async () => {
+                        setHfTestStatus("testing");
+                        try {
+                          const typed = hfKeyInput.trim();
+                          if (typed) { await saveProviderKey("higgsfield", typed); setHfKeyInput(""); await refreshProviderKeys(); }
+                          const r = await checkHiggsfieldConnection();
+                          const saved = typed ? "Saved. " : "";
+                          if (r.keyStatus === "ok") { setHfKeyStatus("ok"); }
+                          if (r.keyStatus === "invalid") setHfKeyStatus("invalid");
+                          if (r.keyStatus === "ok") setHfTestStatus({ ok: true, msg: `${saved}Connected to Higgsfield! Loaded ${r.presetsCount || 20} Genjutsu style presets.` });
+                          else if (r.keyStatus === "missing") setHfTestStatus({ ok: false, msg: "No Higgsfield key saved yet — paste it above." });
+                          else if (r.keyStatus === "invalid") setHfTestStatus({ ok: false, msg: `${saved}Higgsfield rejected this key. Check key ID and secret.` });
+                          else setHfTestStatus({ ok: false, msg: `${saved}${r.error || "Could not reach Higgsfield."}` });
+                        } catch (err) {
+                          setHfTestStatus({ ok: false, msg: err.message || "Could not save the key" });
+                        }
+                      }}>
+                      {hfTestStatus === "testing" ? "Checking..." : hfKeyInput.trim() ? "Save & Test Key" : "Test Connection"}
+                    </button>
+                    {hasHfKey && (
+                      <button className="api-test-btn" disabled={hfTestStatus === "testing"}
+                        onClick={async () => {
+                          if (!window.confirm("Remove the saved Higgsfield key?")) return;
+                          setHfTestStatus("testing");
+                          try {
+                            await clearProviderKey("higgsfield");
+                            await refreshProviderKeys();
+                            setHfTestStatus({ ok: true, msg: "Removed." });
+                          } catch (err) {
+                            setHfTestStatus({ ok: false, msg: err.message || "Could not remove the key" });
+                          }
+                        }}>
+                        Remove Key
+                      </button>
+                    )}
+                  </div>
+                  {hfTestStatus && hfTestStatus !== "testing" && (
+                    <div style={{
+                      marginTop: 10, padding: "10px 12px", borderRadius: 8, fontSize: 12,
+                      fontFamily: font, fontWeight: 500,
+                      background: hfTestStatus.ok ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                      border: `1px solid ${hfTestStatus.ok ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
+                      color: hfTestStatus.ok ? "var(--success)" : "var(--error)"
+                    }}>
+                      {hfTestStatus.ok ? "✓ " : "✗ "}{hfTestStatus.msg}
+                    </div>
+                  )}
+                  {hfTestStatus === "testing" && (
+                    <div className="pulse" style={{ marginTop: 10, fontSize: 12, color: "var(--accent)", fontFamily: font }}>
+                      ⏳ Contacting Higgsfield API...
+                    </div>
+                  )}
+                  {hasHfKey && hfKeyStatus === "invalid" && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: "var(--error)", fontFamily: font }}>Higgsfield rejected the saved key. Paste a valid key and press Save &amp; Test.</div>
+                  )}
                 </div>
 
                 {readBrowserAccount()?.role === "owner" && <InviteSection font={font} />}

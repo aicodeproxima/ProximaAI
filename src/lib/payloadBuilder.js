@@ -308,6 +308,20 @@ export function buildPayload(model, userSettings, genType) {
     payload[p.videoParam || "video"] = userSettings.sourceVideoUrl.trim();
   }
 
+  // Higgsfield Genjutsu models (v2v: Motion Transfer, Object Swap, Restyle)
+  if (model.api === "higgsfield") {
+    const video = userSettings.sourceVideoUrl || userSettings.sourceImageUrl;
+    if (video) payload.video_url = video.trim();
+    if (userSettings.sourceImageUrls?.length > 0) {
+      payload.image_urls = userSettings.sourceImageUrls.filter(Boolean);
+    } else if (userSettings.sourceImageUrl && genType !== "v2v") {
+      payload.image_urls = [userSettings.sourceImageUrl.trim()];
+    }
+    if (userSettings.presetId || userSettings.selectedPreset) {
+      payload.preset_id = userSettings.presetId || userSettings.selectedPreset;
+    }
+  }
+
   // Source image/video/audio for avatar models.
   if (genType === "avatar" && userSettings.sourceImageUrl) {
     payload[p.imageParam || "image"] = userSettings.sourceImageUrl.trim();
