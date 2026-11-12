@@ -86,6 +86,8 @@ await test("the refusal names the other account when known, and says what to do"
   assert.match(m, /another account's generations \(StephJr101\)/);
   assert.match(m, /private window/);
   assert.match(G.browserAccountMessage({ ok: false, reason: "unknown-account" }), /Couldn't confirm your account/);
+  // The server answered without naming the account: not a connection problem (owner 2026-11-12: accurate errors).
+  assert.doesNotMatch(G.browserAccountMessage({ ok: false, reason: "unknown-account" }), /connection/i);
 });
 
 // Review r7 (security #1, tests #3): a claim is a compare-and-set (another tab may have claimed the browser for another

@@ -144,8 +144,28 @@ test("rename: rate_limited -> one-hour text; throttled; taken; others unchanged"
   assert.equal(accountError({ reason: "invalid_username" }, "F"), joinError({ reason: "invalid_username" }));
   assert.match(accountError({ reason: "invalid_username" }, "F"), /2 to 64 letters, digits, - or _/);
   assert.match(accountError({ reason: "too_short" }, "F"), /12 characters/);
-  assert.equal(accountError({ reason: "nope" }, "F"), "F");
-  assert.equal(accountError(null, "F"), "F");
+});
+test("account changes: 'forbidden' says the session isn't valid; an answer this build doesn't map is named, never 'Failed to save'", () => {
+  assert.equal(accountError({ ok: false, reason: "forbidden" }), T.SESSION_INVALID);
+  assert.match(T.SESSION_INVALID, /isn't valid anymore.*sign in again/);
+  for (const r of [{ ok: false, reason: "nope" }, { ok: false }, {}]) {
+    assert.match(accountError(r), NOT_KNOWN, JSON.stringify(r));
+    assert.doesNotMatch(accountError(r), /Failed to save/);
+  }
+  for (const r of [null, undefined, { ok: false, reason: "no_answer" }]) assert.equal(accountError(r), EMPTY_ANSWER, String(r));
+});
+test("join: a dead code reads as one; an answer this build doesn't map is named; an empty one says so", () => {
+  assert.equal(joinError({ ok: false, reason: "invalid" }), "That invite code doesn't work. It may be mistyped, used, expired or revoked.");
+  for (const r of [{ ok: false, reason: "something_new" }, {}]) assert.match(joinError(r), NOT_KNOWN, JSON.stringify(r));
+  for (const r of [null, undefined, { ok: false, reason: "no_answer" }]) assert.equal(joinError(r), EMPTY_ANSWER, String(r));
+});
+test("invites: making and revoking name the real refusal", () => {
+  assert.equal(T.inviteError({ ok: false, reason: "forbidden" }), "Only the owner can invite people.");
+  assert.match(T.inviteError({ ok: false, reason: "nope" }), NOT_KNOWN);
+  assert.equal(T.revokeInviteError({ ok: false, reason: "not_found" }), "That invite was already used or revoked.");
+  assert.equal(T.revokeInviteError({ ok: false, reason: "forbidden" }), "Only the owner can revoke invites.");
+  assert.match(T.revokeInviteError({ ok: false, reason: "nope" }), NOT_KNOWN);
+  assert.equal(T.revokeInviteError(null), EMPTY_ANSWER);
 });
 
 {
@@ -156,6 +176,12 @@ test("rename: rate_limited -> one-hour text; throttled; taken; others unchanged"
   test("wiring: App.jsx has no local copies of the answer texts", () => {
     assert.ok(!/function (backupCodeError|accountError|signInError|callFailedText)\b/.test(app));
     assert.ok(!/tries? left|attempts? left/.test(app.replace(/\/\/.*$/gm, "")));
+  });
+  test("wiring: no account answer falls back to a catch-all text; the revoke answer goes through revokeInviteError", () => {
+    assert.doesNotMatch(app, /accountError\(r, /, "accountError takes the answer only");
+    const inv = fs.readFileSync(new URL("../src/components/InviteSection.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    assert.match(inv, /revokeInviteError\(r\)/);
+    assert.doesNotMatch(inv, /"That invite was already used or revoked\."/, "the words live in signinText.js");
   });
   test("wiring: each unlockWithBackupCode answer goes through backupCodeError", () => {
     const calls = [...app.matchAll(/await unlockWithBackupCode\(/g)].map(m => m.index);

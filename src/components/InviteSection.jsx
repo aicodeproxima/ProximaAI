@@ -4,7 +4,7 @@
 // history), so the person invited types the code you send with it.
 import { useState, useEffect, useCallback } from "react";
 import { createInvite, listMyInvites, revokeInvite } from "../lib/supabase.js";
-import { inviteError, OFFLINE, COPY_BY_HAND } from "../lib/signinText.js";
+import { inviteError, revokeInviteError, OFFLINE, COPY_BY_HAND } from "../lib/signinText.js";
 
 const when = (s) => (s ? new Date(s * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "");
 const STATE_COLOR = { open: "var(--success)", used: "var(--accent)", revoked: "var(--text-muted)", expired: "var(--text-muted)", void: "var(--text-muted)" };
@@ -47,7 +47,7 @@ export default function InviteSection({ font }) {
     setBusy(true); setMsg(null);
     try {
       const r = await revokeInvite(id);
-      setMsg(r?.ok ? { ok: true, text: "Revoked." } : { ok: false, text: "That invite was already used or revoked." });
+      setMsg(r?.ok ? { ok: true, text: "Revoked." } : { ok: false, text: revokeInviteError(r) });
       await refresh();
     } catch {
       setMsg({ ok: false, text: OFFLINE });

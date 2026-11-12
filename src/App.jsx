@@ -713,7 +713,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
     setBusy(true); setError("");
     try {
       const r = await renameMyAccount(currentPassword, name);
-      if (!r?.ok) { setError(accountError(r, "Failed to save. Try again.")); return; }
+      if (!r?.ok) { setError(accountError(r)); return; }
       // The server moved every row to the new name and issued a token for it; reload so all
       // scope-bound state (realtime filter, favorites key, queues) starts over under the new scope.
       setSession({ token: r.token, expires_at: r.expires_at, username: r.username });
@@ -735,7 +735,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
     setBusy(true); setError("");
     try {
       const r = await changeMyPassword(currentPassword, newPassword);
-      if (!r?.ok) { setError(accountError(r, "Failed to save. Try again.")); return; }
+      if (!r?.ok) { setError(accountError(r)); return; }
       // Every other device is signed out by the change; this one continues on the fresh token.
       setSession({ token: r.token, expires_at: r.expires_at, username: r.username });
       setNewPassword(""); setConfirmPassword("");
@@ -754,7 +754,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
     setBusy(true); setError("");
     try {
       const r = await setBackupCode(currentPassword, code);
-      if (!r?.ok) { setError(accountError(r, "Failed to save. Try again.")); return; }
+      if (!r?.ok) { setError(accountError(r)); return; }
       setBackupCodeInput(""); setConfirmBackupCode("");
       setCreds(c => ({ ...c, has_backup_code: true }));
       setStep("done");

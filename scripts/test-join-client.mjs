@@ -24,8 +24,11 @@ await test("joinError: each answer in words; any dead code reads the same", () =
   assert.match(T.joinError({ reason: "weak_password" }), /at least 8 characters/);
   assert.match(T.joinError({ reason: "username_taken" }), /taken[\s\S]*5 taken names/);   // r6 #9: the limit is said
   assert.match(T.joinError({ reason: "throttled", retry_after: 300 }), /5 min/);
-  assert.equal(T.joinError({ reason: "invalid" }), T.joinError({ reason: "anything else" }));
+  // Every dead code (unknown, used, expired, revoked) is the server's one 'invalid', so it reads one way. A reason this
+  // build doesn't map is named as such, never shown as a dead code (owner 2026-11-12: accurate errors).
   assert.match(T.joinError({ reason: "invalid" }), /invite code doesn't work/);
+  assert.match(T.joinError({ reason: "anything_else" }), /answer this page doesn't know/);
+  assert.doesNotMatch(T.joinError({ reason: "anything_else" }), /invite code doesn't work/);
   // r6 #7: after a network failure the account may exist: say how to find out, there and on a later 'invalid'
   assert.match(T.JOIN_MAYBE_CREATED, /If your account was created, sign in with the name and password you chose/);
   assert.match(T.signInError({ reason: "update_required" }), /out of date[\s\S]*reload/i);

@@ -110,14 +110,19 @@ export const USERNAME_RULE = /^[A-Za-z0-9_-]{2,64}$/;
 export const USERNAME_HINT = "Choose a name of 2 to 64 letters, digits, - or _ (no spaces or other characters).";
 
 // join_with_invite answer -> one message (supabase/migrations/20261026500000_mu_p5_invites.sql). Every code that doesn't
-// work (unknown, used, expired, revoked) reads the same, as the server answers.
+// work (unknown, used, expired, revoked) reads the same, as the server answers ('invalid'); an answer this build doesn't
+// map is named as such (owner 2026-11-12: accurate errors).
 export function joinError(r) {
-  if (r?.reason === "closed") return "Joining isn't open yet. Ask the person who invited you when to try again.";
-  if (r?.reason === "invalid_username") return USERNAME_HINT;
-  if (r?.reason === "weak_password") return "Use a password of at least 8 characters.";
-  if (r?.reason === "username_taken") return "That name is taken. Choose another one (after 5 taken names this invite stops working).";
-  if (r?.reason === "throttled") return throttledText(r.retry_after);
-  return "That invite code doesn't work. It may be mistyped, used, expired or revoked.";
+  if (r == null || r.reason === "no_answer") return EMPTY_ANSWER;
+  switch (r.reason) {
+    case "invalid": return "That invite code doesn't work. It may be mistyped, used, expired or revoked.";
+    case "closed": return "Joining isn't open yet. Ask the person who invited you when to try again.";
+    case "invalid_username": return USERNAME_HINT;
+    case "weak_password": return "Use a password of at least 8 characters.";
+    case "username_taken": return "That name is taken. Choose another one (after 5 taken names this invite stops working).";
+    case "throttled": return throttledText(r.retry_after);
+    default: return unexpectedAnswerText(r);
+  }
 }
 
 // The join screen after a network failure (the server may have made the account before the answer was lost), and after a
@@ -142,18 +147,34 @@ export function inviteError(r) {
   if (r?.reason === "closed") return "Member accounts are not switched on yet, so invites can't be made.";
   if (r?.reason === "too_many") return "You have 5 open invites. Revoke one before making another.";
   if (r?.reason === "forbidden") return "Only the owner can invite people.";
-  return accountError(r, "Couldn't make the invite. Try again.");
+  return accountError(r);
 }
 
-// Password-checked account RPCs (rename, change password, set backup code) for the signed-in account.
-export function accountError(r, fallback) {
-  if (r?.reason === "invalid") return "Current password is wrong (this counts toward the 3-attempt lockout)";
-  if (r?.reason === "locked") return "Too many wrong passwords — sign-in is now locked. Sign out and unlock it with your backup code.";
-  if (r?.reason === "rate_limited") return RENAME_RATE_LIMITED;
-  if (r?.reason === "throttled") return throttledText(r.retry_after);
-  if (r?.reason === "username_taken") return "That username is taken";
-  if (r?.reason === "weak_password") return "New password must be at least 8 characters";
-  if (r?.reason === "invalid_username") return USERNAME_HINT;   // rename: join's rule since 20261026200000
-  if (r?.reason === "too_short") return "Backup code must be at least 12 characters";
-  return fallback;
+// revoke_invite answer -> one message: 'not_found' (no such open invite of this owner's) or 'forbidden' (not the owner).
+export function revokeInviteError(r) {
+  if (r?.reason === "not_found") return "That invite was already used or revoked.";
+  if (r?.reason === "forbidden") return "Only the owner can revoke invites.";
+  return accountError(r);
+}
+
+// The session token resolved to no account (the server's 'forbidden' for the signed-in account's own calls): trying again
+// on it cannot work.
+export const SESSION_INVALID = "This session isn't valid anymore. Sign out, then sign in again.";
+
+// Password-checked account RPCs (rename, change password, set backup code) for the signed-in account. Each server reason
+// has its words; one this build doesn't map is named as such, never a catch-all "Failed to save" (owner 2026-11-12).
+export function accountError(r) {
+  if (r == null || r.reason === "no_answer") return EMPTY_ANSWER;
+  switch (r.reason) {
+    case "invalid": return "Current password is wrong (this counts toward the 3-attempt lockout)";
+    case "locked": return "Too many wrong passwords — sign-in is now locked. Sign out and unlock it with your backup code.";
+    case "rate_limited": return RENAME_RATE_LIMITED;
+    case "throttled": return throttledText(r.retry_after);
+    case "username_taken": return "That username is taken";
+    case "weak_password": return "New password must be at least 8 characters";
+    case "invalid_username": return USERNAME_HINT;   // rename: join's rule since 20261026200000
+    case "too_short": return "Backup code must be at least 12 characters";
+    case "forbidden": return SESSION_INVALID;
+    default: return unexpectedAnswerText(r);
+  }
 }

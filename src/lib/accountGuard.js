@@ -115,7 +115,8 @@ export function forgetJoinedNote() { try { localStorage.removeItem(JOINED_NOTE_K
 
 // The words for a refusal (LoginScreen).
 export function browserAccountMessage(decision) {
-  if (decision?.reason === "unknown-account") return "Couldn't confirm your account. Check your connection and try again.";
+  // The server answered without naming the account (no id): not a connection problem (owner 2026-11-12: accurate errors).
+  if (decision?.reason === "unknown-account") return "Couldn't confirm your account: the server's answer didn't say which account it is. Reload the page, then sign in again.";
   if (decision?.reason === "unreadable-record") return "This browser's record of which account it belongs to can't be read. To use this browser, clear this site's data in the browser's settings (anything not yet synced on it is lost), or use another browser.";
   if (decision?.reason === "claim-failed") return "This browser can't save which account it belongs to (its storage is full or blocked). Free some space or allow site storage, or use another browser.";
   const who = decision?.other ? ` (${decision.other})` : "";
