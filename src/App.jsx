@@ -1043,8 +1043,8 @@ const css = `
   --glass: rgba(10,15,30,0.07); --glass-border: rgba(99,102,241,0.08);
 }
 
-html { background: var(--bg-deep); }
-body { background: transparent; color: var(--text-primary); font-family: ${fontBody}; }
+html { background: var(--bg-deep); overscroll-behavior-y: none; }
+body { background: transparent; color: var(--text-primary); font-family: ${fontBody}; overscroll-behavior-y: none; }
 
 /* App shell — MUST be transparent so the fixed BackgroundLayer (z-index:0)
    renders through. The body background acts as the base color fallback. */
@@ -1070,16 +1070,16 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
 .topbar-title { font-family: ${font}; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; color: var(--text-secondary); }
 .balance-pill { font-family: ${font}; font-size: 12px; color: var(--success); background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.2); padding: 4px 10px; border-radius: 20px; white-space: nowrap; flex-shrink: 0; }
 
-.content { flex: 1; overflow-y: auto; padding: 20px; min-width: 0; max-width: 100%; }
+.content { flex: 1; overflow-y: auto; padding: 20px; min-width: 0; max-width: 100%; overscroll-behavior-y: contain; }
 
 /* Cockpit */
 .cockpit { display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 24px; height: 100%; min-height: 0; }
-.cockpit-left { display: flex; flex-direction: column; gap: 16px; overflow-y: auto; overflow-x: hidden; padding-right: 8px; padding-bottom: 60px; flex-shrink: 0; min-height: 0; scrollbar-gutter: stable; }
+.cockpit-left { display: flex; flex-direction: column; gap: 16px; overflow-y: auto; overflow-x: hidden; padding-right: 8px; padding-bottom: 60px; flex-shrink: 0; min-height: 0; scrollbar-gutter: stable; overscroll-behavior-y: contain; }
 .cockpit-left::-webkit-scrollbar { width: 8px; }
 .cockpit-left::-webkit-scrollbar-track { background: rgba(10,20,40,0.2); border-radius: 4px; }
 .cockpit-left::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 4px; }
 .cockpit-left::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.5); }
-.cockpit-right { overflow-y: auto; min-width: 0; min-height: 0; padding-bottom: 40px; }
+.cockpit-right { overflow-y: auto; min-width: 0; min-height: 0; padding-bottom: 40px; overscroll-behavior-y: contain; }
 @media (min-width: 1600px) {
   .cockpit { grid-template-columns: 460px minmax(0, 1fr); gap: 28px; }
 }
@@ -1293,7 +1293,7 @@ body { background: transparent; color: var(--text-primary); font-family: ${fontB
   .topbar-title { font-size: 11px; letter-spacing: 0.4px; }
 
   /* Page-scroll container: large bottom pad so the sticky gen bar never covers content */
-  .content { padding: 14px 14px calc(160px + env(safe-area-inset-bottom)) 14px; -webkit-overflow-scrolling: touch; }
+  .content { padding: 14px 14px calc(160px + env(safe-area-inset-bottom)) 14px; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; }
 
   .cockpit { grid-template-columns: 1fr; gap: 12px; height: auto; min-height: auto; position: relative; }
   .cockpit-left { padding-right: 0; padding-bottom: 0; gap: 12px; overflow: visible; min-height: auto; }

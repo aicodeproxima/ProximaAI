@@ -27,7 +27,13 @@
       }, true);
     </script>
     <style>
-      html, body { margin: 0; padding: 0; height: 100%; background: #020510; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #020510;
+        overscroll-behavior-y: none;
+      }
       /* #root must be transparent so the fixed BackgroundLayer (z-index:0) shows through */
       #root { height: 100%; background: transparent; }
       body { font-family: system-ui, sans-serif; }
