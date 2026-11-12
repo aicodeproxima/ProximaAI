@@ -1,22 +1,36 @@
-// Server answer -> words for the sign-in, backup-code and account screens (docs/P1-AUTH-DESIGN.md §5 "C0", §10 Q1/Q7).
-// Works with both the old and the new server: per-attempt details (attempts_left, not_provisioned) are ignored, so a
-// stranger never learns whether a name exists. Until M1 is applied the OLD server still answers `locked` (sign-in) and
-// `backup_locked` (unlock); design §5 keeps those (switch to unlock mode / their own pause text). The new server never
-// sends them (its failures are generic), so those branches go quiet once M1 is live.
+// Server answer -> words for the sign-in, backup-code and account screens (docs/P1-AUTH-DESIGN.md §5, §10 Q1/Q7).
+// Every message is accurate (owner rulings 2026-11-12: "the issue should never be misleading" and "all users now and
+// going forward should receive accurate errors"). Since 20261115100000 the server names why it refused ('locked',
+// 'backup_locked', 'disabled', 'no_password', 'no_backup_code'), and a wrong username or password, or a wrong code, reads
+// as exactly that. An answer this build doesn't know is named as such, and a call that threw says what is known (a
+// server error, or no answer), never "wrong password". Per-attempt counts (the old server's attempts_left) are not shown.
 // Pure: no React, no network. Tested by scripts/test-signin-text.mjs.
 
 export const SIGNIN_FAILED = "Wrong username or password";
 export const SIGNIN_HINT = "3 wrong passwords lock the account; your backup code unlocks it.";
-// Static (the same for every failure): says that waiting helps, never whether a pause is running (#7, design §5).
-// Names the username too: the server answers an unknown name exactly like a wrong code (as SIGNIN_FAILED does).
+// A wrong code or a name no account has (the server answers both 'invalid'): the words name both. The pause rule is
+// static; a running pause has its own answer ('backup_locked').
 export const BACKUP_CODE_FAILED = "Wrong username or backup code. 5 wrong codes pause unlocking for 15 minutes.";
 // Settings → Account resets the signed-in account (its name is never typed there), so only the code can be wrong.
 export const BACKUP_CODE_FAILED_OWN = "Wrong backup code. 5 wrong codes pause unlocking for 15 minutes.";
-// Old server only (before M1): sign-in is locked after 3 wrong passwords; the screen switches to unlock mode.
-export const SIGNIN_LOCKED_OLD = "Sign-in is locked after 3 failed attempts. Unlock it with your backup code below, or tap “Forgot password?” to set a new one.";
+// A locked account: the sign-in screen has switched to the unlock form (Username, Backup code, UNLOCK), so the steps
+// point there.
+const UNLOCK_STEPS = "To unlock it, enter your backup code below and tap UNLOCK, then sign in with your password. Forgot your password? Tap “Forgot password?” to set a new one with your backup code.";
+export const SIGNIN_LOCKED = `Your account is locked after 3 wrong passwords, so even the right password won't work. ${UNLOCK_STEPS}`;
+export const SIGNIN_LOCKED_NOW = `Wrong password. That was the 3rd wrong try, so your account is now locked. ${UNLOCK_STEPS}`;
+export const ACCOUNT_DISABLED = "This account is turned off, so it can't sign in or be unlocked. Ask the app's owner.";
+export const SIGNIN_NO_PASSWORD = "This account has no password yet. Tap “Forgot password?” to set one with your backup code.";
+export const NO_BACKUP_CODE = "This account has no backup code, so it can't be unlocked with one.";
 export const RENAME_RATE_LIMITED = "Too many name checks — try again in an hour";
-export const OFFLINE_SIGNIN = "Can't reach the server — check your connection and try again. (This attempt didn't count.)";
 export const OFFLINE = "Can't reach the server — check your connection and try again.";
+// A sign-in or unlock call that threw (callFailedText). No answer came back: a try the server never received doesn't
+// count, but one whose answer was lost on the way back may have, so neither is claimed.
+export const NO_ANSWER = "No answer from the server — check your connection and try again.";
+// The server answered with an error code (PostgREST or Postgres): the call's transaction rolled back, so it didn't count.
+export const SERVER_ERROR = "The server hit an error and couldn't check this. Try again in a moment — this try didn't count.";
+// An HTTP error without a code (a gateway): whether the database finished the call is unknown, so nothing is claimed.
+export const SERVER_PROBLEM = "The server had a problem and didn't answer properly. Try again in a moment.";
+export const EMPTY_ANSWER = "The server's answer was empty. Try again.";
 
 // 'throttled' (per-network limit). retry_after is seconds when the server sends it.
 export function throttledText(retryAfter) {
@@ -28,34 +42,67 @@ export function throttledText(retryAfter) {
   return "Too many attempts from this network — try again in a few minutes";
 }
 
-// The old server's `locked` answer: the sign-in screen switches to unlock mode (design §5, #11).
+// A locked account (the lock just set, or set before): the sign-in screen switches to the unlock form.
 export function signInSwitchesToUnlock(r) {
   return r?.reason === "locked";
 }
 
-// sign_in answer -> one message. Every failure except the network limit (and the old server's `locked`) reads the same.
+// An answer this build doesn't map: said so, with the server's reason when it is a plain word (most likely a newer
+// server's, which a reload's build knows). Never shown as a wrong password.
+function unexpectedAnswerText(r) {
+  const why = typeof r?.reason === "string" && /^[a-z_]{1,40}$/.test(r.reason) ? ` (“${r.reason}”)` : "";
+  return `The server gave an answer this page doesn't know${why}. Reload the page and try again.`;
+}
+
+// verify_admin answer -> one message naming its real reason.
 export function signInError(r) {
-  if (r?.reason === "throttled") return throttledText(r.retry_after);
-  // A member signing in from a build older than one-account-per-browser (migration 20261026600000).
-  if (r?.reason === "update_required") return "This page is out of date. Reload it, then sign in again.";
-  if (signInSwitchesToUnlock(r)) return SIGNIN_LOCKED_OLD;
-  return SIGNIN_FAILED;
+  if (r == null || r.reason === "no_answer") return EMPTY_ANSWER;
+  switch (r.reason) {
+    case "invalid": return SIGNIN_FAILED;
+    case "locked": return r.locked_now ? SIGNIN_LOCKED_NOW : SIGNIN_LOCKED;
+    case "disabled": return ACCOUNT_DISABLED;
+    case "no_password": return SIGNIN_NO_PASSWORD;
+    case "throttled": return throttledText(r.retry_after);   // a server that refuses a blocked network (verify_admin no longer does)
+    // A member signing in from a build older than one-account-per-browser (migration 20261026600000).
+    case "update_required": return "This page is out of date. Reload it, then sign in again.";
+    default: return unexpectedAnswerText(r);
+  }
 }
 
-// The old server's `backup_locked` answer (before M1), with its own minutes (default 15).
-export function backupLockedText(retryAfter) {
+const pauseMinutes = (retryAfter) => {
   const s = Number(retryAfter);
-  const min = Math.max(1, Math.ceil((Number.isFinite(s) && s > 0 ? s : 900) / 60));
-  return `Too many wrong backup codes — try again in ${min} min.`;
+  return Math.max(1, Math.ceil((Number.isFinite(s) && s > 0 ? s : 900) / 60));
+};
+// A running pause ('backup_locked'), with its minutes left (15 when the server sends none).
+export function backupLockedText(retryAfter) {
+  return `Too many wrong backup codes — try again in ${pauseMinutes(retryAfter)} min.`;
 }
 
-// unlock (backup code) answer -> one message. Only input checks the user can fix are named. ownAccount: the signed-in
-// account's own reset in Settings, where no name was typed.
+// unlock (backup code) answer -> one message naming its real reason. ownAccount: the signed-in account's own reset in
+// Settings, where no name was typed.
 export function backupCodeError(r, { ownAccount = false } = {}) {
-  if (r?.reason === "throttled") return throttledText(r.retry_after);
-  if (r?.reason === "backup_locked") return backupLockedText(r.retry_after);
-  if (r?.reason === "weak_password") return "New password must be at least 8 characters";
-  return ownAccount ? BACKUP_CODE_FAILED_OWN : BACKUP_CODE_FAILED;
+  if (r == null || r.reason === "no_answer") return EMPTY_ANSWER;
+  switch (r.reason) {
+    case "invalid": return ownAccount ? BACKUP_CODE_FAILED_OWN : BACKUP_CODE_FAILED;
+    // The 5th wrong code (paused_now) found the account, so only the code was wrong.
+    case "backup_locked": return r.paused_now
+      ? `Wrong backup code. That was the 5th wrong try, so unlocking is paused — try again in ${pauseMinutes(r.retry_after)} min.`
+      : backupLockedText(r.retry_after);
+    case "disabled": return ACCOUNT_DISABLED;
+    case "no_backup_code": return NO_BACKUP_CODE;
+    case "weak_password": return "New password must be at least 8 characters";
+    case "throttled": return throttledText(r.retry_after);
+    default: return unexpectedAnswerText(r);
+  }
+}
+
+// A sign-in or unlock call that threw (src/lib/supabase.js keeps the error's code and HTTP status). A code: the server
+// answered with an error and the call rolled back. A status without one: a gateway answered, the outcome is unknown.
+// Neither: no answer came back.
+export function callFailedText(err) {
+  if (err?.code) return SERVER_ERROR;
+  if (Number(err?.status) > 0) return SERVER_PROBLEM;
+  return NO_ANSWER;
 }
 
 // A name an account may take: join (20261026500000) and, since 20261026200000, rename refuse anything else.

@@ -18,7 +18,7 @@ import { hfModelById } from "./config/higgsfieldModels.js";
 import { hfInputProblem } from "./lib/higgsfield.js";
 import { getSetting, hasLocalData, setSetting, cachedProviderKeys, cacheProviderKeys, formStamp, advanceFormStamp, addHistoryEntry, getHistory, allStoredHistory, deleteHistoryEntries, migrateFromLocalStorage, saveTask, saveTasks, deleteTask, deleteTasks, getCompletedTasks, getPendingTasks, allStoredTasks, getStorageStats, getFailedSyncs, addFailedSync, removeFailedSync, clearFailedSyncs, peekQueuedUploads, takeQueuedUploads, putBackQueuedUploads, queueDeleteIntents, confirmDeleteIntents, withoutConfirmedUploads, uploadable, uploadBlockedIds, withoutBlockedItems, confirmSeqNow, sharedDeleteState, settledDeletingIds, intentGroups, forgetConfirmed, dropDeleteIntentsBefore, restoreGuard, markRestoreSeen, rekeyFavoriteRetries, releasePredictions, releasedPredictions, sentVersion, recordClaimants, storedClaimants, resolveClaimants, claimantRecords, putBackClaimants, replaceQueuedUpload, pendingDeleteIds, readWsDeletes, writeWsDeletes, readFileDeletes, writeFileDeletes, publishFormPaths, readFormPublications, forgetFormPaths, browserId, buildClearStash, writeClearStash, readClearStashes, readClearStash, dropClearStash, stashGiveBack, recordStashArchive, stashArchivePaths, chainedFavoritesBefore, clearLogsStash, voidedClearStashes, voidDeleteIntents, voidedTimes, stashDecision, dropGivenBackStash, inlineVoidPutBack, pruneVoidedAt, beginDeleteFlight, endDeleteFlight, knownRestoreAt, historyUploadPlan, holdPurgeDeletes, releaseHeldPurges, heldPurgeLeft, heldDeleteRefs, inFlightIds, deleteHoldAt, recordStashPrediction, reserveDelete, holdDeletingWsEntries, storedEvidenceIds, hasHeldPurges, heldGoneCandidates, holdLateResult, holdArchiveFiles, readyRelinks, dropRelinks, unreleasePredictions, releaseAbortedLate, markHistoryResync, historyResyncDue, markAssumedConfirms, relinksOf, intoLoadedView, unsentUploadPaths, unsentGenerations, saveTasksNow, addHistoryEntriesNow, storedKeptIds, unsentRowsIn } from "./lib/storage.js";
 import { backupNotice } from "./lib/backupNotice.js";
-import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, USERNAME_RULE, USERNAME_HINT, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, OFFLINE_SIGNIN, OFFLINE } from "./lib/signinText.js";
+import { signInError, signInSwitchesToUnlock, backupCodeError, accountError, joinError, joinedNote, USERNAME_RULE, USERNAME_HINT, JOIN_BROWSER_TAKEN, JOIN_MAYBE_CREATED, COPY_BY_HAND, SESSION_EXPIRED, SIGNIN_HINT, callFailedText, OFFLINE } from "./lib/signinText.js";
 import { readBrowserAccount, browserAccountDecision, claimBrowser, browserAccountMessage, freeForNewAccount, bootSessionDecision, tokenAccountId,
   pageMustLeave, accountCheckStep, BROWSER_ACCOUNT_KEY, readJoinedNote, rememberJoinedNote, forgetJoinedNote } from "./lib/accountGuard.js";
 import InviteSection from "./components/InviteSection.jsx";
@@ -253,12 +253,12 @@ function LoginScreen({ onSignedIn, notice = "", refusal = "", joinLink = null })
         clearSecrets(); onSignedIn({ token: r.token, expires_at: r.expires_at, username: r.username }); return;
       }
       setPassword("");
-      // attempts_left / not_provisioned are never shown. Only the OLD server (before M1) answers `locked`: switch to
-      // unlock mode with its message (design §5); the new server's answers are generic.
+      // Every refusal says its real reason (20261115100000). A locked account switches to the unlock form, where its
+      // message says how the backup code unlocks it.
       if (signInSwitchesToUnlock(r)) switchMode("unlock");
       setError(signInError(r));
-    } catch {
-      setError(OFFLINE_SIGNIN);
+    } catch (err) {
+      setError(callFailedText(err));
     } finally {
       setLoading(false);
     }
@@ -306,8 +306,8 @@ function LoginScreen({ onSignedIn, notice = "", refusal = "", joinLink = null })
       }
       setBackupCode(""); setShowCode(false);   // a wrong code is not kept around; the new password stays for a retry
       setError(backupCodeError(r));
-    } catch {
-      setError(OFFLINE);
+    } catch (err) {
+      setError(callFailedText(err));
     } finally {
       setLoading(false);
     }
@@ -778,7 +778,7 @@ function AccountModal({ onClose, onSaved, onPasswordReset }) {
       if (!r?.ok) { setResetCode(""); setShowResetCode(false); setError(backupCodeError(r, { ownAccount: true })); return; }
       setResetCode(""); setNewPassword(""); setConfirmPassword("");
       onPasswordReset?.();
-    } catch { setError("Can't reach the server — check your connection and try again."); }
+    } catch (err) { setError(callFailedText(err)); }
     finally { setBusy(false); }
   }
 

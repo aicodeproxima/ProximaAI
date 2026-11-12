@@ -844,19 +844,28 @@ export async function purgeMyBackupsOf(taskIds, logIds) {
 
 // ─── Sign-in and account (server-side; bcrypt; 3 failed sign-ins lock it until a backup code unlocks) ───
 
-// Returns the server's answer: { ok, token, expires_at, username, rehash_required } or
-// { ok:false, reason: "invalid" (attempts_left) | "locked" | "not_provisioned" }. Throws only when the
-// server can't be reached, so a network failure is never shown as a wrong password.
+// A failed sign-in or unlock call as an Error that keeps PostgREST's code and the HTTP status (0: no answer came back),
+// so the screen says what happened (src/lib/signinText.js callFailedText).
+function rpcError(error, status) {
+  const e = new Error(error?.message || "The server call failed");
+  e.code = error?.code || "";
+  e.status = Number(status) || 0;
+  return e;
+}
+
+// Returns the server's answer: { ok, token, expires_at, username, rehash_required } or { ok: false, reason } naming the
+// refusal ('invalid', 'locked' (+ locked_now), 'disabled', 'no_password', 'update_required': 20261115100000), or
+// 'no_answer' for an empty one. Throws rpcError when the call fails, so a failure is never shown as a wrong password.
 export async function signIn(username, password) {
   await initSupabase();
   if (!supabase) throw new Error("Cloud not configured");
-  const { data, error } = await supabase.rpc("verify_admin", { p_username: username, p_password: password });
-  if (error) throw error;
+  const { data, error, status } = await supabase.rpc("verify_admin", { p_username: username, p_password: password });
+  if (error) throw rpcError(error, status);
   if (data?.ok && data.rehash_required) {
     // Legacy sha256 password: store it as bcrypt now. The server only accepts the same password here.
     supabase.rpc("set_admin_credentials_rehash", { p_session_token: data.token, p_plain_password: password }).then(() => {}, () => {});
   }
-  return data || { ok: false, reason: "invalid" };
+  return data || { ok: false, reason: "no_answer" };
 }
 
 // Always by name (every account, members included: P1's unlock_with_backup_code). The legacy owner-only call is never made
@@ -865,9 +874,9 @@ export async function unlockWithBackupCode(code, newPassword = null, username = 
   if (!username) throw new Error("Enter your username");
   await initSupabase();
   if (!supabase) throw new Error("Cloud not configured");
-  const { data, error } = await supabase.rpc("unlock_with_backup_code", { p_username: username, p_code: code, p_new_password: newPassword || null });
-  if (error) throw error;
-  return data || { ok: false, reason: "invalid" };
+  const { data, error, status } = await supabase.rpc("unlock_with_backup_code", { p_username: username, p_code: code, p_new_password: newPassword || null });
+  if (error) throw rpcError(error, status);
+  return data || { ok: false, reason: "no_answer" };
 }
 
 // ─── Invites (supabase/migrations/20261026500000_mu_p5_invites.sql; docs/SECOND-ACCOUNT-PLAN.md K7) ───
