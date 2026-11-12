@@ -48,6 +48,13 @@ check 384 first, 412 second. Chrome on it freezes the app in the background and 
   If tab closes mid-debounce, the mount effect replays it.
 - **Never say "Saved" if work is pending**: honest save status. If
   `failedSyncCount > 0`, status is "error" regardless of other state.
+- **Every error is accurate (owner, 2026-11-12)**: "all users now and going forward should receive accurate errors"
+  (a member's locked account read "Wrong username or password" for every try, the right password included). An error
+  states its real cause: map each server reason to its own words (`src/lib/signinText.js`), name an answer you don't
+  map instead of falling back to the commonest error, and never claim a cause, a count, a wait or "Saved"/"Removed"
+  you don't know. A call that threw: a server code = refused or rolled back; an HTTP status without a code, or no answer
+  (status 0) = the outcome is unknown, so say so and how to tell (`callFailedText`, `changeFailedText`). A lock or a
+  pause still checks no secret, so it never confirms a guess. Name the provider whose key failed (`rejectedKeyText`).
 - **Flush before bootstrap**: any pending debounced writes must flush BEFORE cloud
   pull merges. Otherwise stale writes overwrite fresh cloud data (commit 8da8f95).
 - **Validate payloads defensively**: `validatePayload()` is the final pass in
